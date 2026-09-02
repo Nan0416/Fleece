@@ -1,0 +1,23 @@
+{
+  "name": "@fleece/service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Fleece HTTP API over the account ledger.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@fleece/core": "1.0.0",
+    "@fleece/shared": "1.0.0",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT"
+}
