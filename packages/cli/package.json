@@ -1,0 +1,29 @@
+{
+  "name": "@fleece/cli",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The fleece command line: serve the API, run the injector, apply corporate actions.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "fleece": "./bin/fleece.js"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@fleece/client": "1.0.0",
+    "@fleece/corporate-actions": "1.0.0",
+    "@fleece/core": "1.0.0",
+    "@fleece/injector": "1.0.0",
+    "@fleece/service": "1.0.0",
+    "@fleece/shared": "1.0.0",
+    "commander": "^15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT"
+}
