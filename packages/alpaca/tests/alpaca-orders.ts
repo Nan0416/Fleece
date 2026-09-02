@@ -1,0 +1,40 @@
+import { AlpacaOrder } from '../src/models';
+
+/** A plausible Alpaca order, overridable field by field. */
+export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
+  return {
+    id: 'alpaca-order-1',
+    client_order_id: '',
+    status: 'new',
+    time_in_force: 'day',
+    order_class: '',
+    order_type: 'market',
+    type: 'market',
+    side: 'buy',
+    extended_hours: false,
+    asset_id: 'asset-1',
+    symbol: 'AAPL',
+    asset_class: 'us_equity',
+    limit_price: null,
+    stop_price: null,
+    qty: '10',
+    notional: null,
+    filled_qty: '0',
+    filled_avg_price: null,
+    created_at: '2026-09-01T14:30:00Z',
+    updated_at: '2026-09-01T14:30:00Z',
+    submitted_at: '2026-09-01T14:30:00Z',
+    filled_at: null,
+    expired_at: null,
+    canceled_at: null,
+    failed_at: null,
+    replaced_at: null,
+    replaced_by: null,
+    replaces: null,
+    legs: null,
+    trail_percent: null,
+    trail_price: null,
+    hwm: null,
+    ...overrides,
+  };
+}

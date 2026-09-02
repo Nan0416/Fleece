@@ -1,0 +1,22 @@
+{
+  "name": "@fleece/alpaca",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Alpaca REST and WebSocket clients, their wire models, and the order correlation codec.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@fleece/shared": "1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT"
+}
