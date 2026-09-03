@@ -186,6 +186,9 @@ caller, so it returned, this time with tests.
 
 ## Known gaps
 
+Summarised here; the ones needing a decision are argued out in
+[OPEN-ITEMS.md](./OPEN-ITEMS.md).
+
 **Tracking requests have no way in.** `OrderTrackingFacade.track` is implemented and
 tested but has no production caller: the legacy transport was a `lite-server` listening
 on the `OrderTracking.{STAGE}` message-stream topic, and that layer is not ported. It is

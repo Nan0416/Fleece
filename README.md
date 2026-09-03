@@ -102,6 +102,9 @@ Ported from a private trading system that ran on MongoDB across many small repos
 [md/PORTING.md](./md/PORTING.md) records what changed and why — including several
 bugs the port fixes.
 
+[md/OPEN-ITEMS.md](./md/OPEN-ITEMS.md) is the shorter and more urgent read: the decisions
+still open, and the two places where a wrong answer produces a silently wrong number.
+
 ## Licence
 
 MIT.
