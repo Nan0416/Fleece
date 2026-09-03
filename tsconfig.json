@@ -1,0 +1,18 @@
+{
+  // Solution file: holds no sources of its own, only the build order. `tsc -b` here
+  // builds every package in dependency order, and editors resolve each source file
+  // through the referenced project that owns it rather than guessing.
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/client" },
+    { "path": "./packages/alpaca" },
+    { "path": "./packages/marketdata" },
+    { "path": "./packages/broker" },
+    { "path": "./packages/core" },
+    { "path": "./packages/service" },
+    { "path": "./packages/injector" },
+    { "path": "./packages/corporate-actions" },
+    { "path": "./packages/cli" }
+  ]
+}

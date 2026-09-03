@@ -1,0 +1,23 @@
+{
+  "name": "@fleece/core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The ledger: the account facade, its data access layer and the schema migrations.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@fleece/shared": "1.0.0",
+    "nanoid": "^3.3.11",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,46 @@
+{
+  "name": "fleece",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A trading system on top of Alpaca: virtual accounts, order tracking and position accounting.",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @fleece/shared && npm run build -w @fleece/client -w @fleece/alpaca -w @fleece/marketdata && npm run build -w @fleece/core -w @fleece/broker && npm run build -w @fleece/service -w @fleece/injector -w @fleece/corporate-actions && npm run build -w @fleece/cli",
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
+    "start": "npm run build && node packages/cli/bin/fleece.js serve",
+    "start:injector": "npm run build && node packages/cli/bin/fleece.js injector start",
+    "cli": "node packages/cli/bin/fleece.js",
+    "migrate": "npm run build && node packages/cli/bin/fleece.js migrate",
+    "test": "jest --config jest.config.js",
+    "format:fix": "prettier --write \"packages/*/{src,tests}/**/*.ts\"",
+    "format:lint": "prettier --check \"packages/*/{src,tests}/**/*.ts\"",
+    "lint": "eslint \"packages/*/{src,tests}/**/*.ts\"",
+    "lint:fix": "eslint --fix \"packages/*/{src,tests}/**/*.ts\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nan0416/Fleece.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nan0416/Fleece/issues"
+  },
+  "homepage": "https://github.com/Nan0416/Fleece#readme",
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.18.0",
+    "globals": "^17.11.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.4.2",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
+  }
+}

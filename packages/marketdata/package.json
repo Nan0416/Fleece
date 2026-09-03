@@ -1,0 +1,20 @@
+{
+  "name": "@fleece/marketdata",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Polygon client for the corporate actions the ledger needs: splits and dividends.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@fleece/shared": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT"
+}
