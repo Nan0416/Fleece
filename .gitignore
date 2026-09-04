@@ -72,6 +72,10 @@ typings/
 .env
 .env.test
 
+# Playground scripts hold hardcoded broker keys. Copy credentials.example.ts to
+# credentials.ts and fill it in; the real file never gets committed.
+packages/playground/src/credentials.ts
+
 # CDK synthesized templates and assets (infra/)
 cdk.out/
 .cdk.staging/

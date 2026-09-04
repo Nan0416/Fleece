@@ -1,0 +1,21 @@
+{
+  "name": "@fleece/playground",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Throwaway experiment scripts. Not part of the product build and nothing imports it.",
+  "scripts": {
+    "build": "tsc --build tsconfig.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "order-events": "npm run build && node dist/order-events.js",
+    "cancel-order": "npm run build && node dist/cancel-order.js"
+  },
+  "dependencies": {
+    "@fleece/alpaca": "1.0.0",
+    "@fleece/shared": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT"
+}
