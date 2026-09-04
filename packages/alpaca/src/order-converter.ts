@@ -1,6 +1,9 @@
 import {
+  BrokerAssetClass,
   BrokerOrderClass,
   BrokerOrderEvent,
+  BrokerOrderSide,
+  BrokerPositionIntent,
   InternalServiceError,
   LimitBrokerOrderEvent,
   MarketBrokerOrderEvent,
@@ -13,34 +16,95 @@ import { AlpacaAccountIdentifier, AlpacaOrder } from './models';
 /**
  * The one place Alpaca's wire format becomes the ledger's vocabulary.
  *
- * Two things happen here that matter downstream. Quantities become signed — Alpaca
+ * Three things happen here that matter downstream. Quantities become signed — Alpaca
  * reports an absolute quantity plus a `side`, while the accounting works in signed
- * sizes throughout — and the order's correlation is decoded out of `client_order_id`,
- * which is what attributes the fill to a virtual account.
+ * sizes throughout. The order's correlation is decoded out of `client_order_id`, which
+ * is what attributes the fill to a virtual account. And a composite order is
+ * **flattened**: one Alpaca payload becomes one event per order it describes, each leg
+ * naming its parent in `parentBrokerOrderId`.
+ *
+ * Flattening is why this returns a list. A leg is a real order at the broker, with its
+ * own id, instrument, status and fills, and nesting it inside its parent left it with
+ * no `broker_order` row — so an option fill wrote a `ledger_transaction.reference_id`
+ * pointing at an order the ledger held nothing for.
+ *
+ * **A multi-leg parent is dropped**; a bracket or OTO parent is kept. The difference is
+ * that a spread's parent trades no instrument — empty symbol, no side, a price that is
+ * the package's net rather than anything a contract traded at — so the only row it could
+ * produce is a container. A bracket's parent is itself a real order in a real symbol.
+ * The cost of dropping it is the spread's net limit price, which lives nowhere else.
+ *
+ * **Every leg inherits the parent's correlation**, so a leg is booked to the account,
+ * group and reservation encoded in the parent's client order id. Alpaca assigns legs
+ * client order ids of its own, so there is nothing else to attribute them from. For a
+ * spread this is exactly right — the legs are the spread and cannot be traded apart
+ * from it. For a bracket or an OTO it is a judgement rather than a fact, and it
+ * supersedes the tracking-request path described in `md/OPEN-ITEMS.md` item 1 for any
+ * leg that arrives nested.
  */
-export function convertAlpacaOrderToBrokerOrderEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier): BrokerOrderEvent {
-  return convert(order, account, decodeAlpacaOrderCorrelation(order.client_order_id));
+export function convertAlpacaOrderToBrokerOrderEvents(order: AlpacaOrder, account: AlpacaAccountIdentifier): ReadonlyArray<BrokerOrderEvent> {
+  // Decoded once, from the top-level order: it is the only payload carrying a client
+  // order id we set.
+  const correlation = decodeAlpacaOrderCorrelation(order.client_order_id);
+  const legs = order.legs ?? [];
+
+  if (isMultiLegParent(order)) {
+    if (legs.length === 0) {
+      // Refused rather than returned empty. An empty list means "this order did
+      // nothing", and a spread whose legs are missing is not that — it is a fill we
+      // cannot see. Alpaca omits `legs` unless `nested=true` is asked for, so the usual
+      // cause is a request that forgot it, and the usual symptom would be every
+      // backfilled spread silently disappearing.
+      throw new InternalServiceError(
+        `Alpaca reported multi-leg order ${order.id} as ${order.status} with no legs, so there is nothing to book. Check that the request asked for nested=true.`,
+      );
+    }
+    // The parent is discarded: it trades no instrument, and everything it reports is
+    // either on the legs already or derivable from them. What is lost with it is the
+    // spread's net limit price — see `md/OPEN-ITEMS.md` item 2b.
+    return legs.map((leg) => convert(leg, account, correlation, order.id));
+  }
+
+  return [convert(order, account, correlation), ...legs.map((leg) => convert(leg, account, correlation, order.id))];
 }
 
-function convert(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation): BrokerOrderEvent {
+/**
+ * Whether this is the container of a spread rather than one of its contracts.
+ *
+ * The parent and its legs both carry `order_class: 'mleg'`, so the class alone cannot
+ * separate them. The empty symbol can: Alpaca leaves the parent's blank because the
+ * spread trades no instrument of its own, and that empty symbol is exactly what must
+ * never reach `applyCumulativeFill` — a position keyed on `''` is a wrong number that
+ * looks like a right one.
+ */
+function isMultiLegParent(order: AlpacaOrder): boolean {
+  return order.order_class === 'mleg' && order.symbol === '';
+}
+
+/** A single contract inside a spread. It has an instrument and a side; it has no price. */
+function isMultiLegLeg(order: AlpacaOrder): boolean {
+  return order.order_class === 'mleg' && order.symbol !== '';
+}
+
+function convert(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation, parentBrokerOrderId?: string): BrokerOrderEvent {
   switch (order.order_type) {
     case 'market':
-      return toMarketEvent(order, account, correlation);
+      return toMarketEvent(order, account, correlation, parentBrokerOrderId);
     case 'limit':
-      return toLimitEvent(order, account, correlation);
+      return toLimitEvent(order, account, correlation, parentBrokerOrderId);
     case 'stop':
-      return toStopEvent(order, account, correlation);
+      return toStopEvent(order, account, correlation, parentBrokerOrderId);
     case 'stop_limit':
-      return toStopLimitEvent(order, account, correlation);
+      return toStopLimitEvent(order, account, correlation, parentBrokerOrderId);
     default:
-      throw new InternalServiceError(`Alpaca order ${order.id} has unrecognised order_type "${order.order_type}".`);
+      throw new InternalServiceError(`Alpaca order ${order.id} has unrecognised order_type "${String(order.order_type)}".`);
   }
 }
 
-function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation): MarketBrokerOrderEvent {
+function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation, parentBrokerOrderId?: string): MarketBrokerOrderEvent {
   const absoluteQty = strictParseFloat(order.qty, `order ${order.id} qty`);
   const absoluteFilledQty = strictParseFloat(order.filled_qty, `order ${order.id} filled_qty`);
-  const sign = order.side === 'buy' ? 1 : -1;
+  const { side, sign } = toDirection(order);
 
   return {
     orderType: 'market',
@@ -48,6 +112,7 @@ function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, cor
     brokerAccountId: account.accountId,
     live: account.live,
     id: order.id,
+    parentBrokerOrderId,
     correlationId: order.client_order_id,
     accountId: correlation.virtualAccountId,
     groupId: correlation.groupId,
@@ -58,12 +123,15 @@ function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, cor
     status: order.status,
 
     symbol: order.symbol,
+    assetClass: toAssetClass(order),
 
     timeInForce: order.time_in_force,
     // Alpaca sends an empty string for a plain order rather than omitting the field.
     orderClass: toOrderClass(order.order_class),
 
-    side: order.side,
+    side,
+    positionIntent: toPositionIntent(order),
+    ratioQty: order.ratio_qty === undefined || order.ratio_qty === null ? undefined : strictParseFloat(order.ratio_qty, `order ${order.id} ratio_qty`),
     extendedHours: order.extended_hours,
     limitPrice: undefined,
     stopPrice: undefined,
@@ -78,39 +146,91 @@ function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, cor
     canceledAt: optionalDate(order.canceled_at),
     failedAt: optionalDate(order.failed_at),
     replacedAt: optionalDate(order.replaced_at),
-    legs: order.legs === null ? undefined : order.legs.map((leg) => convert(leg, account, correlation)),
   };
 }
 
-function toLimitEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation): LimitBrokerOrderEvent {
+function toLimitEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation, parentBrokerOrderId?: string): LimitBrokerOrderEvent {
   return {
-    ...toMarketEvent(order, account, correlation),
+    ...toMarketEvent(order, account, correlation, parentBrokerOrderId),
     orderType: 'limit',
-    limitPrice: requirePrice(order.limit_price, `order ${order.id} limit_price`),
+    // A leg of a spread carries `order_type: 'limit'` and a null `limit_price`: the
+    // price belongs to the spread, and is on the parent. Demanding one here would throw
+    // on every multi-leg fill, and the injector would log and drop the whole event.
+    limitPrice: isMultiLegLeg(order) ? undefined : requirePrice(order.limit_price, `order ${order.id} limit_price`),
     stopPrice: undefined,
   };
 }
 
-function toStopEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation): StopBrokerOrderEvent {
+function toStopEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation, parentBrokerOrderId?: string): StopBrokerOrderEvent {
   return {
-    ...toMarketEvent(order, account, correlation),
+    ...toMarketEvent(order, account, correlation, parentBrokerOrderId),
     orderType: 'stop',
     limitPrice: undefined,
     stopPrice: requirePrice(order.stop_price, `order ${order.id} stop_price`),
   };
 }
 
-function toStopLimitEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation): StopLimitBrokerOrderEvent {
+function toStopLimitEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation, parentBrokerOrderId?: string): StopLimitBrokerOrderEvent {
   return {
-    ...toMarketEvent(order, account, correlation),
+    ...toMarketEvent(order, account, correlation, parentBrokerOrderId),
     orderType: 'stop_limit',
     limitPrice: requirePrice(order.limit_price, `order ${order.id} limit_price`),
     stopPrice: requirePrice(order.stop_price, `order ${order.id} stop_price`),
   };
 }
 
+interface OrderDirection {
+  /** Undefined for a spread, which has no direction of its own. */
+  readonly side: BrokerOrderSide | undefined;
+  /** What turns Alpaca's magnitude into a signed size. 1 where there is no direction. */
+  readonly sign: number;
+}
+
+/**
+ * A spread has no side, and Alpaca does not say so consistently: the REST response
+ * gives `''` and the websocket gives `'buy'` for the very same order. Trusting either
+ * would sign the parent's quantity from a value that means nothing.
+ *
+ * Anything else with no side is a fault rather than a spread, and is refused instead of
+ * defaulting to a sell — which is what an untested `order.side === 'buy' ? 1 : -1` did,
+ * turning an empty side into a negative position.
+ */
+function toDirection(order: AlpacaOrder): OrderDirection {
+  if (isMultiLegParent(order)) {
+    return { side: undefined, sign: 1 };
+  }
+  if (order.side !== 'buy' && order.side !== 'sell') {
+    throw new InternalServiceError(`Alpaca order ${order.id} has side "${order.side}" and is not a multi-leg parent, so its direction cannot be established.`);
+  }
+  return { side: order.side, sign: order.side === 'buy' ? 1 : -1 };
+}
+
+function toAssetClass(order: AlpacaOrder): BrokerAssetClass {
+  switch (order.asset_class) {
+    case 'us_equity':
+      return 'equity';
+    case 'us_option':
+      return 'option';
+    case 'crypto':
+      return 'crypto';
+    case '':
+      // Empty on a multi-leg parent, which trades nothing itself. It takes its first
+      // leg's class so the field is never a lie — nothing books against the parent, so
+      // the multiplier this feeds is only ever read off the legs.
+      return order.legs === null || order.legs[0] === undefined ? 'option' : toAssetClass(order.legs[0]);
+    default:
+      throw new InternalServiceError(`Alpaca order ${order.id} has unrecognised asset_class "${String(order.asset_class)}".`);
+  }
+}
+
 function toOrderClass(value: AlpacaOrder['order_class']): BrokerOrderClass {
-  return value === '' ? 'regular' : value;
+  // Alpaca calls a plain order both '' and 'simple', depending on where you read.
+  return value === '' || value === 'simple' ? 'regular' : value;
+}
+
+function toPositionIntent(order: AlpacaOrder): BrokerPositionIntent | undefined {
+  // '' is what the websocket sends on a multi-leg parent; REST omits the field there.
+  return order.position_intent === undefined || order.position_intent === '' ? undefined : order.position_intent;
 }
 
 function strictParseFloat(value: string, field: string): number {

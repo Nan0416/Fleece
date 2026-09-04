@@ -1,4 +1,4 @@
-import { AsyncQueue, Broker, BrokerOrderEvent, BrokerOrderRecord, isTerminalStatus, LoggerFactory, NotFoundError } from '@fleece/shared';
+import { AsyncQueue, Broker, BrokerOrderEvent, BrokerOrderRecord, contractMultiplier, isTerminalStatus, LoggerFactory, NotFoundError } from '@fleece/shared';
 import { BrokerOrderService, LedgerService } from '@fleece/core';
 
 const logger = LoggerFactory.getLogger('OrderTrackingFacade');
@@ -191,12 +191,33 @@ export class OrderTrackingFacade {
   }
 
   private async applyFill(event: BrokerOrderEvent, accountId: string): Promise<void> {
+    // A spread's parent trades no instrument: its symbol is empty and its filled price
+    // is the package's net debit or credit — `-0.9` for one that sold a contract at 3.85
+    // and bought another at 2.95. Booking it would open a position keyed on the empty
+    // string at a price nothing traded at, and nothing anywhere would report it. The
+    // legs carry the real instruments and arrive as events of their own.
+    if (isMultiLegParent(event)) {
+      return;
+    }
+
     if (event.status !== 'filled' && event.status !== 'partially_filled') {
       return;
     }
     if (typeof event.filledAvgPrice !== 'number') {
       logger.error(`Broker order ${event.id} reports status ${event.status} with no filled price. Not recording a fill for it.`);
       return;
+    }
+
+    // An option contract is a claim on 100 shares and its price is quoted per share, so
+    // the size is scaled and the price is left exactly as the broker reported it. That
+    // keeps `size * price` in dollars for every instrument, which is what lets one
+    // virtual account hold stock and options and still total its realised profit.
+    const multiplier = contractMultiplier(event.assetClass);
+    const cumulativeFilledSize = event.filledQty * multiplier;
+    if (multiplier !== 1) {
+      logger.info(
+        `Broker order ${event.id} filled ${event.filledQty} ${event.symbol} contracts at ${event.filledAvgPrice}, booked as ${cumulativeFilledSize} units of the underlying.`,
+      );
     }
 
     // The report is cumulative; the ledger works out how much of it is new, so a
@@ -206,7 +227,7 @@ export class OrderTrackingFacade {
       referenceId: event.id,
       accountId,
       symbol: event.symbol,
-      cumulativeFilledSize: event.filledQty,
+      cumulativeFilledSize,
       cumulativeFilledAvgPrice: event.filledAvgPrice,
       timestamp: event.filledAt ?? event.updatedAt,
     });
@@ -318,4 +339,19 @@ export class OrderTrackingFacade {
       this.queue.enqueue({ type: 'event', job: { ...job, defaultAccountId } });
     }
   }
+}
+
+/**
+ * The container of a spread, as opposed to one of its contracts.
+ *
+ * Both carry `orderClass: 'mleg'`, and after flattening both arrive as their own event;
+ * only the parent has no symbol. See `isMultiLegParent` in `@fleece/alpaca`'s order
+ * converter, which draws the same line at the other end of the pipe.
+ *
+ * The parent is still recorded as a `broker_order` — it is the id `@fleece/broker`
+ * announces, the id a tracking request names, and the id a cancel goes to. It just
+ * never books a fill.
+ */
+function isMultiLegParent(event: BrokerOrderEvent): boolean {
+  return event.orderClass === 'mleg' && event.symbol === '';
 }

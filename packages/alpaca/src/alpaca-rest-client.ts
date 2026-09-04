@@ -1,4 +1,4 @@
-import { AlpacaAccount, AlpacaAsset, AlpacaOrder, AlpacaPosition } from './models';
+import { AlpacaAccount, AlpacaAsset, AlpacaOptionContract, AlpacaOrder, AlpacaPosition, AlpacaPositionIntent } from './models';
 
 export interface GetOrderInput {
   readonly brokerOrderId: string;
@@ -42,6 +42,16 @@ export interface GetAssetOutput {
   readonly asset: AlpacaAsset | null;
 }
 
+export interface GetOptionContractInput {
+  /** The OCC symbol, e.g. `AMZN261016C00280000`, or the contract's id. */
+  readonly symbolOrId: string;
+}
+
+export interface GetOptionContractOutput {
+  /** Null when Alpaca has no such contract, the same way `getAsset` reports one it lacks. */
+  readonly contract: AlpacaOptionContract | null;
+}
+
 interface BaseCreateOrderInput {
   readonly symbol: string;
   /** Always positive; the direction is `side`, which is Alpaca's own convention. */
@@ -56,6 +66,17 @@ interface BaseCreateOrderInput {
    * request instead.
    */
   readonly clientOrderId?: string;
+  /**
+   * Options only, and optional there: Alpaca infers it from the position when it is
+   * absent. Send it when the caller knows — inference cannot tell a sell that closes a
+   * long call from one that opens a short, and the two have very different margin.
+   */
+  readonly positionIntent?: AlpacaPositionIntent;
+  /**
+   * Defaults to `day`. Options accept `day` and `gtc` only, so the wider set an
+   * equity order can use is not offered here.
+   */
+  readonly timeInForce?: 'day' | 'gtc';
 }
 
 export interface CreateMarketOrderInput extends BaseCreateOrderInput {}
@@ -69,6 +90,55 @@ export interface CreateOtoOrderInput extends BaseCreateOrderInput {
   readonly limitPrice: number;
   readonly takeProfitLimitPrice: number;
 }
+
+/** One contract of a spread. */
+export interface CreateMultiLegOrderLeg {
+  /** The OCC contract symbol. */
+  readonly symbol: string;
+  /**
+   * This leg's contracts per spread, so `size` spreads trade `ratioQty * size` of it.
+   * A vertical is 1 and 1; a ratio spread is 1 and 2.
+   *
+   * Alpaca requires the greatest common divisor across the legs to be 1 — 2 and 4 is
+   * rejected, and the same spread written as 1 and 2 is accepted.
+   */
+  readonly ratioQty: number;
+  readonly side: 'buy' | 'sell';
+  readonly positionIntent: AlpacaPositionIntent;
+}
+
+interface BaseCreateMultiLegOrderInput {
+  /** How many spreads. Always positive: direction lives on each leg. */
+  readonly size: number;
+  /** Two to four legs. */
+  readonly legs: ReadonlyArray<CreateMultiLegOrderLeg>;
+  /** Defaults to `day`. */
+  readonly timeInForce?: 'day' | 'gtc';
+  /**
+   * Only the parent gets one. Alpaca assigns each leg a client order id of its own, so
+   * a leg cannot carry a correlation — but unlike a bracket's legs, an mleg's arrive
+   * nested inside the parent on every event, and so inherit its attribution.
+   */
+  readonly clientOrderId?: string;
+}
+
+export interface CreateMultiLegMarketOrderInput extends BaseCreateMultiLegOrderInput {
+  readonly type: 'market';
+}
+
+export interface CreateMultiLegLimitOrderInput extends BaseCreateMultiLegOrderInput {
+  readonly type: 'limit';
+  /**
+   * The whole spread's net price, and the one price in this API that is signed:
+   * positive is a debit you are willing to pay, negative a credit you require.
+   *
+   * Getting the sign wrong does not fail — it places a real order at a price nobody
+   * would take, or worse, one far better for the other side than you meant.
+   */
+  readonly netLimitPrice: number;
+}
+
+export type CreateMultiLegOrderInput = CreateMultiLegMarketOrderInput | CreateMultiLegLimitOrderInput;
 
 export interface CreateOrderOutput {
   readonly order: AlpacaOrder;
@@ -96,9 +166,12 @@ export interface AlpacaRestClient {
   getAccount(input?: GetAccountInput): Promise<GetAccountOutput>;
   listPositions(input?: ListPositionsInput): Promise<ListPositionsOutput>;
   getAsset(input: GetAssetInput): Promise<GetAssetOutput>;
+  getOptionContract(input: GetOptionContractInput): Promise<GetOptionContractOutput>;
 
   createMarketOrder(input: CreateMarketOrderInput): Promise<CreateOrderOutput>;
   createLimitOrder(input: CreateLimitOrderInput): Promise<CreateOrderOutput>;
   createOtoOrder(input: CreateOtoOrderInput): Promise<CreateOrderOutput>;
+  /** A spread, placed as one order so that its legs fill together or not at all. */
+  createMultiLegOrder(input: CreateMultiLegOrderInput): Promise<CreateOrderOutput>;
   cancelOrder(input: CancelOrderInput): Promise<CancelOrderOutput>;
 }

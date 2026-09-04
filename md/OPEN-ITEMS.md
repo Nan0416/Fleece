@@ -10,26 +10,41 @@ legacy; this records what is still open.
 
 ---
 
-## 1. Leg orders are attributed to the wrong account
+## 1. Leg orders are attributed from the parent, not from a tracking request
 
-**Severity: high — produces a wrong number, silently.**
+**Severity: medium — was high; the common path is now covered, and what remains is a
+judgement rather than a gap.**
 
-`OrderTrackingFacade.track` is implemented and tested but nothing can call it. Its
-transport in the legacy was a message stream — `TrackingProcessor` bound to `PUT /track`
-on a `lite-server` listening on the `OrderTracking.{STAGE}` topic — and that layer
-belongs to the platform this port leaves behind.
+**This item changed when multi-leg support landed.** The converter now *flattens* a
+composite order: one Alpaca payload becomes one event per order it describes, each leg
+naming its parent in `parentBrokerOrderId`, and **every leg inherits the parent's
+correlation** — account, group and reservation. A leg therefore arrives already
+attributed, gets its own `broker_order` row, and never reaches the holding pen.
 
-It is the **only** mechanism by which the leg of a bracket, OTO or OCO order gets
-attributed. Alpaca creates legs itself and assigns them client order ids of its own, so
-the correlation encoded into the parent cannot reach them. Without a tracking request a
-leg's events sit in the injector's holding pen for `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS`
-and are then booked to the catch-all account — so the strategy that placed the order
-shows the entry and not the exit, and the catch-all shows an exit belonging to nobody.
+A multi-leg parent is dropped rather than converted, so a spread produces rows for its
+contracts and none for itself. `parentBrokerOrderId` on those legs therefore names an id
+the ledger holds no row for — it groups the legs, it does not resolve.
 
-Nothing is wrong *today*, because the only thing that would send a tracking request is
-`order-execution-service`, which is not ported either. This becomes real the day it is.
+That covers bracket, OTO and OCO legs too, not just spreads, because legs reach us
+nested in practice: the websocket sends no separate event for an OTO's exit leg at all,
+and both the REST placement response and `AlpacaActiveSynchronization`'s poll return it
+inside its parent.
 
-The sending half now exists: `@fleece/broker` calls `OrderTrackingClient` after every
+What this is: a decision that a leg belongs to whoever placed its parent. For a spread
+that is a fact — the legs are the spread and cannot be traded apart from it. For a
+bracket or an OTO it is an assumption, and a correct one for every order
+`@fleece/broker` places, since `placeOto` announces entry and exit under the same
+account. It would be wrong only if something upstream placed a composite order whose
+legs belong to different virtual accounts, which nothing does.
+
+**What is still open.** `OrderTrackingFacade.track` remains implemented and uncallable —
+its transport was a message stream (`TrackingProcessor` bound to `PUT /track` on a
+`lite-server` on the `OrderTracking.{STAGE}` topic) that belongs to the platform this
+port leaves behind. It still matters for an order Fleece never placed and that Alpaca
+reports standalone, which lands in the holding pen for
+`FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` and is then booked to the catch-all account.
+
+The sending half exists: `@fleece/broker` calls `OrderTrackingClient` after every
 placement, and `NoopOrderTrackingClient` warns on every call rather than staying quiet.
 
 | Option | Trade-off |
@@ -70,6 +85,60 @@ is a log line nobody is watching.
 
 **Recommendation: both.** They address different halves — one stops the cause, the other
 stops the loss.
+
+---
+
+## 2b. Options reach the ledger, but not `@fleece/broker`
+
+**Severity: high if anything places an option through `@fleece/broker` — it would
+oversubscribe the account by a factor of 100.**
+
+Numbered `2b` so the existing items keep their numbers; by cost it belongs here.
+
+`@fleece/alpaca` now models option and multi-leg orders, `HttpAlpacaRestClient` can
+place a spread, and the injector books each leg with the size scaled by
+`OPTION_CONTRACT_MULTIPLIER`. What is *not* done:
+
+- **Reservations are share-shaped.** `SymbolPositionTracker.reserve` holds
+  `|size| * unitPrice`, so one contract at 3.85 holds $3.85 against a purchase that
+  costs $385. Nothing in Fleece places options through `@fleece/broker` yet, and this is
+  the reason not to start. A short option is worse than 100x wrong, not merely 100x: its
+  requirement is margin, not premium, and a spread's is the width of the spread rather
+  than the sum of its legs.
+- **`Broker.order` has no multi-leg request.** `@fleece/alpaca` can place one; the
+  reservation model above is what has to exist first.
+- **Leg events now reach the tracker.** `AlpacaBroker.consume` dispatches and tracks
+  every event the converter returns, legs included, so `SymbolPositionTracker` will start
+  keeping entries for option symbols at contract scale — one contract at 3.85, not 100
+  units at 3.85. Deliberate: special-casing legs away here would make the class look
+  option-aware while its reservations still are not.
+- **Startup seeding does not know about spreads.** `AlpacaBroker.init` seeds the tracker
+  from `listOrders({ status: 'open' })` and calls `toPendingOrder` on every result. An
+  open multi-leg parent has an empty symbol and no side, so it seeds an entry keyed on
+  `''` with a negative size — the same shape of bug the injector's `applySpreadFill`
+  exists to prevent, in the package that has no consumer yet. Fixing it in isolation
+  would make `@fleece/broker` look option-safe while its reservations still are not,
+  which is why it is written down rather than patched.
+- **Adjusted contracts are assumed to be 100.** A split or a merger can leave a contract
+  delivering something other than 100 shares. Alpaca reports the real figure on the
+  option contract, and `getOptionContract` will fetch it — but the fill path uses the
+  constant, because reading it means a lookup per fill and a cache with an invalidation
+  story. An adjusted contract booked today is silently wrong by the ratio of its real
+  multiplier to 100.
+- **Positions read in units of the underlying.** One contract shows as `100`, which is
+  what makes `size * price` dollars and equity P&L comparable. Anyone reading a position
+  listing sees shares-equivalent, not contracts.
+
+| Option | Trade-off |
+| --- | --- |
+| Leave `@fleece/broker` equity-only, and say so | Free; the gap stays until the execution service lands |
+| Teach the tracker an asset class and a multiplier | Fixes long options; short options still need real margin rules |
+| Reserve options against a margin model | Correct, and the largest piece of work here |
+
+**Recommendation: the first, until something actually places an option order.** The
+ledger side is what the recorded payloads proved out; the reservation side has no caller
+to prove anything against, and guessing at margin rules with nothing exercising them is
+how the wrong rule ships unnoticed.
 
 ---
 
@@ -209,6 +278,10 @@ Recorded so their absence reads as a decision:
   out under "todo: make it idempotent". Applied by hand through `PUT /position/split`.
 - **OCO and OTOCO orders.** The legacy `Broker` interface declared them; nothing ever
   implemented them.
+- **Option chain browsing.** `getOptionContract` reads one contract by symbol, which is
+  what placing and pricing an order needs. Listing a chain — `/v2/options/contracts`
+  with its filters and paging — is a market-data concern and belongs with
+  `@fleece/marketdata` if anything ever needs it.
 - **`reservationId` is decoded and ignored.** It is the placing process's own bookkeeping
   and the ledger has no use for it, but the field is kept so the wire format is
   documented and the execution service can encode it.

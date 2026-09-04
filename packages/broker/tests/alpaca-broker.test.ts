@@ -43,7 +43,7 @@ describe('AlpacaBroker', () => {
     it('seeds buying power and positions from the broker', async () => {
       const { broker, rest } = harness();
       rest.buyingPower = '50000';
-      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', qty: '10', avg_entry_price: '170', side: 'long', market_value: '1700', cost_basis: '1700' }];
+      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', asset_class: 'us_equity', qty: '10', avg_entry_price: '170', side: 'long', market_value: '1700', cost_basis: '1700' }];
 
       await broker.init();
 
@@ -54,7 +54,7 @@ describe('AlpacaBroker', () => {
 
     it('locks shares already committed to an order open at the broker', async () => {
       const { broker, rest } = harness();
-      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', qty: '20', avg_entry_price: '170', side: 'long', market_value: '3400', cost_basis: '3400' }];
+      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', asset_class: 'us_equity', qty: '20', avg_entry_price: '170', side: 'long', market_value: '3400', cost_basis: '3400' }];
       rest.openOrders = [alpacaOrder({ id: 'open-sell', side: 'sell', qty: '5', filled_qty: '0' })];
 
       await broker.init();
@@ -159,7 +159,7 @@ describe('AlpacaBroker', () => {
 
     it('sends a sell as an absolute quantity with a sell side', async () => {
       const { broker, rest } = harness();
-      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', qty: '10', avg_entry_price: '100', side: 'long', market_value: '1000', cost_basis: '1000' }];
+      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', asset_class: 'us_equity', qty: '10', avg_entry_price: '100', side: 'long', market_value: '1000', cost_basis: '1000' }];
       await broker.init();
 
       await broker.order({ type: 'limit', symbol: 'AAPL', size: -4, limitPrice: 150, accountId: 'MOMENTUM01', onEvent: noEvents });

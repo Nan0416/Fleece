@@ -1,16 +1,19 @@
-import { InternalServiceError, LoggerFactory, ServiceUnreachableError } from '@fleece/shared';
+import { InternalServiceError, InvalidRequestError, LoggerFactory, ServiceUnreachableError } from '@fleece/shared';
 import {
   AlpacaRestClient,
   CancelOrderInput,
   CancelOrderOutput,
   CreateLimitOrderInput,
   CreateMarketOrderInput,
+  CreateMultiLegOrderInput,
   CreateOrderOutput,
   CreateOtoOrderInput,
   GetAccountInput,
   GetAccountOutput,
   GetAssetInput,
   GetAssetOutput,
+  GetOptionContractInput,
+  GetOptionContractOutput,
   GetOrderInput,
   GetOrderOutput,
   ListOrdersInput,
@@ -19,8 +22,12 @@ import {
   ListPositionsOutput,
 } from './alpaca-rest-client';
 import { restUrl } from './constants';
-import { AlpacaAccount, AlpacaAccountIdentifier, AlpacaAsset, AlpacaCredentialsProvider, AlpacaOrder, AlpacaPosition, resolveCredentials } from './models';
+import { AlpacaAccount, AlpacaAccountIdentifier, AlpacaAsset, AlpacaCredentialsProvider, AlpacaOptionContract, AlpacaOrder, AlpacaPosition, resolveCredentials } from './models';
 import { RateLimiter } from './rate-limiter';
+
+/** Alpaca's own bound, and the reason a spread cannot be built out of arbitrary parts. */
+const MAX_MULTI_LEG_LEGS = 4;
+const MIN_MULTI_LEG_LEGS = 2;
 
 const logger = LoggerFactory.getLogger('AlpacaRestClient');
 
@@ -50,7 +57,10 @@ export class HttpAlpacaRestClient implements AlpacaRestClient {
   }
 
   async getOrder(input: GetOrderInput): Promise<GetOrderOutput> {
-    const response = await this.request('GET', `/v2/orders/${encodeURIComponent(input.brokerOrderId)}`);
+    // `nested` defaults to false, and without it a multi-leg order comes back with no
+    // legs at all — which for a spread is the entire order, since the parent holds no
+    // instrument. `listOrders` has always asked for this; this call did not.
+    const response = await this.request('GET', `/v2/orders/${encodeURIComponent(input.brokerOrderId)}?nested=true`);
     if (response.status === 404) {
       return { order: null };
     }
@@ -123,6 +133,19 @@ export class HttpAlpacaRestClient implements AlpacaRestClient {
     return { asset: payload as AlpacaAsset };
   }
 
+  async getOptionContract(input: GetOptionContractInput): Promise<GetOptionContractOutput> {
+    const response = await this.request('GET', `/v2/options/contracts/${encodeURIComponent(input.symbolOrId.toUpperCase())}`);
+    if (response.status === 404) {
+      return { contract: null };
+    }
+    const payload = await this.readJson(response, `option contract ${input.symbolOrId}`);
+    if (typeof payload !== 'object' || payload === null || typeof Reflect.get(payload, 'symbol') !== 'string' || typeof Reflect.get(payload, 'multiplier') !== 'string') {
+      throw new InternalServiceError(`Alpaca returned an option contract for ${input.symbolOrId} with no symbol or multiplier.`);
+    }
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the boundary with Alpaca's schema; symbol and multiplier are checked above and the rest is parsed by the caller.
+    return { contract: payload as AlpacaOptionContract };
+  }
+
   async createMarketOrder(input: CreateMarketOrderInput): Promise<CreateOrderOutput> {
     return await this.createOrder({ ...this.baseOrderBody(input), type: 'market' });
   }
@@ -141,6 +164,39 @@ export class HttpAlpacaRestClient implements AlpacaRestClient {
     });
   }
 
+  /**
+   * A spread, as one order.
+   *
+   * The request looks nothing like a single-instrument order: there is no top-level
+   * symbol or side, because the spread trades neither — every instrument and direction
+   * is on a leg, and `qty` counts spreads rather than contracts.
+   */
+  async createMultiLegOrder(input: CreateMultiLegOrderInput): Promise<CreateOrderOutput> {
+    assertPlaceableSpread(input);
+
+    const body: Record<string, unknown> = {
+      order_class: 'mleg',
+      qty: input.size.toString(),
+      type: input.type,
+      time_in_force: input.timeInForce ?? 'day',
+      legs: input.legs.map((leg) => ({
+        symbol: leg.symbol,
+        ratio_qty: leg.ratioQty.toString(),
+        side: leg.side,
+        position_intent: leg.positionIntent,
+      })),
+    };
+    if (input.type === 'limit') {
+      body['limit_price'] = input.netLimitPrice.toString();
+    }
+    if (input.clientOrderId !== undefined) {
+      body['client_order_id'] = input.clientOrderId;
+    }
+    // `extended_hours` is omitted rather than sent false: Alpaca rejects an options
+    // order that carries attributes belonging to another asset class.
+    return await this.createOrder(body);
+  }
+
   async cancelOrder(input: CancelOrderInput): Promise<CancelOrderOutput> {
     // 404 is not an error here: cancelling an order that is already gone is the
     // outcome the caller wanted.
@@ -149,7 +205,7 @@ export class HttpAlpacaRestClient implements AlpacaRestClient {
   }
 
   /**
-   * `day` and no extended hours, matching the legacy client.
+   * `day` and no extended hours unless asked otherwise, matching the legacy client.
    *
    * Every number is sent as a string, which is Alpaca's convention for prices and
    * quantities in both directions.
@@ -159,11 +215,14 @@ export class HttpAlpacaRestClient implements AlpacaRestClient {
       symbol: input.symbol,
       qty: input.size.toString(),
       side: input.side,
-      time_in_force: 'day',
+      time_in_force: input.timeInForce ?? 'day',
       extended_hours: false,
     };
     if (input.clientOrderId !== undefined) {
       body['client_order_id'] = input.clientOrderId;
+    }
+    if (input.positionIntent !== undefined) {
+      body['position_intent'] = input.positionIntent;
     }
     return body;
   }
@@ -244,4 +303,41 @@ export class HttpAlpacaRestClient implements AlpacaRestClient {
     // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the boundary with Alpaca's schema; the fields the converter reads are checked above and in strictParseFloat.
     return payload as AlpacaOrder;
   }
+}
+
+/**
+ * Checks what Alpaca would reject, before an order goes out.
+ *
+ * Sending it anyway would work — Alpaca refuses these itself — but the failure comes
+ * back as a 422 the caller has to parse, and by then `@fleece/broker` has already taken
+ * a reservation it now has to unwind. Catching it here keeps a malformed spread from
+ * ever touching the account.
+ */
+function assertPlaceableSpread(input: CreateMultiLegOrderInput): void {
+  if (input.legs.length < MIN_MULTI_LEG_LEGS || input.legs.length > MAX_MULTI_LEG_LEGS) {
+    throw new InvalidRequestError(
+      `A multi-leg order needs between ${MIN_MULTI_LEG_LEGS} and ${MAX_MULTI_LEG_LEGS} legs, and this one has ${input.legs.length}. Place a single-leg option order with createMarketOrder or createLimitOrder.`,
+    );
+  }
+  if (!Number.isInteger(input.size) || input.size <= 0) {
+    throw new InvalidRequestError(`A multi-leg order must trade a whole positive number of spreads, not ${input.size}. Direction belongs on the legs, not on the size.`);
+  }
+  for (const leg of input.legs) {
+    if (!Number.isInteger(leg.ratioQty) || leg.ratioQty <= 0) {
+      throw new InvalidRequestError(`Leg ${leg.symbol} has a ratioQty of ${leg.ratioQty}. Every leg needs a whole positive ratio.`);
+    }
+  }
+
+  // Alpaca requires the ratios in lowest terms. 2:4 and 1:2 are the same spread, and
+  // only the second is accepted.
+  const divisor = input.legs.map((leg) => leg.ratioQty).reduce(greatestCommonDivisor);
+  if (divisor !== 1) {
+    throw new InvalidRequestError(
+      `The leg ratios ${input.legs.map((leg) => leg.ratioQty).join(':')} share a common divisor of ${divisor}. Divide them through by it and raise size to ${input.size * divisor} for the same spread.`,
+    );
+  }
+}
+
+function greatestCommonDivisor(a: number, b: number): number {
+  return b === 0 ? a : greatestCommonDivisor(b, a % b);
 }
