@@ -14,6 +14,7 @@ function event(overrides: Partial<MarketBrokerOrderEvent> = {}): MarketBrokerOrd
     id: 'order-1',
     status: 'new',
     symbol: 'AAPL',
+    assetClass: 'equity',
     timeInForce: 'day',
     orderClass: 'regular',
     side: 'buy',
@@ -164,6 +165,140 @@ describe('OrderTrackingFacade', () => {
 
     it('records nothing when a fill arrives with no price rather than writing a NaN', async () => {
       facade.enqueue(job({ accountId: 'MOMENTUM01', status: 'filled', filledQty: 10, filledAvgPrice: undefined }));
+      await facade.drain();
+      expect(ledger.fills).toHaveLength(0);
+    });
+  });
+
+  describe('recording an option fill', () => {
+    it('scales the size by the contract multiplier and leaves the premium alone', async () => {
+      // One contract at 3.85 is $385 of cash. Booking the size in units of the
+      // underlying keeps `size * price` in dollars, so this account's realised profit
+      // can be added to an equity trade's without being 100x light.
+      facade.enqueue(job({ accountId: 'MOMENTUM01', assetClass: 'option', symbol: 'AMZN261016C00280000', status: 'filled', filledQty: -1, filledAvgPrice: 3.85 }));
+      await facade.drain();
+
+      expect(ledger.fills[0].cumulativeFilledSize).toBe(-100);
+      expect(ledger.fills[0].cumulativeFilledAvgPrice).toBe(3.85);
+    });
+
+    it('leaves an equity fill unscaled', async () => {
+      facade.enqueue(job({ accountId: 'MOMENTUM01', status: 'filled', filledQty: 10, filledAvgPrice: 100 }));
+      await facade.drain();
+      expect(ledger.fills[0].cumulativeFilledSize).toBe(10);
+    });
+  });
+
+  describe('recording a multi-leg option fill', () => {
+    /**
+     * The spread from `packages/playground/data/live-options-filled.json` as the
+     * converter now renders it: three flat events, not one nested one. The parent has no
+     * symbol and a net credit for a price; each leg names it in `parentBrokerOrderId`.
+     */
+    const parent = (): Partial<MarketBrokerOrderEvent> => ({
+      id: 'mleg-parent-1',
+      accountId: 'MOMENTUM01',
+      orderClass: 'mleg',
+      symbol: '',
+      assetClass: 'option',
+      side: undefined,
+      status: 'filled',
+      qty: 1,
+      filledQty: 1,
+      filledAvgPrice: -0.9,
+    });
+
+    const shortLeg = (): Partial<MarketBrokerOrderEvent> => ({
+      id: 'mleg-leg-short',
+      parentBrokerOrderId: 'mleg-parent-1',
+      accountId: 'MOMENTUM01',
+      orderClass: 'mleg',
+      symbol: 'AMZN261016C00280000',
+      assetClass: 'option',
+      side: 'sell',
+      status: 'filled',
+      qty: -1,
+      filledQty: -1,
+      filledAvgPrice: 3.85,
+    });
+
+    const longLeg = (): Partial<MarketBrokerOrderEvent> => ({
+      id: 'mleg-leg-long',
+      parentBrokerOrderId: 'mleg-parent-1',
+      accountId: 'MOMENTUM01',
+      orderClass: 'mleg',
+      symbol: 'AMZN261016C00285000',
+      assetClass: 'option',
+      side: 'buy',
+      status: 'filled',
+      qty: 1,
+      filledQty: 1,
+      filledAvgPrice: 2.95,
+    });
+
+    function enqueueSpread(): void {
+      facade.enqueue(job(parent()));
+      facade.enqueue(job(shortLeg()));
+      facade.enqueue(job(longLeg()));
+    }
+
+    it('books the legs and never the parent, whose symbol is empty', async () => {
+      enqueueSpread();
+      await facade.drain();
+
+      expect(ledger.fills.map((fill) => [fill.referenceId, fill.symbol, fill.cumulativeFilledSize, fill.cumulativeFilledAvgPrice])).toEqual([
+        ['mleg-leg-short', 'AMZN261016C00280000', -100, 3.85],
+        ['mleg-leg-long', 'AMZN261016C00285000', 100, 2.95],
+      ]);
+      // The parent's -0.9 is the spread's net credit, not a price any contract traded
+      // at, and '' is not an instrument. Booking either is the bug this guards.
+      expect(ledger.fills.some((fill) => fill.symbol === '')).toBe(false);
+    });
+
+    it('records a broker order for every leg, so a fill reference resolves to an order', async () => {
+      // Before flattening, a leg had no row at all: an option fill wrote a transaction
+      // whose referenceId named an order the ledger held nothing for.
+      enqueueSpread();
+      await facade.drain();
+
+      expect(brokerOrders.orders.get('mleg-leg-short')?.symbol).toBe('AMZN261016C00280000');
+      expect(brokerOrders.orders.get('mleg-leg-long')?.symbol).toBe('AMZN261016C00285000');
+      // The parent is still recorded: it is the id a cancel or a tracking request names.
+      expect(brokerOrders.orders.get('mleg-parent-1')?.symbol).toBe('');
+    });
+
+    it('gives each leg its own reference id, so a redelivered spread stays idempotent', async () => {
+      enqueueSpread();
+      enqueueSpread();
+      await facade.drain();
+
+      expect(ledger.fills).toHaveLength(4);
+      expect(ledger.netSize('MOMENTUM01', 'AMZN261016C00280000')).toBe(-100);
+      expect(ledger.netSize('MOMENTUM01', 'AMZN261016C00285000')).toBe(100);
+    });
+
+    it('attributes the legs to the account the parent was correlated to', async () => {
+      facade.enqueue(job({ ...parent(), accountId: 'REVERSION1' }));
+      facade.enqueue(job({ ...shortLeg(), accountId: 'REVERSION1' }));
+      facade.enqueue(job({ ...longLeg(), accountId: 'REVERSION1' }));
+      await facade.drain();
+
+      expect(ledger.fills.every((fill) => fill.accountId === 'REVERSION1')).toBe(true);
+    });
+
+    it('books the leg that filled while the spread is only partially filled', async () => {
+      // Each leg is judged on its own status now, rather than the parent's.
+      facade.enqueue(job({ ...parent(), status: 'partially_filled', filledQty: 0, filledAvgPrice: undefined }));
+      facade.enqueue(job(shortLeg()));
+      facade.enqueue(job({ ...longLeg(), status: 'new', filledQty: 0, filledAvgPrice: undefined }));
+      await facade.drain();
+
+      expect(ledger.fills).toHaveLength(1);
+      expect(ledger.fills[0].referenceId).toBe('mleg-leg-short');
+    });
+
+    it('records nothing for the parent even when it reports a filled quantity and a price', async () => {
+      facade.enqueue(job(parent()));
       await facade.drain();
       expect(ledger.fills).toHaveLength(0);
     });

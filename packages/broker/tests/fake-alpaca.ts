@@ -8,10 +8,13 @@ import {
   CreateLimitOrderInput,
   CreateMarketOrderInput,
   CreateOrderOutput,
+  CreateMultiLegOrderInput,
   CreateOtoOrderInput,
   GetAccountOutput,
   GetAssetInput,
   GetAssetOutput,
+  GetOptionContractInput,
+  GetOptionContractOutput,
   GetOrderInput,
   GetOrderOutput,
   ListOrdersInput,
@@ -112,6 +115,36 @@ export class FakeAlpacaRestClient implements AlpacaRestClient {
 
   async createOtoOrder(input: CreateOtoOrderInput): Promise<CreateOrderOutput> {
     return this.create(input);
+  }
+
+  /**
+   * `@fleece/broker` has no multi-leg request and cannot reserve for one, so nothing
+   * here reaches this. It exists to satisfy the interface, and throws rather than
+   * pretending to place a spread — see `md/OPEN-ITEMS.md` item 2b.
+   */
+  async createMultiLegOrder(_input: CreateMultiLegOrderInput): Promise<CreateOrderOutput> {
+    throw new Error('FakeAlpacaRestClient cannot place a multi-leg order: no broker path reaches it.');
+  }
+
+  async getOptionContract(input: GetOptionContractInput): Promise<GetOptionContractOutput> {
+    return {
+      contract: {
+        id: 'contract-1',
+        symbol: input.symbolOrId.toUpperCase(),
+        name: input.symbolOrId.toUpperCase(),
+        status: 'active',
+        tradable: true,
+        expiration_date: '2026-10-16',
+        root_symbol: 'AMZN',
+        underlying_symbol: 'AMZN',
+        underlying_asset_id: 'underlying-1',
+        type: 'call',
+        style: 'american',
+        strike_price: '280',
+        multiplier: '100',
+        size: '100',
+      },
+    };
   }
 
   async cancelOrder(input: CancelOrderInput): Promise<CancelOrderOutput> {

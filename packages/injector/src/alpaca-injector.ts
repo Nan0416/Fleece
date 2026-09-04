@@ -1,8 +1,14 @@
-import { convertAlpacaOrderToBrokerOrderEvent, AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaWsClient } from '@fleece/alpaca';
-import { LoggerFactory } from '@fleece/shared';
+import { convertAlpacaOrderToBrokerOrderEvents, AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaWsClient } from '@fleece/alpaca';
+import { BrokerOrderEvent, LoggerFactory } from '@fleece/shared';
 import { OrderTrackingFacade } from './order-tracking-facade';
 
 const logger = LoggerFactory.getLogger('AlpacaInjector');
+
+/** One converted order paired with the raw Alpaca payload it was converted from. */
+interface ConvertedOrder {
+  readonly event: BrokerOrderEvent;
+  readonly originalEvent: AlpacaOrder;
+}
 
 export interface AlpacaFeed {
   readonly account: AlpacaAccountIdentifier;
@@ -60,18 +66,37 @@ export class AlpacaInjector {
     this.handlerIds.clear();
   }
 
+  /**
+   * One Alpaca payload becomes one job per order it describes. A spread yields a job per
+   * leg and none for the parent, which trades nothing.
+   *
+   * Each job carries the payload of *its own* order rather than the one that arrived,
+   * because `broker_order_record` is keyed by broker order id and holds the event
+   * verbatim for replay. Giving every leg the parent's payload would file, against each
+   * leg, a record whose own id is a different order.
+   */
   private inject(order: AlpacaOrder, feed: AlpacaFeed): void {
+    let converted: ReadonlyArray<ConvertedOrder>;
     try {
+      // Everything is converted before anything is enqueued, so a spread whose second
+      // leg is unreadable does not leave its first leg applied and the rest lost.
+      const rawById = new Map([order, ...(order.legs ?? [])].map((entry) => [entry.id, entry]));
+      converted = convertAlpacaOrderToBrokerOrderEvents(order, feed.account).map((event) => ({ event, originalEvent: rawById.get(event.id) ?? order }));
+    } catch (err) {
+      // One unconvertible event must not take down the feed for every other order. The
+      // websocket calls its handlers in a bare loop, so a throw escaping here would
+      // reach `ws.on('message')` and take the process with it.
+      logger.error(`Could not convert Alpaca order ${order.id} from account ${feed.account.accountId}.`, err);
+      return;
+    }
+
+    for (const job of converted) {
       this.props.orderTracking.enqueue({
-        event: convertAlpacaOrderToBrokerOrderEvent(order, feed.account),
-        originalEvent: order,
+        ...job,
         broker: 'alpaca',
         brokerAccountId: feed.account.accountId,
         live: feed.account.live,
       });
-    } catch (err) {
-      // One unconvertible event must not take down the feed for every other order.
-      logger.error(`Could not convert Alpaca order ${order.id} from account ${feed.account.accountId}.`, err);
     }
   }
 }

@@ -14,8 +14,8 @@ An npm-workspaces monorepo, ten packages under `packages/`:
 | `core` | The ledger: account facade, data access, schema migrations. The only writer |
 | `service` | The HTTP API over the ledger |
 | `client` | Typed client for that API |
-| `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec |
-| `broker` | Places orders, reserving buying power and shares before they go out |
+| `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
+| `broker` | Places orders, reserving buying power and shares before they go out. Equities only |
 | `marketdata` | Polygon client for splits and dividends |
 | `injector` | Turns broker order events into ledger entries |
 | `corporate-actions` | Records the dividends each account is owed |
@@ -77,4 +77,4 @@ logging, failure handling, testing and style — each rule with the reasoning be
 - [md/PORTING.md](./md/PORTING.md) — what changed from the legacy service, and why
 - [md/OPEN-ITEMS.md](./md/OPEN-ITEMS.md) — decisions still open, and what to know before
   trusting this with money. **Read item 1 and 2 before relying on leg attribution or
-  deleting an order group.**
+  deleting an order group, and item 2b before placing an option through `broker`.**

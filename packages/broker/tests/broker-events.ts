@@ -10,6 +10,7 @@ export function brokerEvent(overrides: Partial<MarketBrokerOrderEvent> = {}): Ma
     id: 'order-1',
     status: 'new',
     symbol: 'AAPL',
+    assetClass: 'equity',
     timeInForce: 'day',
     orderClass: 'regular',
     side: 'buy',

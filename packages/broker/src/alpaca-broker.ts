@@ -4,7 +4,7 @@ import {
   AlpacaOrder,
   AlpacaRestClient,
   AlpacaWsClient,
-  convertAlpacaOrderToBrokerOrderEvent,
+  convertAlpacaOrderToBrokerOrderEvents,
   encodeAlpacaOrderCorrelation,
 } from '@fleece/alpaca';
 import { BrokerOrderEvent, InvalidRequestError, LoggerFactory, roundPrice } from '@fleece/shared';
@@ -281,16 +281,28 @@ export class AlpacaBroker implements Broker {
     }
   }
 
+  /**
+   * A composite order now arrives as a parent event plus one per leg, and every one of
+   * them is tracked and dispatched. That is the honest consequence of flattening: a leg
+   * is a real order, and hiding it here would make this class look option-aware when its
+   * reservations are not.
+   *
+   * What it means for options specifically is in `md/OPEN-ITEMS.md` item 2b — the
+   * tracker holds an option at its premium rather than premium times the contract
+   * multiplier, so nothing should place one through this broker until that is fixed.
+   */
   private consume(order: AlpacaOrder): void {
-    let event: BrokerOrderEvent;
+    let events: ReadonlyArray<BrokerOrderEvent>;
     try {
-      event = convertAlpacaOrderToBrokerOrderEvent(order, this.props.account);
+      events = convertAlpacaOrderToBrokerOrderEvents(order, this.props.account);
     } catch (err) {
       logger.error(`Could not convert Alpaca order ${order.id} on account ${this.brokerAccountId}.`, err);
       return;
     }
-    this.tracker.track(event);
-    this.dispatcher.dispatch(event);
+    for (const event of events) {
+      this.tracker.track(event);
+      this.dispatcher.dispatch(event);
+    }
   }
 
   /**

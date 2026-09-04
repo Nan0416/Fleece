@@ -53,12 +53,16 @@ Recorded Alpaca payloads for two-leg AMZN call spreads — the create response a
 `trade_updates` events that followed — across five outcomes: filled, rejected, expired
 at end of day, and cancelled.
 
-They are here because they document a shape nothing in Fleece handles yet. These orders
-come back with `order_class: "mleg"`, which is not in the `AlpacaOrder.order_class`
-union, an empty `symbol` and `asset_class` on the parent, and the real instruments on
-the legs. Anything that teaches the ledger about options needs these cases as fixtures,
-and they are tedious to reproduce — a rejection and an end-of-day expiry each need the
-market in a particular mood.
+They are why Fleece handles multi-leg orders the way it does. These orders come back
+with `order_class: "mleg"`, an empty `symbol` and `asset_class` on the parent, and the
+real instruments on the legs — and the parent's `side` is `""` here but `"buy"` on the
+websocket for the same order, which is the reason nothing signs a spread from it.
+
+`packages/alpaca/tests/mleg-alpaca-orders.ts` reproduces the filled case field for
+field as a fixture, because `playground` is outside the build and the product cannot
+import from it. Keep the two in step: if Alpaca changes this shape, these files are the
+evidence, and they are tedious to reproduce — a rejection and an end-of-day expiry each
+need the market in a particular mood.
 
 No credentials or account identifiers are in them; the ids are Alpaca's order and asset
 UUIDs.
