@@ -1,68 +1,174 @@
-import { BrokerOrder, BrokerOrderRecord, InternalServiceError } from '@fleece/shared';
+import { BrokerOrder, BrokerOrderRecord, Decimal, InternalServiceError } from '@fleece/shared';
 import { Pool } from 'pg';
 import {
   BrokerOrderDao,
-  CreateBrokerOrderInput,
-  CreateBrokerOrderOutput,
+  ClaimBrokerOrderInput,
+  ClaimBrokerOrderOutput,
   DeleteBrokerOrderInput,
   DeleteBrokerOrderOutput,
   GetBrokerOrderInput,
   GetBrokerOrderOutput,
   InsertBrokerOrderRecordInput,
   InsertBrokerOrderRecordOutput,
+  ListBrokerOrderLegsInput,
+  ListBrokerOrderLegsOutput,
   ListBrokerOrderRecordsInput,
   ListBrokerOrderRecordsOutput,
-  ListBrokerOrdersByGroupIdInput,
-  ListBrokerOrdersByGroupIdOutput,
   ListBrokerOrdersInput,
   ListBrokerOrdersOutput,
   ListOrphanBrokerOrdersInput,
   ListOrphanBrokerOrdersOutput,
-  SetBrokerOrderGroupIdInput,
-  SetBrokerOrderGroupIdOutput,
-  SetBrokerOrderStatusInput,
-  SetBrokerOrderStatusOutput,
+  UpsertBrokerOrderInput,
+  UpsertBrokerOrderOutput,
 } from './broker-order-dao';
-import { toBroker } from './row-parsers';
+import {
+  toAssetClass,
+  toBroker,
+  toBrokerOrderAttribution,
+  toBrokerOrderClass,
+  toBrokerOrderSide,
+  toBrokerOrderTimeInForce,
+  toBrokerOrderType,
+  toBrokerPositionIntent,
+  toDecimal,
+  toOptionalDecimal,
+} from './row-parsers';
 
 interface BrokerOrderRow {
   readonly broker_order_id: string;
-  readonly symbol: string;
+  readonly parent_broker_order_id: string | null;
   readonly account_id: string;
   readonly broker: string;
   readonly broker_account_id: string;
+  readonly attribution: string;
+  readonly symbol: string | null;
+  readonly asset_class: string;
+  readonly multiplier: string;
   readonly status: string;
-  readonly group_id: string | null;
+  readonly order_class: string;
+  readonly order_type: string;
+  readonly side: string | null;
+  readonly position_intent: string | null;
+  readonly time_in_force: string;
+  readonly extended_hours: boolean;
+  readonly qty: string;
+  readonly ratio_qty: string | null;
+  readonly limit_price: string | null;
+  readonly stop_price: string | null;
+  readonly filled_qty: string;
+  readonly filled_avg_price: string | null;
+  readonly submitted_at: Date | null;
+  readonly filled_at: Date | null;
   readonly created_at: Date;
   readonly updated_at: Date;
 }
 
 function toBrokerOrder(row: BrokerOrderRow): BrokerOrder {
+  const id = row.broker_order_id;
   return {
-    brokerOrderId: row.broker_order_id,
-    symbol: row.symbol,
+    brokerOrderId: id,
+    parentBrokerOrderId: row.parent_broker_order_id === null ? undefined : row.parent_broker_order_id,
     accountId: row.account_id,
-    broker: toBroker(row.broker, row.broker_order_id),
+    broker: toBroker(row.broker, id),
     brokerAccountId: row.broker_account_id,
+    attribution: toBrokerOrderAttribution(row.attribution, id),
+    symbol: row.symbol === null ? undefined : row.symbol,
+    assetClass: toAssetClass(row.asset_class, `Broker order ${id}`),
+    multiplier: toDecimal(row.multiplier, `Broker order ${id} multiplier`),
     status: row.status,
-    groupId: row.group_id === null ? undefined : row.group_id,
+    orderClass: toBrokerOrderClass(row.order_class, id),
+    orderType: toBrokerOrderType(row.order_type, id),
+    side: toBrokerOrderSide(row.side, id),
+    positionIntent: toBrokerPositionIntent(row.position_intent, id),
+    timeInForce: toBrokerOrderTimeInForce(row.time_in_force, id),
+    extendedHours: row.extended_hours,
+    qty: toDecimal(row.qty, `Broker order ${id} qty`),
+    ratioQty: toOptionalDecimal(row.ratio_qty, `Broker order ${id} ratio_qty`),
+    limitPrice: toOptionalDecimal(row.limit_price, `Broker order ${id} limit_price`),
+    stopPrice: toOptionalDecimal(row.stop_price, `Broker order ${id} stop_price`),
+    filledQty: toDecimal(row.filled_qty, `Broker order ${id} filled_qty`),
+    filledAvgPrice: toOptionalDecimal(row.filled_avg_price, `Broker order ${id} filled_avg_price`),
+    submittedAt: row.submitted_at === null ? undefined : row.submitted_at.getTime(),
+    filledAt: row.filled_at === null ? undefined : row.filled_at.getTime(),
     createdAt: row.created_at.getTime(),
     lastUpdatedAt: row.updated_at.getTime(),
   };
 }
 
-const SELECT_COLUMNS = 'broker_order_id, symbol, account_id, broker, broker_account_id, status, group_id, created_at, updated_at';
+function optionalDecimal(value: Decimal | undefined): string | null {
+  return value === undefined ? null : value.toString();
+}
+
+const SELECT_COLUMNS = `broker_order_id, parent_broker_order_id, account_id, broker, broker_account_id, attribution, symbol, asset_class, multiplier,
+  status, order_class, order_type, side, position_intent, time_in_force, extended_hours,
+  qty, ratio_qty, limit_price, stop_price, filled_qty, filled_avg_price, submitted_at, filled_at, created_at, updated_at`;
 
 export class PgBrokerOrderDao implements BrokerOrderDao {
   constructor(private readonly pool: Pool) {}
 
-  async createBrokerOrder(input: CreateBrokerOrderInput): Promise<CreateBrokerOrderOutput> {
-    const result = await this.pool.query<BrokerOrderRow>(
-      `INSERT INTO broker_order (broker_order_id, symbol, account_id, broker, broker_account_id, status, group_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${SELECT_COLUMNS}`,
-      [input.brokerOrderId, input.symbol, input.accountId, input.broker, input.brokerAccountId, input.status, input.groupId ?? null],
+  /**
+   * One statement, so two events for the same order cannot race each other into a
+   * duplicate-key failure.
+   *
+   * `xmax = 0` is how Postgres answers "did this INSERT actually insert?" — on a row the
+   * conflict clause updated, `xmax` holds the transaction that locked it and is
+   * non-zero. It is the only way to tell an insert from an update in a single
+   * round-trip, and the caller wants to know because a first sighting is worth a log
+   * line and a repeat is not.
+   *
+   * The DO UPDATE list is deliberately short. Everything describing what the order *is*
+   * — the account it trades for, how that was decided, its instrument, its size — is
+   * written once and never overwritten, because an order does not change those and a
+   * later report that disagrees is a bug upstream, not a correction to apply.
+   */
+  async upsertBrokerOrder(input: UpsertBrokerOrderInput): Promise<UpsertBrokerOrderOutput> {
+    const result = await this.pool.query<BrokerOrderRow & { inserted: boolean }>(
+      `INSERT INTO broker_order
+         (broker_order_id, parent_broker_order_id, account_id, broker, broker_account_id, attribution, symbol, asset_class, multiplier,
+          status, order_class, order_type, side, position_intent, time_in_force, extended_hours,
+          qty, ratio_qty, limit_price, stop_price, filled_qty, filled_avg_price, submitted_at, filled_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+               CASE WHEN $23::BIGINT IS NULL THEN NULL ELSE to_timestamp($23::BIGINT / 1000.0) END,
+               CASE WHEN $24::BIGINT IS NULL THEN NULL ELSE to_timestamp($24::BIGINT / 1000.0) END)
+       ON CONFLICT (broker_order_id) DO UPDATE
+         SET status = EXCLUDED.status,
+             filled_qty = EXCLUDED.filled_qty,
+             filled_avg_price = COALESCE(EXCLUDED.filled_avg_price, broker_order.filled_avg_price),
+             filled_at = COALESCE(EXCLUDED.filled_at, broker_order.filled_at),
+             updated_at = now()
+       RETURNING ${SELECT_COLUMNS}, (xmax = 0) AS inserted`,
+      [
+        input.brokerOrderId,
+        input.parentBrokerOrderId ?? null,
+        input.accountId,
+        input.broker,
+        input.brokerAccountId,
+        input.attribution,
+        input.symbol ?? null,
+        input.assetClass,
+        input.multiplier.toString(),
+        input.status,
+        input.orderClass,
+        input.orderType,
+        input.side ?? null,
+        input.positionIntent ?? null,
+        input.timeInForce,
+        input.extendedHours,
+        input.qty.toString(),
+        optionalDecimal(input.ratioQty),
+        optionalDecimal(input.limitPrice),
+        optionalDecimal(input.stopPrice),
+        input.filledQty.toString(),
+        optionalDecimal(input.filledAvgPrice),
+        input.submittedAt ?? null,
+        input.filledAt ?? null,
+      ],
     );
-    return { brokerOrder: toBrokerOrder(result.rows[0]) };
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new InternalServiceError(`Recording broker order ${input.brokerOrderId} returned no row.`);
+    }
+    return { brokerOrder: toBrokerOrder(row), created: row.inserted };
   }
 
   async getBrokerOrder(input: GetBrokerOrderInput): Promise<GetBrokerOrderOutput> {
@@ -86,6 +192,7 @@ export class PgBrokerOrderDao implements BrokerOrderDao {
       ['broker_account_id', input.brokerAccountId],
       ['symbol', input.symbol],
       ['status', input.status],
+      ['asset_class', input.assetClass],
     ];
     for (const [column, value] of filters) {
       if (value !== undefined) {
@@ -102,42 +209,35 @@ export class PgBrokerOrderDao implements BrokerOrderDao {
     return { brokerOrders: result.rows.map(toBrokerOrder) };
   }
 
-  async listBrokerOrdersByGroupId(input: ListBrokerOrdersByGroupIdInput): Promise<ListBrokerOrdersByGroupIdOutput> {
-    if (input.groupIds.length === 0) {
+  async listBrokerOrderLegs(input: ListBrokerOrderLegsInput): Promise<ListBrokerOrderLegsOutput> {
+    if (input.parentBrokerOrderIds.length === 0) {
       return { brokerOrders: [] };
     }
     // `= ANY($1)` rather than a generated IN list: one prepared statement shape
-    // whatever the number of groups, and no parameter-count ceiling to trip over.
-    const result = await this.pool.query<BrokerOrderRow>(`SELECT ${SELECT_COLUMNS} FROM broker_order WHERE group_id = ANY($1) ORDER BY created_at, broker_order_id`, [
-      [...input.groupIds],
+    // whatever the number of parents, and no parameter-count ceiling to trip over.
+    const result = await this.pool.query<BrokerOrderRow>(`SELECT ${SELECT_COLUMNS} FROM broker_order WHERE parent_broker_order_id = ANY($1) ORDER BY created_at, broker_order_id`, [
+      [...input.parentBrokerOrderIds],
     ]);
     return { brokerOrders: result.rows.map(toBrokerOrder) };
   }
 
   async listOrphanBrokerOrders(_input: ListOrphanBrokerOrdersInput): Promise<ListOrphanBrokerOrdersOutput> {
-    const result = await this.pool.query<BrokerOrderRow>(`SELECT ${SELECT_COLUMNS} FROM broker_order WHERE group_id IS NULL ORDER BY created_at, broker_order_id`);
+    const result = await this.pool.query<BrokerOrderRow>(`SELECT ${SELECT_COLUMNS} FROM broker_order WHERE attribution = 'default' ORDER BY created_at, broker_order_id`);
     return { brokerOrders: result.rows.map(toBrokerOrder) };
   }
 
-  async setStatus(input: SetBrokerOrderStatusInput): Promise<SetBrokerOrderStatusOutput> {
-    const result = await this.pool.query<BrokerOrderRow>(`UPDATE broker_order SET status = $2, updated_at = now() WHERE broker_order_id = $1 RETURNING ${SELECT_COLUMNS}`, [
-      input.brokerOrderId,
-      input.status,
-    ]);
-    const row = result.rows[0];
-    return { brokerOrder: row === undefined ? null : toBrokerOrder(row) };
-  }
-
   /**
-   * Only ever sets a group on an order that has none. An order's group is not
-   * something that changes: the guard is in the WHERE clause rather than in a
-   * read-then-write, so a late tracking request cannot move an order that has already
-   * been placed in a group.
+   * Guarded in the SQL, not around it. `WHERE attribution = 'default'` means a claim
+   * arriving after the order has already been attributed changes nothing and returns
+   * null, where a read-then-write would lose that race and move a fill onto the wrong
+   * strategy.
    */
-  async setGroupId(input: SetBrokerOrderGroupIdInput): Promise<SetBrokerOrderGroupIdOutput> {
+  async claimBrokerOrder(input: ClaimBrokerOrderInput): Promise<ClaimBrokerOrderOutput> {
     const result = await this.pool.query<BrokerOrderRow>(
-      `UPDATE broker_order SET group_id = $2, updated_at = now() WHERE broker_order_id = $1 AND group_id IS NULL RETURNING ${SELECT_COLUMNS}`,
-      [input.brokerOrderId, input.groupId],
+      `UPDATE broker_order SET account_id = $2, attribution = $3, updated_at = now()
+        WHERE broker_order_id = $1 AND attribution = 'default'
+        RETURNING ${SELECT_COLUMNS}`,
+      [input.brokerOrderId, input.accountId, input.attribution],
     );
     const row = result.rows[0];
     return { brokerOrder: row === undefined ? null : toBrokerOrder(row) };
@@ -154,18 +254,9 @@ export class PgBrokerOrderDao implements BrokerOrderDao {
   }
 
   async listRecords(input: ListBrokerOrderRecordsInput): Promise<ListBrokerOrderRecordsOutput> {
-    const result = await this.pool.query<{ record: unknown }>('SELECT record FROM broker_order_record WHERE broker_order_id = $1 ORDER BY created_at, record_id', [
+    const result = await this.pool.query<{ record: BrokerOrderRecord }>('SELECT record FROM broker_order_record WHERE broker_order_id = $1 ORDER BY created_at, record_id', [
       input.brokerOrderId,
     ]);
-    return {
-      records: result.rows.map((row) => {
-        const record = row.record;
-        if (typeof record !== 'object' || record === null || !('id' in record) || typeof record.id !== 'string') {
-          throw new InternalServiceError(`A broker order record for ${input.brokerOrderId} is missing its id.`);
-        }
-        const parsed: BrokerOrderRecord = { ...record, id: record.id };
-        return parsed;
-      }),
-    };
+    return { records: result.rows.map((row) => row.record) };
   }
 }

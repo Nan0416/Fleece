@@ -77,11 +77,17 @@ describe('AlpacaInjector', () => {
     expect(tracking.jobs[0].originalEvent.id).toBe('order-1');
   });
 
-  it('enqueues a job per contract of a spread and none for the parent', () => {
+  it('enqueues a job for the spread and one per contract, parent first', () => {
+    // The parent books no fill, but it is the id a placement returns and a cancel names,
+    // so it gets a row like any other order. First, so that row exists before the legs
+    // that name it.
     ws.deliver(mlegOrder());
 
-    expect(tracking.jobs.map((job) => job.event.id)).toEqual(['mleg-leg-short', 'mleg-leg-long']);
+    expect(tracking.jobs.map((job) => job.event.id)).toEqual(['mleg-parent-1', 'mleg-leg-short', 'mleg-leg-long']);
+    // No job carries the empty symbol Alpaca sends for a parent; the converter turns it
+    // into no symbol at all.
     expect(tracking.jobs.every((job) => job.event.symbol !== '')).toBe(true);
+    expect(tracking.jobs[0].event.symbol).toBeUndefined();
   });
 
   it("files each leg's record against that leg's own payload, not the spread's", () => {

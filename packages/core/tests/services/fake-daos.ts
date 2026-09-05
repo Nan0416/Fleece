@@ -1,6 +1,5 @@
-import { Account, BrokerOrder, OrderGroup } from '@fleece/shared';
+import { Account } from '@fleece/shared';
 import { AccountDao, CreateAccountInput, ListAccountsInput } from '../../src/data/account-dao';
-import { ListOrderGroupsInput, OrderGroupDao } from '../../src/data/order-group-dao';
 
 /** Fakes that store what they are given, implementing the rules a caller depends on. */
 
@@ -50,72 +49,5 @@ export class FakeAccountDao implements AccountDao {
 
   async deleteAccount(input: { accountId: string }): Promise<{ deleted: boolean }> {
     return { deleted: this.accounts.delete(input.accountId) };
-  }
-}
-
-export class FakeOrderGroupDao implements OrderGroupDao {
-  readonly groups = new Map<string, OrderGroup>();
-  readonly listCalls: ListOrderGroupsInput[] = [];
-
-  seed(groupId: string, overrides: Partial<OrderGroup> = {}): OrderGroup {
-    const group: OrderGroup = {
-      groupId,
-      correlationId: `corr-${groupId}`,
-      correlationType: 'test',
-      status: 'open',
-      accountId: 'ACCOUNT001',
-      brokerOrders: [] as ReadonlyArray<BrokerOrder>,
-      createdAt: 1,
-      lastUpdatedAt: 1,
-      ...overrides,
-    };
-    this.groups.set(groupId, group);
-    return group;
-  }
-
-  async createOrderGroup(input: {
-    groupId: string;
-    correlationId: string;
-    correlationType: string;
-    status: 'open' | 'closed';
-    accountId: string;
-  }): Promise<{ orderGroup: OrderGroup }> {
-    return { orderGroup: this.seed(input.groupId, input) };
-  }
-
-  async getOrderGroup(input: { groupId: string }): Promise<{ orderGroup: OrderGroup | null }> {
-    return { orderGroup: this.groups.get(input.groupId) ?? null };
-  }
-
-  async listOrderGroups(input: ListOrderGroupsInput): Promise<{ orderGroups: ReadonlyArray<OrderGroup> }> {
-    this.listCalls.push(input);
-    return { orderGroups: [...this.groups.values()] };
-  }
-
-  async setStatus(input: { groupId: string; status: 'open' | 'closed' }): Promise<{ orderGroup: OrderGroup | null }> {
-    const existing = this.groups.get(input.groupId);
-    if (existing === undefined) {
-      return { orderGroup: null };
-    }
-    const updated = { ...existing, status: input.status };
-    this.groups.set(input.groupId, updated);
-    return { orderGroup: updated };
-  }
-
-  async setDocuments(input: {
-    groupId: string;
-    documents: ReadonlyArray<OrderGroup['documents']> extends never ? never : Parameters<OrderGroupDao['setDocuments']>[0]['documents'];
-  }): Promise<{ orderGroup: OrderGroup | null }> {
-    const existing = this.groups.get(input.groupId);
-    if (existing === undefined) {
-      return { orderGroup: null };
-    }
-    const updated = { ...existing, documents: input.documents };
-    this.groups.set(input.groupId, updated);
-    return { orderGroup: updated };
-  }
-
-  async deleteOrderGroup(input: { groupId: string }): Promise<{ deleted: boolean }> {
-    return { deleted: this.groups.delete(input.groupId) };
   }
 }

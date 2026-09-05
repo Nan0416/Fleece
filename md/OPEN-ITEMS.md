@@ -10,6 +10,36 @@ legacy; this records what is still open.
 
 ---
 
+## 0. The read side of the redesign is not ported
+
+**Severity: none to the numbers — the write path is done and covered. The repository
+does not fully compile.**
+
+The schema redesign — exact decimals, total-cost accounting, asset classes, legs, stored
+fill progress, no order groups — has landed through the whole **write path**:
+`@fleece/shared`, `packages/core/migrations/`, `core/src/data`, `core/src/services`,
+`alpaca`, `injector` and `corporate-actions` all compile, and `write-path.test.ts`
+replays recorded Alpaca payloads through the converter, the tracking facade, the ledger
+service and the DAO against a real PostgreSQL.
+
+What remains is the read side, plus the broker:
+
+| Package | What has to change |
+| --- | --- |
+| `service`, `client`, `cli` | Order-group routes and commands are gone; decimals cross the wire as **strings** and need parsing in at the trust boundary and reviving out in the client |
+| `broker` | Reservations still compute in doubles against a `roundPrice` that no longer exists — and see item 2b, which is a design problem rather than a port |
+
+The wire format is the one thing here that is a decision rather than a translation:
+`Decimal.toJSON()` emits a string, because a JSON number is a double and would undo the
+whole change at the process boundary. `service` parses incoming strings and `client`
+revives outgoing ones; neither is written yet.
+
+**Do not port `broker` by translating its arithmetic.** Its reservations are wrong for
+options by a factor of 100, and making them `Decimal` first would produce a package that
+looks converted while still being wrong — see item 2b.
+
+---
+
 ## 1. Leg orders are attributed from the parent, not from a tracking request
 
 **Severity: medium — was high; the common path is now covered, and what remains is a
@@ -18,12 +48,15 @@ judgement rather than a gap.**
 **This item changed when multi-leg support landed.** The converter now *flattens* a
 composite order: one Alpaca payload becomes one event per order it describes, each leg
 naming its parent in `parentBrokerOrderId`, and **every leg inherits the parent's
-correlation** — account, group and reservation. A leg therefore arrives already
-attributed, gets its own `broker_order` row, and never reaches the holding pen.
+correlation** — the virtual account and the reservation. A leg therefore arrives already
+attributed, gets its own `broker_order` row at `attribution: 'parent'`, and never reaches
+the holding pen.
 
-A multi-leg parent is dropped rather than converted, so a spread produces rows for its
-contracts and none for itself. `parentBrokerOrderId` on those legs therefore names an id
-the ledger holds no row for — it groups the legs, it does not resolve.
+A composite parent is converted too, ahead of its legs, so a spread produces a row for
+itself and one per contract. The parent books no fill — it trades no instrument and its
+price is the package's signed net — but it is the id a placement returns, a cancel names
+and a tracking request claims, and it carries the net price the spread was actually
+traded at, which exists nowhere else.
 
 That covers bracket, OTO and OCO legs too, not just spreads, because legs reach us
 nested in practice: the websocket sends no separate event for an OTO's exit leg at all,
@@ -53,38 +86,33 @@ placement, and `NoopOrderTrackingClient` warns on every call rather than staying
 | `PUT /track` on the API, pre-creating the `broker_order` row at `pending_new` | No new process surface, and see below |
 | Adopt a pub/sub hub | Truest to the original; you chose standalone for now |
 
-**Recommendation: the second.** An association is "broker order X belongs to account A,
-group G", which is *identical* to a `broker_order` row minus a status. Pre-creating that
-row means the injector's existing `existing?.accountId` lookup resolves it with no new
-code path, the in-memory `associations` map disappears, and item 5 below goes away too.
-The cost is a row for an order the broker might reject, sitting visibly at `pending_new`.
+**Recommendation: the second.** An association is "broker order X belongs to account A",
+which is *identical* to a `broker_order` row minus a status. Pre-creating that row means
+the injector's existing `existing?.accountId` lookup resolves it with no new code path,
+the in-memory `associations` map disappears, and item 5 below goes away too. The cost is
+a row for an order the broker might reject, sitting visibly at `pending_new`.
+
+The redesign already supplies the other half: `claimBrokerOrder` is
+`UPDATE ... WHERE attribution = 'default'`, so a late tracking request can move an order
+off the catch-all account but can never move one that is already attributed.
 
 ---
 
 ## 2. A fill is dropped if its order group has been deleted
 
-**Severity: high — produces a wrong number, silently.**
+**Resolved — order groups no longer exist.**
 
-If an event arrives naming a group that no longer exists,
-`BrokerOrderService.createBrokerOrder` throws `NotFoundError`, `AsyncQueue` catches it,
-logs at error and moves on — and **the fill is never recorded**.
+`BrokerOrderService.createBrokerOrder` used to throw `NotFoundError` when an event named
+a group that had been deleted, `AsyncQueue` caught it, logged at error and moved on, and
+the fill was never recorded. Deleting a group while its orders were live was the
+realistic route in.
 
-The realistic route is deleting an order group while its orders are still live: the
-delete cascades away the broker orders, and the next event for one of them tries to
-create it fresh against a group that is gone.
-
-It needs an unusual operator action to trigger, but "a fill silently does not get
-recorded" is the exact failure this system exists to prevent, and the current behaviour
-is a log line nobody is watching.
-
-| Option | Trade-off |
-| --- | --- |
-| Refuse to delete a group with non-terminal orders | Simple; the operator has to close the group first |
-| Record the order as an orphan instead of dropping it | The fill lands, attribution is wrong but visible via `broker-order orphans` |
-| Both | Refuse the delete, and orphan anything that slips through |
-
-**Recommendation: both.** They address different halves — one stops the cause, the other
-stops the loss.
+The schema redesign removed the `order_group` table, the cascade from it to
+`broker_order`, and the correlation columns it carried. There is no longer a row whose
+absence can reject a fill. What the group used to answer — which orders belong together
+— is `parent_broker_order_id`, which is indexed and deliberately carries **no foreign
+key** for exactly this reason: a leg reaching us without its parent must land, and a
+foreign key would turn that into a rejected row, reintroducing this bug in a new place.
 
 ---
 
@@ -92,6 +120,11 @@ stops the loss.
 
 **Severity: high if anything places an option through `@fleece/broker` — it would
 oversubscribe the account by a factor of 100.**
+
+**The ledger half of this is now done.** Positions count contracts and carry their
+dollars in `total_cost`, so a listing reads `2` for two contracts and `size * price` is
+no longer load-bearing. Everything below is about `@fleece/broker`, which the schema
+redesign did not touch and which does not compile against the new models yet.
 
 Numbered `2b` so the existing items keep their numbers; by cost it belongs here.
 
@@ -119,15 +152,14 @@ place a spread, and the injector books each leg with the size scaled by
   exists to prevent, in the package that has no consumer yet. Fixing it in isolation
   would make `@fleece/broker` look option-safe while its reservations still are not,
   which is why it is written down rather than patched.
-- **Adjusted contracts are assumed to be 100.** A split or a merger can leave a contract
+- **Adjusted contracts still default to 100.** A split or a merger can leave a contract
   delivering something other than 100 shares. Alpaca reports the real figure on the
-  option contract, and `getOptionContract` will fetch it — but the fill path uses the
-  constant, because reading it means a lookup per fill and a cache with an invalidation
-  story. An adjusted contract booked today is silently wrong by the ratio of its real
-  multiplier to 100.
-- **Positions read in units of the underlying.** One contract shows as `100`, which is
-  what makes `size * price` dollars and equity P&L comparable. Anyone reading a position
-  listing sees shares-equivalent, not contracts.
+  option contract, and `getOptionContract` will fetch it — but nothing does so per fill,
+  because that means a lookup on the write path and a cache with an invalidation story.
+  What changed is that the figure actually used is now **recorded** on every `position`,
+  `ledger_transaction` and `broker_order` row, so a contract booked under the wrong
+  assumption is findable and its true premium recoverable, rather than silently wrong
+  with nothing saying so.
 
 | Option | Trade-off |
 | --- | --- |
@@ -144,26 +176,20 @@ how the wrong rule ships unnoticed.
 
 ## 3. Money is stored as `DOUBLE PRECISION`
 
-**Severity: medium — a considered choice you should get a say on.**
+**Resolved — every money and size column is now `NUMERIC(28, 9)`.**
 
-Prices and sizes are `DOUBLE PRECISION`, not `NUMERIC`. The reasoning, from
-`migrations/001_initial.sql`: all arithmetic happens in TypeScript against IEEE doubles
-and is bounded by `roundPrice`, exactly as it did under Mongo, so `NUMERIC` would give
-exact *storage* of an inexact *computation* while adding a string conversion to every
-read.
+Arithmetic happens in TypeScript against `Decimal` in `@fleece/shared`, a private
+`decimal.js` constructor that reads and writes those columns as text so nothing is lost
+in either direction. Positions and transactions store **total cost** rather than a unit
+price, which removes division from every path but one and makes the conservation
+invariant exact; `roundPrice` and its magnitude-driven precision are gone.
 
-That holds while the arithmetic stays in TypeScript. It stops holding the moment
-anything sums in SQL — a reporting query totalling realised profit over a year would
-accumulate error `NUMERIC` would not.
+The reservation side of `@fleece/broker` has not been converted and still computes in
+doubles — see item 2b.
 
-**Recommendation: leave it, and revisit before writing the first aggregate query.** It is
-a migration plus a row-parser change, not a redesign, and doing it speculatively costs
-precision-free reads for no gain today.
-
-Dates are ISO `TEXT` rather than `DATE` for a different and firmer reason: they are
-market calendar dates, and a `DATE` column comes back through node-postgres as a JS
-`Date` at local midnight, which is the previous day for anyone west of UTC. That one I
-would not revisit.
+Dates remain ISO `TEXT` rather than `DATE`, for the unchanged reason: they are market
+calendar dates, and a `DATE` column comes back through node-postgres as a JS `Date` at
+local midnight, which is the previous day for anyone west of UTC.
 
 ---
 
@@ -241,9 +267,23 @@ and nothing runs them but you, by hand.
 
 **Recommendation: add a workflow** running `npm run build`, `npm run lint`,
 `npm run format:lint` and `npm test`, with a PostgreSQL service container and
-`FLEECE_TEST_DATABASE_URL` set so the 24 integration suites actually run — they are the
-ones covering the locking and idempotency, and they are exactly the tests that skip
-silently when nobody configures them.
+`FLEECE_TEST_DATABASE_URL` set so the integration suites actually run — they are the ones
+covering the locking and idempotency, and they are exactly the tests that skip silently
+when nobody configures them.
+
+**`npm test` can report a pass that is not one, and it is worth knowing exactly how.**
+ts-jest *does* type-check the sources a test imports — an error in an imported file fails
+the suite. What it does not do is invalidate its cache when a **dependency's types**
+change: the cache key is a file's own content, so editing `@fleece/shared` leaves every
+already-compiled importer cached, and suites go green against types that no longer exist.
+This is not hypothetical — `packages/alpaca/tests/order-converter.test.ts` reported 34
+passing tests against a converter that could not compile, and `--no-cache` immediately
+showed the failure.
+
+The consequence: **after a change to a shared package, `npm test` is not evidence.**
+`npm run build` is the authority on whether the code compiles, and CI should either run
+the build first or pass `--no-cache`. A workflow that runs only `npm test` will report a
+green suite for a repository that does not build.
 
 ---
 

@@ -1,4 +1,4 @@
-import { Account, HistoricalPosition, Position } from '@fleece/shared';
+import { Account, Decimal, HistoricalPosition, Position } from '@fleece/shared';
 import { Dividend, ListDividendsInput, ListDividendsOutput, ListStockSplitsInput, ListStockSplitsOutput, MarketDataClient } from '@fleece/marketdata';
 
 export class FakeAccountService {
@@ -31,8 +31,8 @@ export class FakeLedgerService {
 export interface RecordedDividend {
   readonly accountId: string;
   readonly symbol: string;
-  readonly size: number;
-  readonly amountPerShare: number;
+  readonly size: Decimal;
+  readonly amountPerShare: Decimal;
   readonly exDividendDate: string;
 }
 
@@ -73,12 +73,25 @@ export function account(accountId: string): Account {
 }
 
 export function position(accountId: string, symbol: string, size: number): Position {
-  return { accountId, symbol, size, avgPrice: 100, createdAt: 0, lastUpdatedAt: 0 };
+  const held = Decimal.of(size);
+  const unitCost = Decimal.of(100);
+  return {
+    accountId,
+    symbol,
+    assetClass: 'equity',
+    size: held,
+    totalCost: held.mul(unitCost),
+    multiplier: Decimal.ONE,
+    avgPrice: unitCost,
+    premium: unitCost,
+    createdAt: 0,
+    lastUpdatedAt: 0,
+  };
 }
 
 /** A position as of a given Eastern date, at 15:00 Eastern so the date is unambiguous. */
 export function historyEntry(accountId: string, symbol: string, date: string, size: number): HistoricalPosition {
-  return { accountId, symbol, size, updatedAt: Date.parse(`${date}T19:00:00Z`) };
+  return { accountId, symbol, assetClass: 'equity', size: Decimal.of(size), updatedAt: Date.parse(`${date}T19:00:00Z`) };
 }
 
 export function dividend(overrides: Partial<Dividend> & { exDividendDate: string }): Dividend {

@@ -1,4 +1,20 @@
-import { AccountStatus, AccountType, Broker, DividendStatus, Document, InternalServiceError, OrderGroupStatus } from '@fleece/shared';
+import {
+  AccountStatus,
+  AccountType,
+  AssetClass,
+  Broker,
+  BrokerOrderAttribution,
+  BrokerOrderClass,
+  BrokerOrderSide,
+  BrokerOrderTimeInForce,
+  BrokerOrderType,
+  BrokerPositionIntent,
+  Decimal,
+  DividendStatus,
+  InternalServiceError,
+  isAssetClass,
+  isBrokerOrderAttribution,
+} from '@fleece/shared';
 
 /**
  * Narrowing for values read back out of Postgres.
@@ -23,13 +39,6 @@ export function toAccountType(value: string, accountId: string): AccountType {
   throw new InternalServiceError(`Account ${accountId} has unrecognised type "${value}".`);
 }
 
-export function toOrderGroupStatus(value: string, groupId: string): OrderGroupStatus {
-  if (value === 'open' || value === 'closed') {
-    return value;
-  }
-  throw new InternalServiceError(`Order group ${groupId} has unrecognised status "${value}".`);
-}
-
 export function toBroker(value: string, brokerOrderId: string): Broker {
   if (value === 'alpaca' || value === 'traderq') {
     return value;
@@ -37,34 +46,77 @@ export function toBroker(value: string, brokerOrderId: string): Broker {
   throw new InternalServiceError(`Broker order ${brokerOrderId} has unrecognised broker "${value}".`);
 }
 
-/**
- * `documents` is a JSONB column, so node-postgres hands back whatever was stored. The
- * shape is written by this service and never by a caller, so it is checked only
- * enough to keep a malformed row from surfacing as `undefined` far away.
- */
-export function toDocuments(value: unknown, groupId: string): ReadonlyArray<Document> | undefined {
-  if (value === null || value === undefined) {
+export function toAssetClass(value: string, context: string): AssetClass {
+  if (isAssetClass(value)) {
+    return value;
+  }
+  throw new InternalServiceError(`${context} has unrecognised asset class "${value}".`);
+}
+
+export function toBrokerOrderAttribution(value: string, brokerOrderId: string): BrokerOrderAttribution {
+  if (isBrokerOrderAttribution(value)) {
+    return value;
+  }
+  throw new InternalServiceError(`Broker order ${brokerOrderId} has unrecognised attribution "${value}".`);
+}
+
+export function toBrokerOrderClass(value: string, brokerOrderId: string): BrokerOrderClass {
+  if (value === 'regular' || value === 'oco' || value === 'oto' || value === 'bracket' || value === 'mleg') {
+    return value;
+  }
+  throw new InternalServiceError(`Broker order ${brokerOrderId} has unrecognised order class "${value}".`);
+}
+
+export function toBrokerOrderType(value: string, brokerOrderId: string): BrokerOrderType {
+  if (value === 'market' || value === 'limit' || value === 'stop' || value === 'stop_limit') {
+    return value;
+  }
+  throw new InternalServiceError(`Broker order ${brokerOrderId} has unrecognised order type "${value}".`);
+}
+
+export function toBrokerOrderSide(value: string | null, brokerOrderId: string): BrokerOrderSide | undefined {
+  if (value === null) {
     return undefined;
   }
-  if (!Array.isArray(value)) {
-    throw new InternalServiceError(`Order group ${groupId} has a documents column that is not an array.`);
+  if (value === 'buy' || value === 'sell') {
+    return value;
   }
-  return value.map((entry, index) => {
-    if (typeof entry !== 'object' || entry === null) {
-      throw new InternalServiceError(`Order group ${groupId} document ${index} is not an object.`);
-    }
-    const record: Record<string, unknown> = { ...entry };
-    if (record.type !== 'execution-configs' || typeof record.documentId !== 'string' || typeof record.configId !== 'string' || typeof record.version !== 'number') {
-      throw new InternalServiceError(`Order group ${groupId} document ${index} is not a recognised document.`);
-    }
-    return {
-      type: 'execution-configs',
-      documentId: record.documentId,
-      configId: record.configId,
-      version: record.version,
-      obj: record.obj,
-    };
-  });
+  throw new InternalServiceError(`Broker order ${brokerOrderId} has unrecognised side "${value}".`);
+}
+
+export function toBrokerOrderTimeInForce(value: string, brokerOrderId: string): BrokerOrderTimeInForce {
+  if (value === 'day' || value === 'gtc' || value === 'opg' || value === 'cls' || value === 'ioc' || value === 'fok') {
+    return value;
+  }
+  throw new InternalServiceError(`Broker order ${brokerOrderId} has unrecognised time in force "${value}".`);
+}
+
+export function toBrokerPositionIntent(value: string | null, brokerOrderId: string): BrokerPositionIntent | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  if (value === 'buy_to_open' || value === 'buy_to_close' || value === 'sell_to_open' || value === 'sell_to_close') {
+    return value;
+  }
+  throw new InternalServiceError(`Broker order ${brokerOrderId} has unrecognised position intent "${value}".`);
+}
+
+/**
+ * A `NUMERIC` column.
+ *
+ * node-postgres hands `NUMERIC` back as a **string** rather than a number, precisely so
+ * that nothing is lost on the way — which is the whole reason these columns are
+ * `NUMERIC` and this function takes a string. Anything else means the column type and
+ * the parser have diverged, and reading it as a number would silently reintroduce the
+ * floating-point error the schema exists to avoid.
+ */
+export function toDecimal(value: string, context: string): Decimal {
+  return Decimal.parse(value, context);
+}
+
+/** A nullable `NUMERIC` column. */
+export function toOptionalDecimal(value: string | null, context: string): Decimal | undefined {
+  return value === null ? undefined : Decimal.parse(value, context);
 }
 
 /**
