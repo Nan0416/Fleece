@@ -22,7 +22,7 @@ import {
   ListPositionsOutput,
   OrderEventHandler,
 } from '@fleece/alpaca';
-import { OrderTrackingClient, TrackBrokerOrdersRequest } from '../src/order-tracking-client';
+import { OrderTrackingClient, TrackBrokerOrdersRequest } from '../src/l2/order-tracking-client';
 
 export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   return {
@@ -62,15 +62,70 @@ export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   };
 }
 
+/**
+ * A spread, in the shape Alpaca really returns one: a parent with **no symbol and no
+ * price of its own**, and the contracts nested inside it.
+ *
+ * The parent's `side` is `'buy'` and means nothing — a spread has no direction — which is
+ * exactly what makes seeding a tracker from it produce a position keyed on `''` with a
+ * size signed from a coin toss. Its `limit_price` is negative because this vertical is
+ * sold for a credit.
+ */
+export function multiLegOrder(parent: Partial<AlpacaOrder> = {}, shortLeg: Partial<AlpacaOrder> = {}, longLeg: Partial<AlpacaOrder> = {}): AlpacaOrder {
+  const leg = (overrides: Partial<AlpacaOrder>): AlpacaOrder =>
+    alpacaOrder({ asset_class: 'us_option', order_class: 'mleg', order_type: 'limit', type: 'limit', qty: '1', ratio_qty: '1', limit_price: null, ...overrides });
+
+  return alpacaOrder({
+    id: 'mleg-parent',
+    symbol: '',
+    asset_class: '',
+    order_class: 'mleg',
+    order_type: 'limit',
+    type: 'limit',
+    limit_price: '-0.85',
+    qty: '1',
+    legs: [
+      leg({ id: 'mleg-leg-short', symbol: SHORT_LEG_SYMBOL, side: 'sell', position_intent: 'sell_to_open', ...shortLeg }),
+      leg({ id: 'mleg-leg-long', symbol: LONG_LEG_SYMBOL, side: 'buy', position_intent: 'buy_to_open', ...longLeg }),
+    ],
+    ...parent,
+  });
+}
+
+export const SHORT_LEG_SYMBOL = 'AMZN261016C00280000';
+export const LONG_LEG_SYMBOL = 'AMZN261016C00285000';
+
+/** The same spread, filled: a net credit of 0.9 made of 3.85 sold and 2.95 paid. */
+export function filledMultiLegOrder(): AlpacaOrder {
+  return multiLegOrder(
+    { status: 'filled', filled_qty: '1', filled_avg_price: '-0.9' },
+    { status: 'filled', filled_qty: '1', filled_avg_price: '3.85' },
+    { status: 'filled', filled_qty: '1', filled_avg_price: '2.95' },
+  );
+}
+
 export class FakeAlpacaRestClient implements AlpacaRestClient {
   buyingPower = '100000';
   positions: ListPositionsOutput['positions'] = [];
   openOrders: ReadonlyArray<AlpacaOrder> = [];
-  readonly created: Array<CreateMarketOrderInput | CreateLimitOrderInput | CreateOtoOrderInput> = [];
+  readonly created: Array<CreateMarketOrderInput | CreateLimitOrderInput | CreateOtoOrderInput | CreateMultiLegOrderInput> = [];
   readonly cancelled: string[] = [];
+
+  /**
+   * The placements in a single instrument, narrowed.
+   *
+   * A spread's input has no `symbol` and no `side` — the contracts carry them — so the
+   * union has to be split before either can be read. A predicate rather than a cast:
+   * guideline 18, and the property tested is the one the narrowing claims.
+   */
+  get createdSingle(): ReadonlyArray<CreateMarketOrderInput | CreateLimitOrderInput | CreateOtoOrderInput> {
+    return this.created.filter(isSingleInstrumentInput);
+  }
   /** Set to make the next create throw, standing in for a rejected request. */
   failNextCreate?: Error;
   nextOrder: AlpacaOrder = alpacaOrder();
+  /** What a spread placement comes back as. Legs included, as Alpaca returns them. */
+  nextMultiLegOrder: AlpacaOrder = multiLegOrder();
 
   async getOrder(_input: GetOrderInput): Promise<GetOrderOutput> {
     return { order: null };
@@ -117,13 +172,14 @@ export class FakeAlpacaRestClient implements AlpacaRestClient {
     return this.create(input);
   }
 
-  /**
-   * `@fleece/broker` has no multi-leg request and cannot reserve for one, so nothing
-   * here reaches this. It exists to satisfy the interface, and throws rather than
-   * pretending to place a spread — see `md/OPEN-ITEMS.md` item 2b.
-   */
-  async createMultiLegOrder(_input: CreateMultiLegOrderInput): Promise<CreateOrderOutput> {
-    throw new Error('FakeAlpacaRestClient cannot place a multi-leg order: no broker path reaches it.');
+  async createMultiLegOrder(input: CreateMultiLegOrderInput): Promise<CreateOrderOutput> {
+    if (this.failNextCreate !== undefined) {
+      const err = this.failNextCreate;
+      this.failNextCreate = undefined;
+      throw err;
+    }
+    this.created.push(input);
+    return { order: { ...this.nextMultiLegOrder, client_order_id: input.clientOrderId ?? '' } };
   }
 
   async getOptionContract(input: GetOptionContractInput): Promise<GetOptionContractOutput> {
@@ -207,4 +263,10 @@ export class RecordingOrderTrackingClient implements OrderTrackingClient {
     }
     this.requests.push(request);
   }
+}
+
+function isSingleInstrumentInput(
+  input: CreateMarketOrderInput | CreateLimitOrderInput | CreateOtoOrderInput | CreateMultiLegOrderInput,
+): input is CreateMarketOrderInput | CreateLimitOrderInput | CreateOtoOrderInput {
+  return 'symbol' in input;
 }

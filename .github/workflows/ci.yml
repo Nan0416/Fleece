@@ -68,26 +68,3 @@ jobs:
         if: always()
         run: node scripts/assert-suites-ran.js jest-results.json
 
-  # `@fleece/broker` does not compile against the ledger redesign, and must not be
-  # ported by translating its arithmetic — its option reservations are wrong by a factor
-  # of 100, so converting them first would produce a package that looks correct while
-  # still being wrong. See `md/OPEN-ITEMS.md` items 0 and 2b.
-  #
-  # It is a job of its own, allowed to fail, so the gap stays visible on every run
-  # without a permanently red check that people learn to ignore. When it goes green,
-  # fold it back into `build`.
-  broker:
-    name: broker (not ported — allowed to fail)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - name: Type-check every package, broker included
-        run: npm run build:all
-      - name: Run broker's tests
-        run: npx jest --config jest.config.js --ci --no-cache --testPathIgnorePatterns '/node_modules/' packages/broker

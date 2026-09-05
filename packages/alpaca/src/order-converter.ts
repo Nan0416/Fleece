@@ -128,7 +128,7 @@ function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, cor
     // here and nowhere else: downstream a missing instrument is `undefined`, which the
     // compiler makes every reader account for.
     symbol: isMultiLegParent(order) ? undefined : order.symbol,
-    assetClass: toAssetClass(order),
+    assetClass: alpacaOrderAssetClass(order),
 
     timeInForce: order.time_in_force,
     // Alpaca sends an empty string for a plain order rather than omitting the field.
@@ -210,7 +210,15 @@ function toDirection(order: AlpacaOrder): OrderDirection {
   return { side: order.side, sell: order.side === 'sell' };
 }
 
-function toAssetClass(order: AlpacaOrder): AssetClass {
+/**
+ * Alpaca's asset class as Fleece's.
+ *
+ * Exported because `@fleece/broker` needs the same answer when it seeds its reservation
+ * tracker from open orders: what an order holds against the account depends on whether
+ * a unit is a share or a claim on a hundred of them, and a second copy of this mapping
+ * is a second place for that to be decided differently.
+ */
+export function alpacaOrderAssetClass(order: AlpacaOrder): AssetClass {
   switch (order.asset_class) {
     case 'us_equity':
       return 'equity';
@@ -222,7 +230,7 @@ function toAssetClass(order: AlpacaOrder): AssetClass {
       // Empty on a multi-leg parent, which trades nothing itself. It takes its first
       // leg's class so the field is never a lie — nothing books against the parent, so
       // the multiplier this feeds is only ever read off the legs.
-      return order.legs === null || order.legs[0] === undefined ? 'option' : toAssetClass(order.legs[0]);
+      return order.legs === null || order.legs[0] === undefined ? 'option' : alpacaOrderAssetClass(order.legs[0]);
     default:
       throw new InternalServiceError(`Alpaca order ${order.id} has unrecognised asset_class "${String(order.asset_class)}".`);
   }

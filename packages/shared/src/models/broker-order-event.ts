@@ -1,5 +1,5 @@
 import { Decimal } from '../utils/decimal';
-import { AssetClass } from './asset-class';
+import { AssetClass, defaultContractMultiplier } from './asset-class';
 import { BrokerOrderClass, BrokerOrderSide, BrokerOrderTimeInForce, BrokerOrderType, BrokerPositionIntent } from './order';
 
 /**
@@ -137,6 +137,19 @@ export interface StopLimitBrokerOrderEvent extends BaseBrokerOrderEvent {
 }
 
 export type BrokerOrderEvent = MarketBrokerOrderEvent | LimitBrokerOrderEvent | StopBrokerOrderEvent | StopLimitBrokerOrderEvent;
+
+/**
+ * Units of the underlying per contract for one event.
+ *
+ * The event carries a multiplier only when the broker told us; otherwise the asset class
+ * supplies the default, which is 100 for an option and 1 for everything else. Every
+ * reader that turns a fill into dollars needs the same figure — the ledger, so a
+ * contract filled at 3.85 books $385, and `@fleece/broker`, so the same fill draws $385
+ * of buying power — and two copies of that rule is two places for it to be wrong.
+ */
+export function eventContractMultiplier(event: BrokerOrderEvent): Decimal {
+  return event.multiplier ?? defaultContractMultiplier(event.assetClass);
+}
 
 export function eventToString(event: BrokerOrderEvent): string {
   // A composite parent trades no instrument, and printing nothing leaves a log line

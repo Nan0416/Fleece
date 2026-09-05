@@ -41,9 +41,10 @@ That is also how to run something one-off: write a script with the values in it 
 it with `node`. `packages/playground/` exists for exactly that and is kept out of the
 build so a half-finished experiment cannot break it.
 
-`npm run build` deliberately leaves out `broker`, which does not compile against the
-ledger redesign yet — see `md/OPEN-ITEMS.md` item 0. `npm run build:all` includes it, so
-the gap is visible rather than forgotten. `npm test` excludes it for the same reason.
+`npm run build` builds every package of the product, and is what CI runs.
+`npm run build:all` adds `playground` — which needs the gitignored
+`packages/playground/src/credentials.ts`, so it type-checks on your machine and not in
+CI.
 
 ## What CI checks
 

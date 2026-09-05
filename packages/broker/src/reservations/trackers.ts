@@ -1,4 +1,4 @@
-import { BrokerOrderEvent } from '@fleece/shared';
+import { AssetClass, BrokerOrderEvent, Decimal } from '@fleece/shared';
 
 /**
  * Reservations: the accounting that keeps concurrent strategies from oversubscribing
@@ -14,43 +14,66 @@ import { BrokerOrderEvent } from '@fleece/shared';
  * direction. Reducing a position reserves **shares** — you cannot sell the same 100
  * twice. Increasing one reserves **buying power** — you cannot spend the same $10,000
  * twice.
+ *
+ * **Everything here counts in ledger units and accounts in total cost**, the same way
+ * the ledger does: a size is contracts for an option, and the dollars behind it are the
+ * premium already multiplied out. That is what lets one account hold stock and options
+ * and still have one buying-power figure that means something.
  */
 
 /** An order already working at the broker when the tracker started up. */
 export interface PendingOrder {
   readonly brokerOrderId: string;
-  readonly unfilledSize: number;
-  readonly partialFilledSize: number;
-  readonly partialTotalCost: number;
-  readonly limitPrice?: number;
+  readonly unfilledSize: Decimal;
+  readonly partialFilledSize: Decimal;
+  /** Dollars, not a premium: already multiplied by `multiplier`. */
+  readonly partialTotalCost: Decimal;
+  /** Per share, as the broker quotes it — a premium for an option. */
+  readonly limitPrice?: Decimal;
+  /** Units of the underlying per contract; 1 for an equity. */
+  readonly multiplier: Decimal;
 }
 
 /** A holding as the broker reports it, used to seed a tracker at startup. */
 export interface BrokerPosition {
   readonly symbol: string;
-  readonly positionSize: number;
-  readonly unitCost: number;
+  readonly positionSize: Decimal;
+  /** Dollars behind the position, signed the same way as `positionSize`. */
+  readonly totalCost: Decimal;
   readonly pendingOrders: ReadonlyArray<PendingOrder>;
 }
 
 export interface RealisedProfit {
-  readonly profit: number;
-  readonly shares: number;
+  readonly profit: Decimal;
+  /** Contracts for an option, shares for an equity. Signed as the fill was. */
+  readonly size: Decimal;
   readonly timestamp: number;
 }
 
 export interface ReservationRequest {
   readonly symbol: string;
   /** Positive buys, negative sells. */
-  readonly size: number;
-  /** Needed to reserve buying power on a buy; a buy without one reserves nothing. */
-  readonly unitPrice?: number;
+  readonly size: Decimal;
+  /**
+   * What the instrument is. Required rather than inferred from the symbol, because the
+   * hold depends on it: an option's requirement is its premium times the contract
+   * multiplier, and a short option's is margin this tracker cannot compute at all.
+   */
+  readonly assetClass: AssetClass;
+  /**
+   * Per share, as the broker quotes it — a **premium** for an option, not what the
+   * contract costs. Needed to reserve buying power on a buy; a buy without one reserves
+   * nothing.
+   */
+  readonly unitPrice?: Decimal;
+  /** Overrides the asset class default, for an adjusted contract. */
+  readonly multiplier?: Decimal;
 }
 
 /** What the position would become. `undefined` from `test` means "not possible". */
 export interface TestResult {
-  readonly originalSize: number;
-  readonly newSize: number;
+  readonly originalSize: Decimal;
+  readonly newSize: Decimal;
 }
 
 /**
@@ -69,21 +92,25 @@ export interface TestResult {
  */
 export interface PositionTracker {
   readonly symbol: string;
-  /** Cost basis per share; 0 when flat. */
-  readonly unitCost: number;
-  /** Everything held, including shares committed to unfilled orders. */
-  readonly positionSize: number;
+  /** Dollars behind the position, signed the same way as `positionSize`; 0 when flat. */
+  readonly totalCost: Decimal;
+  /** Cost basis per unit, derived for display. 0 when flat. */
+  readonly unitCost: Decimal;
+  /** Everything held, including units committed to unfilled orders. */
+  readonly positionSize: Decimal;
   /**
    * What is free to trade. Always the same sign as `positionSize` and never larger in
    * magnitude: shares promised to an unfilled sell are not free to sell again.
    */
-  readonly freeSize: number;
+  readonly freeSize: Decimal;
   readonly profits: ReadonlyArray<RealisedProfit>;
 
   /** Would this order be possible? `undefined` if not. Takes no hold. */
   test(request: ReservationRequest): TestResult | undefined;
   /** Takes the hold and returns its id. Throws `NotReservableError` if it cannot. */
   reserve(request: ReservationRequest): string;
+  /** Notes an order placed without a hold, so its fills are still applied. */
+  expectOrder(brokerOrderId: string): void;
   /** Releases a hold whose order never reached the broker. */
   cancel(reservationId: string): void;
   /** Applies a broker event, consuming the reservation it belongs to. */
@@ -98,13 +125,15 @@ export interface PositionTracker {
  * every other.
  */
 export interface BrokerTracker {
-  readonly availableBuyingPower: number;
+  readonly availableBuyingPower: Decimal;
 
   /** Seeds from the broker's own view of the account. Once only. */
-  setup(buyingPower: number, positions: ReadonlyArray<BrokerPosition>): void;
+  setup(buyingPower: Decimal, positions: ReadonlyArray<BrokerPosition>): void;
 
   test(request: ReservationRequest): TestResult | undefined;
   reserve(request: ReservationRequest): string;
+  /** Notes an order placed without a hold — a spread — so its fills are still applied. */
+  expectOrder(symbol: string, brokerOrderId: string): void;
   cancel(reservationId: string): void;
   track(event: BrokerOrderEvent): void;
 }

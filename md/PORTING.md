@@ -63,7 +63,7 @@ positions, but not the order groups and broker orders pointing at it — though 
 doc comment said it removed "order records" too. Foreign keys now cascade, which is
 that comment enforced.
 
-**An open limit buy reserved nothing across a restart.** `AlpacaBroker.init` parsed and
+**An open limit buy reserved nothing across a restart.** `L3BrokerOrderClient.init` parsed and
 validated each open order's `limit_price`, then hard-coded `limitPrice: 0` into the
 pending order handed to the tracker. Buying power reserved for an order already working
 at the broker was therefore always zero, and the account could be oversubscribed by
@@ -187,8 +187,18 @@ the writes, and `AlpacaActiveSynchronization` takes a narrowed `AlpacaOrderReade
 reconciliation job cannot trade.
 
 **`AlpacaActiveSynchronization.register` came back.** It was removed as dead code — its
-only caller was the order-placement path, which was out of scope. `AlpacaBroker` is that
+only caller was the order-placement path, which was out of scope. `L3BrokerOrderClient` is that
 caller, so it returned, this time with tests.
+
+**`@fleece/broker` is layered, where the legacy `AlpacaBroker` was one class.** The legacy
+did the reservation, the correlation, the send, the poller registration, the tracking
+request and the event dispatch in one method per order type. Those are now three layers
+over `@fleece/alpaca` — `L1BrokerOrderClient`, `L2BrokerOrderClient`,
+`L3BrokerOrderClient`, one folder each — plus reservations beside them. See
+[packages/broker/README.md](../packages/broker/README.md).
+The gain is not tidiness: it is that the two pieces nobody can finish today, the
+announcement transport and a margin model for options, are each a component you install
+rather than a branch inside a method everything else goes through.
 
 ## Known gaps
 
@@ -209,10 +219,11 @@ the API that pre-creates the `broker_order` row at `pending_new` (which would al
 the association survive an injector restart, as the current in-memory map does not), or
 adopting a pub/sub hub. Deferred until the execution service lands and can pick.
 
-The *sending* half now exists: `@fleece/broker` calls `OrderTrackingClient` after every
-placement. `NoopOrderTrackingClient` is wired in, and warns on every call rather than
-staying quiet — a fill attributed to the wrong account is invisible where it happens and
-only shows up later as a strategy's P&L being wrong.
+The *sending* half now exists as a layer of its own: `L2BrokerOrderClient` wraps the
+placer that encodes the correlation and claims every id a placement produced.
+`NoopOrderTrackingClient` is what it is given by default, and warns on every call rather
+than staying quiet — a fill attributed to the wrong account is invisible where it happens
+and only shows up later as a strategy's P&L being wrong.
 
 **The order router is not ported.** `broker-clients/order-router-impl.ts` and its
 selectors choose which broker account an order goes to. Only relevant with more than one

@@ -3,7 +3,7 @@ import { LoggerFactory } from '@fleece/shared';
 const logger = LoggerFactory.getLogger('OrderTrackingClient');
 
 /**
- * Tells the ledger which virtual account and order group some broker orders belong to.
+ * Tells the ledger which virtual account some broker orders belong to.
  *
  * This is the *only* way a leg order gets attributed. A bracket or OTO order's legs are
  * created by the broker itself with client order ids of its own, so the correlation
@@ -13,7 +13,6 @@ const logger = LoggerFactory.getLogger('OrderTrackingClient');
 export interface TrackBrokerOrdersRequest {
   readonly brokerOrderIds: ReadonlyArray<string>;
   readonly accountId: string;
-  readonly groupId?: string;
 }
 
 export interface OrderTrackingClient {
@@ -35,7 +34,7 @@ export interface OrderTrackingClient {
 export class NoopOrderTrackingClient implements OrderTrackingClient {
   async trackBrokerOrders(request: TrackBrokerOrdersRequest): Promise<void> {
     logger.warn(
-      `Not sending a tracking request for broker order(s) ${request.brokerOrderIds.join(', ')} (account ${request.accountId}, group ${request.groupId ?? 'none'}): no transport is configured. Leg orders will be booked to the default account.`,
+      `Not sending a tracking request for broker order(s) ${request.brokerOrderIds.join(', ')} (account ${request.accountId}): no transport is configured. Leg orders will be booked to the default account.`,
     );
   }
 }

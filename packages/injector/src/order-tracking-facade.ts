@@ -1,4 +1,4 @@
-import { AsyncQueue, Broker, BrokerOrder, BrokerOrderEvent, BrokerOrderRecord, Decimal, defaultContractMultiplier, isTerminalStatus, LoggerFactory } from '@fleece/shared';
+import { AsyncQueue, Broker, BrokerOrder, BrokerOrderEvent, BrokerOrderRecord, Decimal, eventContractMultiplier, isTerminalStatus, LoggerFactory } from '@fleece/shared';
 import { BrokerOrderService, LedgerService, RecordBrokerOrderRequest } from '@fleece/core';
 
 const logger = LoggerFactory.getLogger('OrderTrackingFacade');
@@ -207,7 +207,7 @@ export class OrderTrackingFacade {
       // converter has already turned Alpaca's empty string into `undefined`.
       symbol: event.symbol,
       assetClass: event.assetClass,
-      multiplier: multiplierFor(event),
+      multiplier: eventContractMultiplier(event),
       status: event.status,
       orderClass: event.orderClass,
       orderType: event.orderType,
@@ -258,7 +258,7 @@ export class OrderTrackingFacade {
     // The multiplier is recorded alongside rather than assumed downstream, so an
     // adjusted contract booked at the default 100 is findable rather than silently
     // wrong by the ratio of its real multiplier to 100. See `md/OPEN-ITEMS.md` item 2b.
-    const multiplier = multiplierFor(event);
+    const multiplier = eventContractMultiplier(event);
     const cumulativeFilledTotalCost = event.filledQty.mul(event.filledAvgPrice).mul(multiplier);
 
     if (!multiplier.eq(Decimal.ONE)) {
@@ -385,16 +385,4 @@ export class OrderTrackingFacade {
       this.queue.enqueue({ type: 'event', job: { ...job, defaultAccountId } });
     }
   }
-}
-
-/**
- * Units of the underlying per contract.
- *
- * The event carries one only if the broker told us; otherwise the asset class supplies
- * the default, which is 100 for an option and 1 for everything else. Whichever it is,
- * it is written onto every row the fill touches — that is what makes an adjusted
- * contract a query rather than a silent error.
- */
-function multiplierFor(event: BrokerOrderEvent): Decimal {
-  return event.multiplier ?? defaultContractMultiplier(event.assetClass);
 }

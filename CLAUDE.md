@@ -15,7 +15,7 @@ An npm-workspaces monorepo, nine packages under `packages/`:
 | `service` | The HTTP API over the ledger |
 | `client` | Typed client for that API |
 | `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
-| `broker` | Places orders, reserving buying power and shares before they go out. Equities only |
+| `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price |
 | `marketdata` | Polygon client for splits and dividends |
 | `injector` | Turns broker order events into ledger entries |
 | `corporate-actions` | Records the dividends each account is owed |
@@ -29,7 +29,10 @@ from the environment and starts; nothing parses arguments.
 
 `broker` has no consumer inside Fleece yet. It is groundwork for porting the execution
 service, and the reason it exists now is that its reservation accounting is the piece
-the legacy got most carefully right.
+the legacy got most carefully right. It is built in layers over `@fleece/alpaca`, a folder
+each: `l1/` encodes the virtual account, `l2/` claims the order for it, `l3/` hands back
+the handles, and `reservations/` sits beside them because L3 runs with or without it.
+[packages/broker/README.md](./packages/broker/README.md) has the table and the reasoning.
 
 Inside `core`: `services` answer requests and hold the rules → `data` talks to
 Postgres. Inside `service`: `routes` parse and delegate to a `core` service.
@@ -58,8 +61,9 @@ directly, so `node packages/service/src/main.ts` skips the build — which is th
 way to try a change, and how to run an experiment with values hardcoded in a script.
 
 Everything is configured from the environment; see `dev.md`. There are no command-line
-flags to learn, and `npm run build:all` type-checks every package including `broker`,
-which the default build leaves out because it does not compile yet.
+flags to learn. `npm run build:all` additionally type-checks `packages/playground`, which
+the default build and CI both leave out — its scripts import a gitignored `credentials.ts`
+holding real broker keys, so it compiles on a laptop and nowhere else.
 
 ## Tests
 

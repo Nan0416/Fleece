@@ -1,3 +1,5 @@
+import { Decimal } from '@fleece/shared';
+
 /**
  * The account-wide buying power that per-symbol trackers draw on.
  *
@@ -6,8 +8,8 @@
  * reservation is finished with it.
  */
 export interface BuyingPowerLedger {
-  readonly availableBuyingPower: number;
+  readonly availableBuyingPower: Decimal;
   /** Negative consumes, positive releases. */
-  onAvailableBuyingPowerChange(delta: number): void;
+  onAvailableBuyingPowerChange(delta: Decimal): void;
   onReservationComplete(reservationId: string): void;
 }
