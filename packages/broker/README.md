@@ -43,12 +43,15 @@ account is one the injector books to the catch-all account, so L1 refuses one.
 `reservationId` is an *input* here: this layer takes no hold and knows nothing about what
 one would cost.
 
-**L2 — a second answer to the same question.** For orders placed through this package it
-adds little today: the converter gives every nested leg its parent's correlation, and at
-Alpaca every leg arrives nested. It earns its place as the contract for callers that hold
-their own broker client, as insurance if a correlation ever fails to round-trip, and as
-the path a leg arriving unnested would need. Failure is logged, never thrown — the shares
-are moving whether or not anything has been told whose they are.
+**L2 — a second answer to the same question.** It sends `PUT /track` to
+`@fleece/tracking-service`, through `@fleece/client`'s `TrackingClient`. For orders placed
+through this package it adds little today: the converter gives every nested leg its
+parent's correlation, and at Alpaca every leg arrives nested. It earns its place as the
+contract for callers that hold their own broker client, as insurance if a correlation ever
+fails to round-trip, and as the path a leg arriving unnested would need. Failure is
+logged, never thrown — the shares are moving whether or not anything has been told whose
+they are. Give it `NoopOrderTrackingClient`, or leave the layer out, and orders are still
+placed and still attributed.
 
 **L3 — Fleece's vocabulary, and a handle.** Signed `Decimal` sizes, one request for a
 spread rather than four, and an object that keeps receiving events until the order is

@@ -10,10 +10,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @fleece/shared && npm run build -w @fleece/client -w @fleece/alpaca -w @fleece/marketdata && npm run build -w @fleece/core -w @fleece/broker && npm run build -w @fleece/service -w @fleece/injector -w @fleece/corporate-actions",
+    "build": "npm run build -w @fleece/shared && npm run build -w @fleece/client -w @fleece/alpaca -w @fleece/marketdata && npm run build -w @fleece/core -w @fleece/broker && npm run build -w @fleece/service -w @fleece/tracking-service -w @fleece/corporate-actions",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
     "start": "npm run build && node packages/service/dist/main.js",
-    "start:injector": "npm run build && node packages/injector/dist/main.js",
+    "start:tracking-service": "npm run build && node packages/tracking-service/dist/main.js",
     "test": "jest --config jest.config.js",
     "format:fix": "prettier --write \"packages/*/{src,tests}/**/*.ts\"",
     "format:lint": "prettier --check \"packages/*/{src,tests}/**/*.ts\"",

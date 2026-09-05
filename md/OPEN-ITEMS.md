@@ -43,10 +43,10 @@ and it belongs in that package.
 
 ---
 
-## 1. Leg orders are attributed from the parent, not from a tracking request
+## 1. Leg orders are attributed from the parent, not from a claim
 
-**Severity: medium — was high; the common path is now covered, and what remains is a
-judgement rather than a gap.**
+**Severity: low — was high, then medium. The common path is covered by the correlation,
+the transport for everything else now exists, and what remains is a judgement.**
 
 **This item changed when multi-leg support landed.** The converter now *flattens* a
 composite order: one Alpaca payload becomes one event per order it describes, each leg
@@ -73,37 +73,36 @@ bracket or an OTO it is an assumption, and a correct one for every order
 same account. It would be wrong only if something upstream placed a composite order whose
 legs belong to different virtual accounts, which nothing does.
 
-**What is still open.** `OrderTrackingFacade.track` remains implemented and uncallable —
-its transport was a message stream (`TrackingProcessor` bound to `PUT /track` on a
-`lite-server` on the `OrderTracking.{STAGE}` topic) that belongs to the platform this
-port leaves behind. It still matters for an order Fleece never placed and that Alpaca
-reports standalone, which lands in the holding pen for
-`FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` and is then booked to the catch-all account.
+**The transport now exists.** `PUT /track` on the tracking service is what the legacy
+message stream was: `TrackingProcessor` bound to `PUT /track` on a `lite-server` on the
+`OrderTracking.{STAGE}` topic, minus the platform. A claim names some broker order ids
+and an account; the endpoint parses it and enqueues it onto the same queue the broker's
+events use, so an order's events and a claim about that order can never be decided
+concurrently. It answers `202`, because at that point the claim is ordered rather than
+applied.
 
-The sending half exists and is now a layer of its own: `L2BrokerOrderClient` wraps the
-correlating placer and claims every id a placement produced, parent and legs. Run without
-it and orders are still placed and still attributed — the announcement is a second answer
-to a question the correlation already answers for anything Fleece places. What it buys is
-a transport for callers holding their own broker client, which is exactly the case this
-item is about.
+Both halves are wired: `L2BrokerOrderClient` calls `OrderTrackingClient` after every
+placement, `HttpOrderTrackingClient` sends it through `@fleece/client`'s `TrackingClient`,
+and `NoopOrderTrackingClient` is what a process gets when no tracking service is
+configured — which is a supported configuration, since anything placed through
+`@fleece/broker` carries its account in the correlation anyway.
+
+Of the three options below, this is the first. The second remains the better answer to
+item 5 and is now a smaller change than it was: the endpoint exists, and what would
+change is what `processTrackingRequest` does with a claim for an order it has not seen —
+write a `broker_order` row at `pending_new` instead of remembering it in a map.
 
 | Option | Trade-off |
 | --- | --- |
-| HTTP listener on the injector process | Closest to the legacy shape. Injector grows a server and a port |
-| `PUT /track` on the API, pre-creating the `broker_order` row at `pending_new` | No new process surface, and see below |
-| Adopt a pub/sub hub | Truest to the original; you chose standalone for now |
+| **HTTP listener on the tracking service** | **Chosen.** Closest to the legacy shape. The process grows a port |
+| `PUT /track` on the API, pre-creating the `broker_order` row at `pending_new` | Durable across a restart — see item 5 — at the cost of a row for an order the broker might reject |
+| Adopt a pub/sub hub | Truest to the original; you chose standalone |
 
-**Recommendation: the second.** An association is "broker order X belongs to account A",
-which is *identical* to a `broker_order` row minus a status. Pre-creating that row means
-the injector's existing `existing?.accountId` lookup resolves it with no new code path,
-the in-memory `associations` map disappears, and item 5 below goes away too. The cost is
-a row for an order the broker might reject, sitting visibly at `pending_new`.
-
-Note what the pre-created row must *not* become: a way to move an order between
-accounts later. An order's account is written once, because everything it produces is
-keyed by it — see the note on `broker_order` in `001_initial.sql`. The value of
-pre-creating the row is that the order is attributed *before* any fill is booked, which
-is the only moment attribution is free.
+Note what a durable claim must *not* become: a way to move an order between accounts
+later. An order's account is written once, because everything it produces is keyed by it
+— see the note on `broker_order` in `001_initial.sql`. The value of writing it early is
+that the order is attributed *before* any fill is booked, which is the only moment
+attribution is free.
 
 ---
 
@@ -231,17 +230,18 @@ a price in hand at that point, so the constraint costs nothing there.
 
 ---
 
-## 5. The injector forgets its pending attributions on restart
+## 5. The tracking service forgets its pending claims on restart
 
-**Severity: medium.**
+**Severity: medium, and now reachable — the endpoint that accepts a claim exists, so
+this is no longer hypothetical.**
 
-`OrderTrackingFacade` holds two `Map`s in memory: `associations` (tracking requests for
-orders not yet seen) and `held` (events waiting for an account). A restart loses both. A
-tracking request that arrived just before a restart is gone, and its order will be booked
-to the catch-all.
+`OrderTrackingFacade` holds two `Map`s in memory: `associations` (claims for orders not
+yet seen) and `held` (events waiting for an account). A restart loses both. A claim that
+arrived just before a restart is gone, and its order will be booked to the catch-all.
 
-The legacy had the same property. Fixing item 1 with the second option fixes this too,
-which is the main argument for that option.
+The legacy had the same property. The fix is to write the claim rather than remember it —
+option two under item 1 — which is now a change to one method rather than a new endpoint
+and a new transport.
 
 ---
 

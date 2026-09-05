@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@fleece/alpaca": "1.0.0",
+    "@fleece/client": "1.0.0",
     "@fleece/shared": "1.0.0",
     "nanoid": "^3.3.11"
   },

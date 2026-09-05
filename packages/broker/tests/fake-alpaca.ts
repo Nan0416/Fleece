@@ -22,7 +22,8 @@ import {
   ListPositionsOutput,
   OrderEventHandler,
 } from '@fleece/alpaca';
-import { OrderTrackingClient, TrackBrokerOrdersRequest } from '../src/l2/order-tracking-client';
+import { TrackBrokerOrdersRequest } from '@fleece/shared';
+import { OrderTrackingClient } from '../src/l2/order-tracking-client';
 
 export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   return {

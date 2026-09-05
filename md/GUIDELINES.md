@@ -10,18 +10,23 @@ and most of what follows exists because of that.
 
 1. **One monorepo, nine packages.** `shared` (models, contracts, utilities), `core`
    (the ledger), `service` (the HTTP API), `client` (typed client), `alpaca` (broker),
-   `broker` (order placement), `marketdata` (Polygon), `injector` (broker events in),
-   `corporate-actions` (the dividend job). A package exists when something needs to be
-   installed separately — `core` is separate from `service` because the injector and
-   the dividend job need the ledger without pulling in Express.
+   `broker` (order placement), `marketdata` (Polygon), `tracking-service` (broker events
+   in, and claims about whose an order is), `corporate-actions` (the dividend job). A
+   package exists when something needs to be installed separately — `core` is separate
+   from `service` because the tracking service and the dividend job need the ledger
+   without pulling in the API's routes.
 1a. **A runnable package has a `src/main.ts` and no arguments.** Configuration comes
    from the environment, so there is one place a setting can come from rather than two
-   with a precedence rule between them. There is no CLI: Node runs TypeScript directly,
-   so an ad-hoc run is a script with the values in it.
-2. **Dependencies point one way**: `service`/`injector`/`corporate-actions` → `core` →
-   `shared`; `injector` → `alpaca`; `broker` → `alpaca`; `corporate-actions` →
-   `marketdata`; `client` → `shared`. Nothing imports upward, and `shared` imports
-   nothing of ours.
+   with a precedence rule between them. There is no CLI: an ad-hoc run is a script in
+   `playground/` with the values in it, built and run like everything else. Node 22
+   strips types but resolves relative imports as ESM, so a `src/main.ts` cannot be run
+   directly — `npm start` and friends build first for that reason.
+2. **Dependencies point one way**: `service`/`tracking-service`/`corporate-actions` →
+   `core` → `shared`; `tracking-service` → `alpaca`; `broker` → `alpaca` and `client`;
+   `corporate-actions` → `marketdata`; `client` → `shared`. Nothing imports upward, and
+   `shared` imports nothing of ours. `broker` depends on `client` because a claim is an
+   HTTP call to the tracking service, and the typed client for that call belongs with
+   every other typed client rather than hand-rolled where it is used.
 3. **Every package declares its dev tooling, at the same range as the root.**
    `typescript` is `^5.7.3` everywhere, so npm resolves one copy and the whole repo
    compiles with one compiler. `npm i -D typescript` in one workspace takes `latest`,
@@ -140,7 +145,7 @@ and most of what follows exists because of that.
 ## Configuration
 
 13. **One file per package reads `process.env`.** `stage-config.ts` in `service`,
-    `injector-config.ts` in `injector`, `corporate-actions-config.ts` in the job.
+    `tracking-config.ts` in `tracking-service`, `corporate-actions-config.ts` in the job.
     Everything else receives configuration through its constructor, which is what makes
     components testable without setting environment variables.
 14. **Every setting has a default, except a credential.** Importing a package must
@@ -216,8 +221,8 @@ and most of what follows exists because of that.
 32. **Log at decision points**, not just failures: which account a fill was attributed
     to and why, state transitions, before and after anything crossing the network.
 33. **Loggers are named after their class**, which is what makes output greppable when
-    the API, injector and job all write at once.
-34. **Periodic work logs at `debug`.** The injector's poll runs every second.
+    the API, tracking service and job all write at once.
+34. **Periodic work logs at `debug`.** The tracking service's poll runs every second.
 35. **Never log a credential or a URL that carries one.** The Polygon key travels in the
     query string, so its failures log the path, not the URL.
 

@@ -1,40 +1,53 @@
-import { LoggerFactory } from '@fleece/shared';
+import { TrackingClient } from '@fleece/client';
+import { LoggerFactory, TrackBrokerOrdersRequest } from '@fleece/shared';
 
 const logger = LoggerFactory.getLogger('OrderTrackingClient');
 
 /**
- * Tells the ledger which virtual account some broker orders belong to.
+ * L2's port: something that can tell the tracking service whose an order is.
  *
- * This is the *only* way a leg order gets attributed. A bracket or OTO order's legs are
- * created by the broker itself with client order ids of its own, so the correlation
- * encoded into the parent's id cannot reach them — nothing but the service that asked
- * for the composite order knows whose they are.
+ * An interface rather than the client itself, so that the layer can be tested without a
+ * server and run without one — `NoopOrderTrackingClient` is what a process gets when no
+ * tracking service is configured, and it is a supported configuration rather than a
+ * broken one. What it costs is described there.
  */
-export interface TrackBrokerOrdersRequest {
-  readonly brokerOrderIds: ReadonlyArray<string>;
-  readonly accountId: string;
-}
-
 export interface OrderTrackingClient {
   trackBrokerOrders(request: TrackBrokerOrdersRequest): Promise<void>;
 }
 
 /**
+ * Sends the claim over HTTP.
+ *
+ * A thin adapter rather than L2 holding `TrackingClient` directly: the client returns a
+ * response object and this port returns nothing, and keeping the port narrow is what
+ * lets `NoopOrderTrackingClient` and a recording fake stand in for it.
+ */
+export class HttpOrderTrackingClient implements OrderTrackingClient {
+  constructor(private readonly client: TrackingClient) {}
+
+  async trackBrokerOrders(request: TrackBrokerOrdersRequest): Promise<void> {
+    await this.client.trackBrokerOrders(request);
+  }
+}
+
+/**
  * Sends nothing, and says so.
  *
- * The legacy transport was a message stream: the injector ran a `lite-server` listening
- * on the `OrderTracking.{STAGE}` topic, and that layer is not ported. Until it is
- * replaced, a leg order will fall through the injector's holding pen and be booked to
- * the default virtual account once `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` expires.
+ * This is what a process gets when no tracking service is configured. It is not broken:
+ * an order placed through this package carries its virtual account in the broker's
+ * `client_order_id`, and a composite order's legs inherit their parent's, so everything
+ * placed here is attributed without a claim ever being sent.
  *
- * It warns rather than staying silent because the consequence — a fill attributed to
- * the wrong account — is invisible at the point it happens and only shows up later as a
- * strategy's P&L being wrong. See `md/PORTING.md`.
+ * What is lost is the orders this package did not place. One arriving from the broker
+ * with no correlation falls through the tracking service's holding pen and is booked to
+ * the default account once `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` expires. It warns rather
+ * than staying silent because that outcome — a fill in the wrong account — is invisible
+ * at the point it happens and only shows up later as a strategy's P&L being wrong.
  */
 export class NoopOrderTrackingClient implements OrderTrackingClient {
   async trackBrokerOrders(request: TrackBrokerOrdersRequest): Promise<void> {
     logger.warn(
-      `Not sending a tracking request for broker order(s) ${request.brokerOrderIds.join(', ')} (account ${request.accountId}): no transport is configured. Leg orders will be booked to the default account.`,
+      `Not claiming broker order(s) ${request.brokerOrderIds.join(', ')} for account ${request.accountId}: no tracking service is configured. An order this process did not place would be booked to the default account.`,
     );
   }
 }

@@ -11,7 +11,7 @@
     { "path": "./packages/broker" },
     { "path": "./packages/core" },
     { "path": "./packages/service" },
-    { "path": "./packages/injector" },
+    { "path": "./packages/tracking-service" },
     { "path": "./packages/corporate-actions" },
     // Experiment scripts: referenced so editors resolve them, but left out of
     // `npm run build` so a half-finished experiment cannot break the product build.
