@@ -1,13 +1,13 @@
 import { AlpacaOrder } from '@fleece/alpaca';
+import { TrackingClient } from '@fleece/client';
 import { LoggerFactory } from '@fleece/shared';
 import { BrokerOrderClient, CreateLimitOrderInput, CreateMarketOrderInput, CreateMultiLegOrderInput, CreateOtoOrderInput, CreatedOrder } from '../l1/broker-order-client';
-import { OrderTrackingClient } from './order-tracking-client';
 
 const logger = LoggerFactory.getLogger('L2BrokerOrderClient');
 
 export interface L2BrokerOrderClientProps {
   readonly placer: BrokerOrderClient;
-  readonly trackingClient: OrderTrackingClient;
+  readonly trackingClient: TrackingClient;
 }
 
 /**
@@ -15,8 +15,9 @@ export interface L2BrokerOrderClientProps {
  * after placing it.
  *
  * It implements the same interface as the layer it wraps, so this is a layer you install
- * rather than a step inside one: run without it and orders are still placed, still
- * correlated, still attributed — see below for what is actually lost.
+ * rather than a step inside one: leave it out and orders are still placed, still
+ * correlated, still attributed — see below for what is actually lost. There is no
+ * do-nothing tracking client, because not wrapping is how you do nothing.
  *
  * **What this is worth, honestly.** For orders placed through here, not much *today*.
  * An order carries its account in `client_order_id`, and the converter passes a parent's

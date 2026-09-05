@@ -81,10 +81,10 @@ events use, so an order's events and a claim about that order can never be decid
 concurrently. It answers `202`, because at that point the claim is ordered rather than
 applied.
 
-Both halves are wired: `L2BrokerOrderClient` claims every id a placement produced, through
-`@fleece/client`'s `TrackingClient` passed straight in. `NoopOrderTrackingClient` is what
-a process gets when no tracking service is configured — a supported configuration, since
-anything placed through `@fleece/broker` carries its account in the correlation anyway.
+Both halves are wired: `L2BrokerOrderClient` claims every id a placement produced, holding
+`@fleece/client`'s `TrackingClient` directly. A process with no tracking service leaves
+that layer out and says so at startup — a supported configuration, since anything placed
+through `@fleece/broker` carries its account in the correlation anyway.
 
 Of the three options below, this is the first. The second remains the better answer to
 item 5 and is now a smaller change than it was: the endpoint exists, and what would

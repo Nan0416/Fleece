@@ -44,17 +44,15 @@ account is one the injector books to the catch-all account, so L1 refuses one.
 one would cost.
 
 **L2 — a second answer to the same question.** It sends `PUT /track` to
-`@fleece/tracking-service`, holding `@fleece/client`'s `TrackingClient` directly —
-`OrderTrackingClient` is `Pick<TrackingClient, 'trackBrokerOrders'>`, a narrowed view of
-the real thing rather than an interface of our own, so nothing adapts between them and
-the compiler notices if they drift apart. For orders placed
+`@fleece/tracking-service`, holding `@fleece/client`'s `TrackingClient` directly — no
+port, no adapter, no do-nothing implementation. A process with no tracking service leaves
+the layer out, which is what having layers is for. For orders placed
 through this package it adds little today: the converter gives every nested leg its
 parent's correlation, and at Alpaca every leg arrives nested. It earns its place as the
 contract for callers that hold their own broker client, as insurance if a correlation ever
 fails to round-trip, and as the path a leg arriving unnested would need. Failure is
 logged, never thrown — the shares are moving whether or not anything has been told whose
-they are. Give it `NoopOrderTrackingClient`, or leave the layer out, and orders are still
-placed and still attributed.
+they are. Leave the layer out and orders are still placed and still attributed.
 
 **L3 — Fleece's vocabulary, and a handle.** Signed `Decimal` sizes, one request for a
 spread rather than four, and an object that keeps receiving events until the order is

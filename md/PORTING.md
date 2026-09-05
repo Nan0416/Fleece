@@ -221,10 +221,10 @@ and sending it twice is the same as sending it once. `202`, because the claim is
 rather than applied — an order whose events have not arrived is not booked anywhere yet.
 
 The sending half is a layer of its own: `L2BrokerOrderClient` wraps the placer that
-encodes the correlation and claims every id a placement produced.
-`NoopOrderTrackingClient` is what a process gets with no tracking service configured, and
-warns on every call rather than staying quiet — a fill attributed to the wrong account is
-invisible where it happens and only shows up later as a strategy's P&L being wrong.
+encodes the correlation and claims every id a placement produced. A process with no
+tracking service leaves that layer out and warns once at startup — a fill attributed to
+the wrong account is invisible where it happens and only shows up later as a strategy's
+P&L being wrong, so the absence is said out loud rather than only written down.
 
 **The order router is not ported.** `broker-clients/order-router-impl.ts` and its
 selectors choose which broker account an order goes to. Only relevant with more than one
