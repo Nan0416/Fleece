@@ -22,10 +22,10 @@ import { AlpacaOrder, AlpacaPositionIntent, CreateMultiLegOrderLeg } from '@flee
  * placed for an instrument whose requirement nothing here can price. See
  * `md/OPEN-ITEMS.md` item 2b.
  *
- * `AnnouncingOrderPlacer` (L2) implements this same interface, which is what makes
+ * `L2BrokerOrderClient` (L2) implements this same interface, which is what makes
  * telling the tracking service a layer you can leave out rather than a step inside one.
  */
-export interface OrderPlacer {
+export interface BrokerOrderClient {
   placeMarketOrder(input: PlaceMarketOrderInput): Promise<PlacedOrder>;
   placeLimitOrder(input: PlaceLimitOrderInput): Promise<PlacedOrder>;
   placeOtoOrder(input: PlaceOtoOrderInput): Promise<PlacedOrder>;

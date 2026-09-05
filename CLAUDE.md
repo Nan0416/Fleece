@@ -29,10 +29,10 @@ from the environment and starts; nothing parses arguments.
 
 `broker` has no consumer inside Fleece yet. It is groundwork for porting the execution
 service, and the reason it exists now is that its reservation accounting is the piece
-the legacy got most carefully right. It is built in layers over `@fleece/alpaca` — the
-virtual account, then the tracking claim, then the handles — each one addable and
-omittable on its own; [packages/broker/README.md](./packages/broker/README.md) has the
-table and the reasoning.
+the legacy got most carefully right. It is built in layers over `@fleece/alpaca`, a folder
+each: `l1/` encodes the virtual account, `l2/` claims the order for it, `l3/` hands back
+the handles, and `reservations/` sits beside them because L3 runs with or without it.
+[packages/broker/README.md](./packages/broker/README.md) has the table and the reasoning.
 
 Inside `core`: `services` answer requests and hold the rules → `data` talks to
 Postgres. Inside `service`: `routes` parse and delegate to a `core` service.

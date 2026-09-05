@@ -1,11 +1,11 @@
 import { AlpacaActiveSynchronization, decodeAlpacaOrderCorrelation } from '@fleece/alpaca';
 import { BrokerOrderEvent } from '@fleece/shared';
-import { createAlpacaBroker } from '../../src/create-alpaca-broker';
-import { NotReservableError } from '../../src/models/errors';
-import { MultiLegOrderRequest, MultiLegOrderRequestLeg } from '../../src/models/requests';
-import { AlpacaBroker } from '../../src/orders/alpaca-broker';
-import { AnnouncingOrderPlacer } from '../../src/placement/announcing-order-placer';
-import { CorrelatedOrderPlacer } from '../../src/placement/correlated-order-placer';
+import { createAlpacaBrokerOrderClient } from '../../src/create-alpaca-broker-order-client';
+import { NotReservableError } from '../../src/errors';
+import { MultiLegOrderRequest, MultiLegOrderRequestLeg } from '../../src/l3/requests';
+import { L3BrokerOrderClient } from '../../src/l3/l3-broker-order-client';
+import { L2BrokerOrderClient } from '../../src/l2/l2-broker-order-client';
+import { L1BrokerOrderClient } from '../../src/l1/l1-broker-order-client';
 import { AccountReservations } from '../../src/reservations/account-reservations';
 import { d, shows } from '../decimals';
 import { alpacaOrder, FakeAlpacaRestClient, FakeAlpacaWsClient, filledMultiLegOrder, LONG_LEG_SYMBOL, RecordingOrderTrackingClient, SHORT_LEG_SYMBOL } from '../fake-alpaca';
@@ -17,7 +17,7 @@ const settle = async (): Promise<void> => {
 };
 
 interface Harness {
-  readonly broker: AlpacaBroker;
+  readonly broker: L3BrokerOrderClient;
   readonly rest: FakeAlpacaRestClient;
   readonly ws: FakeAlpacaWsClient;
   readonly tracking: RecordingOrderTrackingClient;
@@ -29,7 +29,7 @@ interface Harness {
  * an interval left running holds the process open — which surfaces as the whole suite
  * hanging rather than as a failing test.
  */
-const built: AlpacaBroker[] = [];
+const built: L3BrokerOrderClient[] = [];
 
 /** The stack assembled by hand, so a test can reach the layer it is about. */
 function harness(options: { readonly withReservations?: boolean } = {}): Harness {
@@ -37,10 +37,10 @@ function harness(options: { readonly withReservations?: boolean } = {}): Harness
   const ws = new FakeAlpacaWsClient();
   const tracking = new RecordingOrderTrackingClient();
   const activeSync = new AlpacaActiveSynchronization({ account, restClient: rest, tickMs: 60_000 });
-  const placer = new AnnouncingOrderPlacer({ placer: new CorrelatedOrderPlacer({ restClient: rest }), trackingClient: tracking });
+  const placer = new L2BrokerOrderClient({ placer: new L1BrokerOrderClient({ restClient: rest }), trackingClient: tracking });
   const reservations = options.withReservations === false ? undefined : new AccountReservations({ account, reader: rest, now: () => 1_000 });
 
-  const broker = new AlpacaBroker({ account, placer, assets: rest, wsClient: ws, activeSync, reservations, now: () => 1_000 });
+  const broker = new L3BrokerOrderClient({ account, placer, assets: rest, wsClient: ws, activeSync, reservations, now: () => 1_000 });
   built.push(broker);
   return { broker, rest, ws, tracking, reservations };
 }
@@ -60,7 +60,7 @@ afterEach(async () => {
   }
 });
 
-describe('AlpacaBroker', () => {
+describe('L3BrokerOrderClient', () => {
   describe('placing an order', () => {
     it('holds what the order needs before sending it', async () => {
       const { broker, rest, reservations } = harness();
@@ -495,14 +495,14 @@ describe('AlpacaBroker', () => {
     });
   });
 
-  describe('createAlpacaBroker', () => {
+  describe('createAlpacaBrokerOrderClient', () => {
     it('assembles a stack that holds, correlates and announces', async () => {
       const rest = new FakeAlpacaRestClient();
       const ws = new FakeAlpacaWsClient();
       const tracking = new RecordingOrderTrackingClient();
       const activeSync = new AlpacaActiveSynchronization({ account, restClient: rest, tickMs: 60_000 });
 
-      const broker = createAlpacaBroker({ account, restClient: rest, wsClient: ws, activeSync, trackingClient: tracking, now: () => 1_000 });
+      const broker = createAlpacaBrokerOrderClient({ account, restClient: rest, wsClient: ws, activeSync, trackingClient: tracking, now: () => 1_000 });
       built.push(broker);
       await broker.init();
 

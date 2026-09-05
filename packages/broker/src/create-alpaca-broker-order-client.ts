@@ -1,11 +1,10 @@
 import { AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaRestClient, AlpacaWsClient } from '@fleece/alpaca';
-import { AlpacaBroker } from './orders/alpaca-broker';
-import { AnnouncingOrderPlacer } from './placement/announcing-order-placer';
-import { CorrelatedOrderPlacer } from './placement/correlated-order-placer';
-import { NoopOrderTrackingClient, OrderTrackingClient } from './placement/order-tracking-client';
-import { AccountReservations } from './reservations/account-reservations';
+import { L1BrokerOrderClient } from './l1';
+import { L2BrokerOrderClient, NoopOrderTrackingClient, OrderTrackingClient } from './l2';
+import { L3BrokerOrderClient } from './l3';
+import { AccountReservations } from './reservations';
 
-export interface CreateAlpacaBrokerProps {
+export interface CreateAlpacaBrokerOrderClientProps {
   readonly account: AlpacaAccountIdentifier;
   readonly restClient: AlpacaRestClient;
   readonly wsClient: AlpacaWsClient;
@@ -18,24 +17,24 @@ export interface CreateAlpacaBrokerProps {
 /**
  * The whole stack, assembled the way it is meant to be run:
  *
- *     AlpacaBroker            L3  signed decimals, handles, event delivery
- *       AnnouncingOrderPlacer L2  tells the tracking service whose the order is
- *         CorrelatedOrderPlacer L1  encodes the virtual account, sends
+ *     L3BrokerOrderClient            L3  signed decimals, handles, event delivery
+ *       L2BrokerOrderClient L2  tells the tracking service whose the order is
+ *         L1BrokerOrderClient L1  encodes the virtual account, sends
  *           AlpacaRestClient    L0  Alpaca's API, one to one
  *     + AccountReservations       holds buying power and shares around a placement
  *
  * Deliberately without knobs. Every layer is a constructor argument of the one above, so
  * a caller wanting a different stack — no announcement, no reservations, a placer of its
- * own — builds `AlpacaBroker` directly and passes what it wants. A factory with a flag
+ * own — builds `L3BrokerOrderClient` directly and passes what it wants. A factory with a flag
  * per layer would be a second place the assembly is decided.
  */
-export function createAlpacaBroker(props: CreateAlpacaBrokerProps): AlpacaBroker {
-  const placer = new AnnouncingOrderPlacer({
-    placer: new CorrelatedOrderPlacer({ restClient: props.restClient }),
+export function createAlpacaBrokerOrderClient(props: CreateAlpacaBrokerOrderClientProps): L3BrokerOrderClient {
+  const placer = new L2BrokerOrderClient({
+    placer: new L1BrokerOrderClient({ restClient: props.restClient }),
     trackingClient: props.trackingClient ?? new NoopOrderTrackingClient(),
   });
 
-  return new AlpacaBroker({
+  return new L3BrokerOrderClient({
     account: props.account,
     placer,
     assets: props.restClient,

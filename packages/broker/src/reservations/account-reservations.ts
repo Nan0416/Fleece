@@ -1,8 +1,7 @@
 import { AlpacaAccountIdentifier, AlpacaOrder, alpacaOrderAssetClass, AlpacaRestClient } from '@fleece/alpaca';
 import { BrokerOrderEvent, Decimal, defaultContractMultiplier, LoggerFactory } from '@fleece/shared';
-import { BrokerUnavailableError } from '../models/errors';
-import { LimitOrderRequest, MarketOrderRequest, OrderRequest, OtoRequest } from '../models/requests';
-import { BrokerPosition, PendingOrder } from '../models/trackers';
+import { BrokerUnavailableError } from '../errors';
+import { BrokerPosition, PendingOrder, ReservationRequest } from './trackers';
 import { AccountBrokerTracker } from './account-broker-tracker';
 
 const logger = LoggerFactory.getLogger('AccountReservations');
@@ -21,7 +20,7 @@ export interface AccountReservationsProps {
  * account: the tracker, the startup seeding that makes it true, and the hold taken
  * around a placement.
  *
- * **It is optional to the broker, and that is the design.** `AlpacaBroker` takes one or
+ * **It is optional to the broker, and that is the design.** `L3BrokerOrderClient` takes one or
  * takes none. Without it every order goes out unheld — which is wrong for a strategy
  * sharing an account, and exactly right for an instrument whose requirement nothing here
  * can compute. Isolating it here is what keeps a spread placeable without pretending its
@@ -88,32 +87,18 @@ export class AccountReservations {
   /**
    * Takes the hold an order needs, before it is sent.
    *
-   * Returns `undefined` when there is nothing to hold *and that is the answer* — today
-   * only for a spread, whose requirement is the width rather than the sum of its legs.
-   * It is not silent about it, because an unheld order can oversubscribe the account and
-   * nothing downstream will say so.
+   * It takes a `ReservationRequest` rather than L3's order request, and that is what
+   * keeps the dependency one-way: this layer knows about a symbol, a signed size and a
+   * price, and nothing about market orders, spreads or event handlers. L3 does the
+   * translation, and is also where an order this cannot price at all — a spread — is
+   * recognised as having no reservation to ask for.
    *
    * It **throws** when the account cannot support the order, and when the order is one
-   * this cannot price at all — a short option, whose requirement is margin against an
-   * unbounded loss. The difference between throwing and returning `undefined` is the
-   * difference between "this order is not safe" and "this order is not covered by the
-   * model".
+   * the tracker refuses to price: a short option, whose requirement is margin against an
+   * unbounded loss.
    */
-  hold(request: OrderRequest): string | undefined {
-    if (request.type === 'mleg') {
-      logger.warn(
-        `Placing a ${request.legs.length}-leg spread for account ${request.accountId} with nothing held against it: a spread's requirement is the width rather than the sum of its legs, and no model here computes that. See md/OPEN-ITEMS.md item 2b.`,
-      );
-      return undefined;
-    }
-
-    return this.tracker.reserve({
-      symbol: request.symbol,
-      size: request.size,
-      assetClass: request.assetClass,
-      unitPrice: reservationPrice(request),
-      multiplier: request.multiplier,
-    });
+  hold(request: ReservationRequest): string {
+    return this.tracker.reserve(request);
   }
 
   /**
@@ -180,17 +165,6 @@ export class AccountReservations {
     } catch {
       throw new BrokerUnavailableError(`Alpaca reported "${value}" as the ${context} on account ${this.brokerAccountId}, which is not a number.`);
     }
-  }
-}
-
-/** Which of an order's prices the hold is taken against. */
-function reservationPrice(request: MarketOrderRequest | LimitOrderRequest | OtoRequest): Decimal | undefined {
-  switch (request.type) {
-    case 'market':
-      return request.unitPrice;
-    case 'limit':
-    case 'oto':
-      return request.limitPrice;
   }
 }
 

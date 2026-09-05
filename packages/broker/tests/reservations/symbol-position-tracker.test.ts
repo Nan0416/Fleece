@@ -1,7 +1,7 @@
 import { Decimal } from '@fleece/shared';
 import { AccountBrokerTracker } from '../../src/reservations/account-broker-tracker';
-import { NotReservableError } from '../../src/models/errors';
-import { PendingOrder } from '../../src/models/trackers';
+import { NotReservableError } from '../../src/errors';
+import { PendingOrder } from '../../src/reservations/trackers';
 import { SymbolPositionTracker } from '../../src/reservations/symbol-position-tracker';
 import { brokerEvent, optionEvent } from '../broker-events';
 import { d, shows } from '../decimals';

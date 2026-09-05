@@ -1,25 +1,25 @@
 import { AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaRestClient, AlpacaWsClient, convertAlpacaOrderToBrokerOrderEvents } from '@fleece/alpaca';
 import { BrokerOrderEvent, Decimal, InvalidRequestError, LoggerFactory } from '@fleece/shared';
-import { Asset, Broker } from '../models/broker';
-import { BrokerUnavailableError } from '../models/errors';
-import { MultiLegOrderObj, OtoOrderObj, SingleOrderObj } from '../models/order-obj';
-import { OrderPlacer, PlacedOrder } from '../models/order-placer';
-import { LimitOrderRequest, MarketOrderRequest, MultiLegOrderRequest, OrderRequest, OtoRequest, SingleOrderEventHandler } from '../models/requests';
-import { BrokerTracker } from '../models/trackers';
+import { Asset, Broker } from './broker';
+import { BrokerUnavailableError } from '../errors';
+import { MultiLegOrderObj, OtoOrderObj, SingleOrderObj } from './order-obj';
+import { BrokerOrderClient, PlacedOrder } from '../l1/broker-order-client';
+import { LimitOrderRequest, MarketOrderRequest, MultiLegOrderRequest, OrderRequest, OtoRequest, SingleOrderEventHandler } from './requests';
+import { BrokerTracker, ReservationRequest } from '../reservations/trackers';
 import { AccountReservations } from '../reservations/account-reservations';
 import { EventDispatcher } from './event-dispatcher';
 import { MultiLegOrderHandle, OrderLegHandle } from './multi-leg-order-handle';
 import { OtoPlacement, SingleOrderHandle } from './order-handle';
 
-const logger = LoggerFactory.getLogger('AlpacaBroker');
+const logger = LoggerFactory.getLogger('L3BrokerOrderClient');
 
 /** All this needs of the client beyond placing: whether an instrument can be traded. */
 export type AssetReader = Pick<AlpacaRestClient, 'getAsset'>;
 
-export interface AlpacaBrokerProps {
+export interface L3BrokerOrderClientProps {
   readonly account: AlpacaAccountIdentifier;
   /** L1, or L2 wrapping it, or a reserving decorator wrapping either. */
-  readonly placer: OrderPlacer;
+  readonly placer: BrokerOrderClient;
   readonly assets: AssetReader;
   readonly wsClient: AlpacaWsClient;
   readonly activeSync: AlpacaActiveSynchronization;
@@ -54,11 +54,11 @@ export interface AlpacaBrokerProps {
  * it belongs — in the position tracker's session comparison, and again in the ledger's
  * idempotent fill path.
  */
-export class AlpacaBroker implements Broker {
+export class L3BrokerOrderClient implements Broker {
   private readonly dispatcher: EventDispatcher;
   private orderEventHandlerId?: string;
 
-  constructor(private readonly props: AlpacaBrokerProps) {
+  constructor(private readonly props: L3BrokerOrderClientProps) {
     this.dispatcher = new EventDispatcher(props.account.accountId);
   }
 
@@ -136,7 +136,7 @@ export class AlpacaBroker implements Broker {
   async order(request: OrderRequest): Promise<SingleOrderObj | OtoOrderObj | MultiLegOrderObj> {
     validate(request);
 
-    const reservationId = this.props.reservations?.hold(request);
+    const reservationId = this.hold(request);
     let placed: PlacedOrder;
     try {
       placed = await this.send(request, reservationId);
@@ -150,6 +150,39 @@ export class AlpacaBroker implements Broker {
     }
 
     return this.attach(request, placed.order);
+  }
+
+  /**
+   * Turns an order request into the hold it needs, and takes it.
+   *
+   * The translation lives here rather than in `AccountReservations` so the dependency
+   * runs one way: reservations know about a symbol, a signed size and a price, and
+   * nothing about order types or event handlers.
+   *
+   * A spread has no hold to ask for. Its requirement is the width rather than the sum of
+   * its legs, and no model here computes that — so it goes out unheld, and says so,
+   * because an unheld order can oversubscribe the account and nothing downstream will
+   * mention it. See `md/OPEN-ITEMS.md` item 2b.
+   */
+  private hold(request: OrderRequest): string | undefined {
+    if (this.props.reservations === undefined) {
+      return undefined;
+    }
+    if (request.type === 'mleg') {
+      logger.warn(
+        `Placing a ${request.legs.length}-leg spread for account ${request.accountId} with nothing held against it: a spread's requirement is the width rather than the sum of its legs, and no model here computes that. See md/OPEN-ITEMS.md item 2b.`,
+      );
+      return undefined;
+    }
+
+    const reservation: ReservationRequest = {
+      symbol: request.symbol,
+      size: request.size,
+      assetClass: request.assetClass,
+      unitPrice: request.type === 'market' ? request.unitPrice : request.limitPrice,
+      multiplier: request.multiplier,
+    };
+    return this.props.reservations.hold(reservation);
   }
 
   private async send(request: OrderRequest, reservationId: string | undefined): Promise<PlacedOrder> {

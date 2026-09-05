@@ -1,4 +1,5 @@
 import { AccountReservations } from '../../src/reservations/account-reservations';
+import { optionEvent } from '../broker-events';
 import { alpacaOrder, FakeAlpacaRestClient, multiLegOrder } from '../fake-alpaca';
 import { d, shows } from '../decimals';
 
@@ -88,51 +89,48 @@ describe('AccountReservations', () => {
   });
 
   describe('holding against a placement', () => {
-    const noEvents = async (): Promise<void> => {};
-
-    it('holds the limit price of a limit order and the estimate of a market one', async () => {
+    it('holds what the order will cost, in dollars', async () => {
       const { reservations } = harness();
       await reservations.seed();
 
-      reservations.hold({ type: 'limit', symbol: 'AAPL', size: d(10), assetClass: 'equity', limitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
+      reservations.hold({ symbol: 'AAPL', size: d(10), assetClass: 'equity', unitPrice: d(100) });
       expect(shows(reservations.availableBuyingPower)).toBe('99000');
 
-      reservations.hold({ type: 'market', symbol: 'AAPL', size: d(10), assetClass: 'equity', unitPrice: d(50), accountId: 'MOMENTUM01', onEvent: noEvents });
-      expect(shows(reservations.availableBuyingPower)).toBe('98500');
+      // A contract quoted at 3.85 costs $385, which is the multiplier's whole job.
+      reservations.hold({ symbol: 'AMZN261016C00280000', size: d(2), assetClass: 'option', unitPrice: d('3.85') });
+      expect(shows(reservations.availableBuyingPower)).toBe('98230');
     });
 
-    it('holds nothing for a spread, whose requirement is the width rather than its legs', async () => {
-      // Returning no reservation is the honest answer; holding the sum of the legs would
-      // be a number that looks like one. It warns as it does so — asserted by reading the
-      // log nowhere, because tests here assert on behaviour.
+    it('refuses what it cannot price, rather than holding something plausible', async () => {
+      // A short call's requirement is margin against an unbounded loss. Which order
+      // types have no reservation to ask for at all — a spread — is L3's business, since
+      // this layer never sees an order type.
       const { reservations } = harness();
       await reservations.seed();
 
-      const held = reservations.hold({
-        type: 'mleg',
-        size: d(1),
-        legs: [
-          { symbol: 'AMZN261016C00280000', ratioQty: d(1), side: 'sell', positionIntent: 'sell_to_open' },
-          { symbol: 'AMZN261016C00285000', ratioQty: d(1), side: 'buy', positionIntent: 'buy_to_open' },
-        ],
-        netLimitPrice: d('-0.85'),
-        accountId: 'MOMENTUM01',
-        onEvent: async () => {},
-      });
-
-      expect(held).toBeUndefined();
-      expect(shows(reservations.availableBuyingPower)).toBe('100000');
+      expect(() => reservations.hold({ symbol: 'AMZN261016C00280000', size: d(-1), assetClass: 'option', unitPrice: d('3.85') })).toThrow(/margin/);
     });
 
     it('gives a hold back when the order never reached the broker', async () => {
       const { reservations } = harness();
       await reservations.seed();
 
-      const reservationId = reservations.hold({ type: 'limit', symbol: 'AAPL', size: d(10), assetClass: 'equity', limitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
-      expect(reservationId).toEqual(expect.any(String));
-      reservations.release(reservationId ?? '');
+      const reservationId = reservations.hold({ symbol: 'AAPL', size: d(10), assetClass: 'equity', unitPrice: d(100) });
+      reservations.release(reservationId);
 
       expect(shows(reservations.availableBuyingPower)).toBe('100000');
+    });
+
+    it('notes an order it holds nothing for, so its fills are still applied', async () => {
+      // What a spread needs: nothing held, but the contracts named, or a fill arriving
+      // as the first event anyone sees would be ignored as a late duplicate.
+      const { reservations } = harness();
+      await reservations.seed();
+
+      reservations.expectOrder('AMZN261016C00280000', 'leg-1');
+      reservations.track(optionEvent({ id: 'leg-1', symbol: 'AMZN261016C00280000', status: 'filled', qty: d(-1), filledQty: d(-1), filledAvgPrice: d('3.85') }));
+
+      expect(shows(reservations.tracker.positionTracker('AMZN261016C00280000')?.totalCost)).toBe('-385');
     });
   });
 });

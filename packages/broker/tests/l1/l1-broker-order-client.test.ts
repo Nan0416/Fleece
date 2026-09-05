@@ -1,14 +1,14 @@
 import { decodeAlpacaOrderCorrelation } from '@fleece/alpaca';
 import { InvalidRequestError } from '@fleece/shared';
-import { CorrelatedOrderPlacer } from '../../src/placement/correlated-order-placer';
+import { L1BrokerOrderClient } from '../../src/l1/l1-broker-order-client';
 import { FakeAlpacaRestClient } from '../fake-alpaca';
 
-function harness(): { placer: CorrelatedOrderPlacer; rest: FakeAlpacaRestClient } {
+function harness(): { placer: L1BrokerOrderClient; rest: FakeAlpacaRestClient } {
   const rest = new FakeAlpacaRestClient();
-  return { placer: new CorrelatedOrderPlacer({ restClient: rest }), rest };
+  return { placer: new L1BrokerOrderClient({ restClient: rest }), rest };
 }
 
-describe('CorrelatedOrderPlacer', () => {
+describe('L1BrokerOrderClient', () => {
   it('carries the virtual account in the one field the broker echoes back', async () => {
     // `client_order_id` comes back on every event about an order, which is what makes it
     // the only place an order can say whose it is that survives a restart.

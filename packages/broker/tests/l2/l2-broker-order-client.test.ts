@@ -1,9 +1,9 @@
-import { AnnouncingOrderPlacer } from '../../src/placement/announcing-order-placer';
-import { CorrelatedOrderPlacer } from '../../src/placement/correlated-order-placer';
+import { L2BrokerOrderClient } from '../../src/l2/l2-broker-order-client';
+import { L1BrokerOrderClient } from '../../src/l1/l1-broker-order-client';
 import { alpacaOrder, FakeAlpacaRestClient, RecordingOrderTrackingClient } from '../fake-alpaca';
 
 interface Harness {
-  readonly placer: AnnouncingOrderPlacer;
+  readonly placer: L2BrokerOrderClient;
   readonly rest: FakeAlpacaRestClient;
   readonly tracking: RecordingOrderTrackingClient;
 }
@@ -11,12 +11,12 @@ interface Harness {
 function harness(): Harness {
   const rest = new FakeAlpacaRestClient();
   const tracking = new RecordingOrderTrackingClient();
-  return { placer: new AnnouncingOrderPlacer({ placer: new CorrelatedOrderPlacer({ restClient: rest }), trackingClient: tracking }), rest, tracking };
+  return { placer: new L2BrokerOrderClient({ placer: new L1BrokerOrderClient({ restClient: rest }), trackingClient: tracking }), rest, tracking };
 }
 
 const marketOrder = { symbol: 'AAPL', size: 10, side: 'buy' as const, accountId: 'MOMENTUM01' };
 
-describe('AnnouncingOrderPlacer', () => {
+describe('L2BrokerOrderClient', () => {
   it('claims the order for the account that placed it', async () => {
     const { placer, tracking } = harness();
 

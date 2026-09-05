@@ -1,10 +1,18 @@
 import { AlpacaRestClient, encodeAlpacaOrderCorrelation } from '@fleece/alpaca';
 import { InvalidRequestError, LoggerFactory } from '@fleece/shared';
-import { OrderPlacer, PlaceLimitOrderInput, PlaceMarketOrderInput, PlaceMultiLegOrderInput, PlaceOtoOrderInput, PlacedOrder, CorrelatedOrderInput } from '../models/order-placer';
+import {
+  BrokerOrderClient,
+  PlaceLimitOrderInput,
+  PlaceMarketOrderInput,
+  PlaceMultiLegOrderInput,
+  PlaceOtoOrderInput,
+  PlacedOrder,
+  CorrelatedOrderInput,
+} from './broker-order-client';
 
-const logger = LoggerFactory.getLogger('CorrelatedOrderPlacer');
+const logger = LoggerFactory.getLogger('L1BrokerOrderClient');
 
-export interface CorrelatedOrderPlacerProps {
+export interface L1BrokerOrderClientProps {
   readonly restClient: AlpacaRestClient;
 }
 
@@ -21,8 +29,8 @@ export interface CorrelatedOrderPlacerProps {
  * `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` — a silent misattribution that only shows up
  * later as a strategy's P&L being wrong. Refusing it here costs one comparison.
  */
-export class CorrelatedOrderPlacer implements OrderPlacer {
-  constructor(private readonly props: CorrelatedOrderPlacerProps) {}
+export class L1BrokerOrderClient implements BrokerOrderClient {
+  constructor(private readonly props: L1BrokerOrderClientProps) {}
 
   async placeMarketOrder(input: PlaceMarketOrderInput): Promise<PlacedOrder> {
     const clientOrderId = correlate(input);

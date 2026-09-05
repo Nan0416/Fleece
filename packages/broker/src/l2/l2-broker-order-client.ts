@@ -1,12 +1,12 @@
 import { AlpacaOrder } from '@fleece/alpaca';
 import { LoggerFactory } from '@fleece/shared';
-import { OrderPlacer, PlaceLimitOrderInput, PlaceMarketOrderInput, PlaceMultiLegOrderInput, PlaceOtoOrderInput, PlacedOrder } from '../models/order-placer';
+import { BrokerOrderClient, PlaceLimitOrderInput, PlaceMarketOrderInput, PlaceMultiLegOrderInput, PlaceOtoOrderInput, PlacedOrder } from '../l1/broker-order-client';
 import { OrderTrackingClient } from './order-tracking-client';
 
-const logger = LoggerFactory.getLogger('AnnouncingOrderPlacer');
+const logger = LoggerFactory.getLogger('L2BrokerOrderClient');
 
-export interface AnnouncingOrderPlacerProps {
-  readonly placer: OrderPlacer;
+export interface L2BrokerOrderClientProps {
+  readonly placer: BrokerOrderClient;
   readonly trackingClient: OrderTrackingClient;
 }
 
@@ -40,8 +40,8 @@ export interface AnnouncingOrderPlacerProps {
  * account — is recoverable by transferring the position. A caller that thinks it holds
  * nothing when it holds 500 shares is not.
  */
-export class AnnouncingOrderPlacer implements OrderPlacer {
-  constructor(private readonly props: AnnouncingOrderPlacerProps) {}
+export class L2BrokerOrderClient implements BrokerOrderClient {
+  constructor(private readonly props: L2BrokerOrderClientProps) {}
 
   async placeMarketOrder(input: PlaceMarketOrderInput): Promise<PlacedOrder> {
     return await this.announce(input.accountId, await this.props.placer.placeMarketOrder(input));

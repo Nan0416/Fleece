@@ -1,13 +1,13 @@
 import { BrokerOrderEvent, eventToString, isTerminalStatus, LoggerFactory } from '@fleece/shared';
-import { OrderPlacer } from '../models/order-placer';
-import { SingleOrderObj } from '../models/order-obj';
-import { SingleOrderEventHandler } from '../models/requests';
+import { BrokerOrderClient } from '../l1/broker-order-client';
+import { SingleOrderObj } from './order-obj';
+import { SingleOrderEventHandler } from './requests';
 import { EventSink } from './event-dispatcher';
 
 const logger = LoggerFactory.getLogger('SingleOrderHandle');
 
 /** All a handle needs of the placer: it cancels its own order and nothing else. */
-export type OrderCanceller = Pick<OrderPlacer, 'cancelOrder'>;
+export type OrderCanceller = Pick<BrokerOrderClient, 'cancelOrder'>;
 
 export interface SingleOrderHandleProps {
   readonly symbol: string;
@@ -23,7 +23,7 @@ export interface SingleOrderHandleProps {
  * Only the happy path lives here: ordering, deduplication and recovery are the layers
  * below, and by the time an event reaches `absorb` it has been through them.
  *
- * It cancels through the `OrderPlacer` rather than through Alpaca directly, so a
+ * It cancels through the `BrokerOrderClient` rather than through Alpaca directly, so a
  * cancellation goes down the same stack the placement came up.
  */
 export class SingleOrderHandle implements SingleOrderObj, EventSink {

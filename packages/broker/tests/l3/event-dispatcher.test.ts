@@ -1,5 +1,5 @@
 import { BrokerOrderEvent } from '@fleece/shared';
-import { EventDispatcher, EventSink } from '../../src/orders/event-dispatcher';
+import { EventDispatcher, EventSink } from '../../src/l3/event-dispatcher';
 import { brokerEvent } from '../broker-events';
 import { d } from '../decimals';
 

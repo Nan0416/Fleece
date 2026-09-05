@@ -1,6 +1,6 @@
 import { BrokerOrderEvent, Decimal, eventToString, isTerminalStatus, LoggerFactory } from '@fleece/shared';
-import { MultiLegOrderObj, OrderLegView } from '../models/order-obj';
-import { MultiLegOrderEventHandler } from '../models/requests';
+import { MultiLegOrderObj, OrderLegView } from './order-obj';
+import { MultiLegOrderEventHandler } from './requests';
 import { EventSink } from './event-dispatcher';
 import { OrderCanceller } from './order-handle';
 

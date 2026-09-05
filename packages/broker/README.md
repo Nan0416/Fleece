@@ -1,23 +1,38 @@
 # @fleece/broker
 
-Places orders at a broker account, in four layers. Each one adds a single thing to the
-one below and can be left out.
+Places orders at a broker account, in three layers over `@fleece/alpaca`. Each adds a
+single thing to the one below, and each can be left out.
 
-| | What it adds | Where |
+| Layer | Class | Adds |
 | --- | --- | --- |
-| **L0** | Alpaca's API, one to one | `@fleece/alpaca` |
-| **L1** | The virtual account, encoded into `client_order_id` | `placement/correlated-order-placer.ts` |
-| **L2** | A claim to the tracking service that the order belongs to that account | `placement/announcing-order-placer.ts` |
-| **L3** | Signed decimals, live handles, event delivery | `orders/alpaca-broker.ts` |
-| ⊥ | Holds buying power and shares around a placement | `reservations/` |
+| **L0** | `AlpacaRestClient` (`@fleece/alpaca`) | Alpaca's API, one to one |
+| **L1** | `L1BrokerOrderClient` | The virtual account, encoded into `client_order_id` |
+| **L2** | `L2BrokerOrderClient` | A claim to the tracking service that the order is that account's |
+| **L3** | `L3BrokerOrderClient` | Signed decimals, live handles, event delivery |
+| — | `AccountReservations` | Holds buying power and shares around a placement |
 
-L1 and L2 share the `OrderPlacer` interface, so L2 is a wrapper you install rather than a
-step inside L1. Reservations are a collaborator of L3 rather than a layer, because a hold
-is decided from Fleece's vocabulary — a signed size, an asset class, a multiplier — and
-pushing those down into L1 would make the layer that is meant to be one-to-one with the
-broker know about contracts.
+```
+src/
+  l1/            broker-order-client.ts     the interface L1 and L2 both implement
+                 l1-broker-order-client.ts
+  l2/            l2-broker-order-client.ts
+                 order-tracking-client.ts
+  l3/            l3-broker-order-client.ts  the facade
+                 broker.ts, requests.ts, order-obj.ts   its vocabulary
+                 order-handle.ts, multi-leg-order-handle.ts, event-dispatcher.ts
+  reservations/  not a layer — see below
+  errors.ts      the package's error vocabulary, thrown from more than one layer
+```
 
-`createAlpacaBroker` assembles the standard stack. Anything else is built by hand.
+**Every type lives with the layer that owns it.** There is no `models/` folder, and that
+is the point: an interface shared between layers cannot say which one it belongs to, so
+the boundary stops being visible in the tree. `BrokerOrderClient` sits in `l1/` because
+L1 defines it and L2 implements it; `requests.ts` sits in `l3/` because nothing below L3
+knows what a market order is.
+
+**Dependencies run one way**: `l3 → l1`, `l2 → l1`, `l3 → reservations`, and nothing
+points back. Assembly is the one thing that sees all of them, in
+`create-alpaca-broker-order-client.ts`.
 
 ## Why each layer exists
 
@@ -39,13 +54,15 @@ are moving whether or not anything has been told whose they are.
 spread rather than four, and an object that keeps receiving events until the order is
 done.
 
-**Reservations — optional on purpose.** Many strategies share one real account, so a hold
-taken before the request goes out is what stops them each reading the same buying power
-and the account being oversold. But the requirement for a short option is margin against
-an unbounded loss, and a spread's is the width rather than the sum of its legs. Neither is
-modelled, so the tracker **refuses** the first and **holds nothing** for the second — and
-because reservations are a separate object, that is expressible rather than a special case
-buried in the placement path. See `md/OPEN-ITEMS.md` item 2b.
+**Reservations — deliberately not a layer.** Many strategies share one real account, so a
+hold taken before the request goes out is what stops them each reading the same buying
+power and the account being oversold. But the requirement for a short option is margin
+against an unbounded loss, and a spread's is the width rather than the sum of its legs.
+Neither is modelled, so the tracker **refuses** the first and L3 places the second with
+**nothing held**. Keeping this beside the layers rather than among them is what makes that
+expressible instead of a special case buried in the placement path — and it takes a
+`ReservationRequest`, never an order request, so it never learns what a market order is.
+See `md/OPEN-ITEMS.md` item 2b.
 
 ## The shape of a spread
 

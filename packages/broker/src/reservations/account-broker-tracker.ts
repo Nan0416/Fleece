@@ -1,6 +1,6 @@
 import { BrokerOrderEvent, Decimal, eventToString, LoggerFactory } from '@fleece/shared';
 import { BuyingPowerLedger } from './buying-power';
-import { BrokerPosition, BrokerTracker, ReservationRequest, TestResult } from '../models/trackers';
+import { BrokerPosition, BrokerTracker, ReservationRequest, TestResult } from './trackers';
 import { SymbolPositionTracker } from './symbol-position-tracker';
 
 const logger = LoggerFactory.getLogger('AccountBrokerTracker');

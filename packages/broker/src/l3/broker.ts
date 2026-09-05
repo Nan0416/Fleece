@@ -1,6 +1,6 @@
 import { MultiLegOrderObj, OtoOrderObj, SingleOrderObj } from './order-obj';
 import { LimitOrderRequest, MarketOrderRequest, MultiLegOrderRequest, OtoRequest } from './requests';
-import { BrokerTracker } from './trackers';
+import { BrokerTracker } from '../reservations/trackers';
 
 export interface Asset {
   readonly symbol: string;
@@ -18,7 +18,7 @@ export interface Asset {
  * broker's own view of the account current as fills arrive.
  *
  * The legacy `Broker` interface also declared `oco` and `otoco` overloads. Neither was
- * ever implemented — `AlpacaBroker` had methods for `market`, `limit` and `oto` only —
+ * ever implemented — `L3BrokerOrderClient` had methods for `market`, `limit` and `oto` only —
  * so they are not declared here. An interface whose implementation throws is worse than
  * one that does not offer the method.
  */

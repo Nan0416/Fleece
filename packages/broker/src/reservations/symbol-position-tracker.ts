@@ -11,9 +11,9 @@ import {
 } from '@fleece/shared';
 import { nanoid } from 'nanoid';
 import { BuyingPowerLedger } from './buying-power';
-import { NotReservableError } from '../models/errors';
-import { PendingOrder, PositionTracker, RealisedProfit, ReservationRequest, TestResult } from '../models/trackers';
-import { allSameSign, hasDifferentSign, nearerZero } from '../utils';
+import { NotReservableError } from '../errors';
+import { PendingOrder, PositionTracker, RealisedProfit, ReservationRequest, TestResult } from './trackers';
+import { allSameSign, hasDifferentSign, nearerZero } from './utils';
 
 const logger = LoggerFactory.getLogger('SymbolPositionTracker');
 

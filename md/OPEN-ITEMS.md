@@ -80,7 +80,7 @@ port leaves behind. It still matters for an order Fleece never placed and that A
 reports standalone, which lands in the holding pen for
 `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` and is then booked to the catch-all account.
 
-The sending half exists and is now a layer of its own: `AnnouncingOrderPlacer` wraps the
+The sending half exists and is now a layer of its own: `L2BrokerOrderClient` wraps the
 correlating placer and claims every id a placement produced, parent and legs. Run without
 it and orders are still placed and still attributed — the announcement is a second answer
 to a question the correlation already answers for anything Fleece places. What it buys is
@@ -152,7 +152,7 @@ hold on a short call is a number that looks like an answer.
 Also fixed here, both of them the same shape of bug — a composite parent has no
 instrument, and treating its empty symbol as a value opens a position keyed on nothing:
 
-- **Startup seeding.** `AlpacaBroker.init` now expands open orders through their legs and
+- **Startup seeding.** `L3BrokerOrderClient.init` now expands open orders through their legs and
   drops composite parents, so an open spread seeds its two contracts rather than one
   position keyed on `''` whose size is signed from a side that means nothing.
 - **Event tracking.** `AccountBrokerTracker.track` drops an event with no symbol for the
@@ -177,7 +177,7 @@ legs, and no model here computes that.
 them in anger**, then add a margin model against a caller that can exercise it. Guessing
 at margin rules with nothing exercising them is how the wrong rule ships unnoticed. The
 layering is what makes that a later addition rather than a rewrite: reservations are a
-collaborator of `AlpacaBroker`, not a step inside it, so a model that can price a spread
+collaborator of `L3BrokerOrderClient`, not a step inside it, so a model that can price a spread
 is a new implementation rather than a change to the placement path.
 
 ---

@@ -30,7 +30,7 @@ export default tseslint.config(
     // point: it names the contract and gives the shape somewhere to grow, so an
     // endpoint or query gaining a field is not a breaking signature change for every
     // caller.
-    files: ['packages/shared/src/api/*.ts', 'packages/core/src/data/*-dao.ts', 'packages/core/src/services/*.ts', 'packages/alpaca/src/alpaca-rest-client.ts', 'packages/broker/src/models/*.ts'],
+    files: ['packages/shared/src/api/*.ts', 'packages/core/src/data/*-dao.ts', 'packages/core/src/services/*.ts', 'packages/alpaca/src/alpaca-rest-client.ts', 'packages/broker/src/l1/*.ts'],
     rules: { '@typescript-eslint/no-empty-object-type': 'off' },
   },
   {

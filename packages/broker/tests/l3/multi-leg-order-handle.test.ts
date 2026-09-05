@@ -1,6 +1,6 @@
 import { BrokerOrderEvent } from '@fleece/shared';
-import { MultiLegOrderHandle, OrderLegHandle } from '../../src/orders/multi-leg-order-handle';
-import { OrderCanceller } from '../../src/orders/order-handle';
+import { MultiLegOrderHandle, OrderLegHandle } from '../../src/l3/multi-leg-order-handle';
+import { OrderCanceller } from '../../src/l3/order-handle';
 import { brokerEvent } from '../broker-events';
 import { d, shows } from '../decimals';
 
