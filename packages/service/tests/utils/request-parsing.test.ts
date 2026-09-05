@@ -1,5 +1,12 @@
 import { InvalidRequestError } from '@fleece/shared';
-import { parseCreateAccountRequest, parseListOrderGroupsQuery, parseTimeWindowPage, parseTransferPositionRequest, requireStringParam } from '../../src/utils/request-parsing';
+import {
+  parseCreateAccountRequest,
+  parseListBrokerOrdersQuery,
+  parseStockSplitRequest,
+  parseTimeWindowPage,
+  parseTransferPositionRequest,
+  requireStringParam,
+} from '../../src/utils/request-parsing';
 
 describe('parseTimeWindowPage', () => {
   it('accepts a complete page', () => {
@@ -48,52 +55,77 @@ describe('parseCreateAccountRequest', () => {
   });
 });
 
-describe('parseTransferPositionRequest', () => {
-  const valid = {
-    originAccountId: 'A1',
-    originGroupId: 'G1',
-    destinationAccountId: 'A2',
-    destinationGroupId: 'G2',
-    symbol: 'AAPL',
-    unitCost: 120,
-    shares: 4,
-  };
-
-  it('accepts a complete request and leaves the timestamp optional', () => {
-    expect(parseTransferPositionRequest(valid)).toEqual({ ...valid, timestamp: undefined });
+describe('requireStringParam', () => {
+  it('takes a query parameter that must be there', () => {
+    expect(requireStringParam({ accountId: 'A1' }, 'accountId')).toBe('A1');
   });
 
-  it('requires whole shares', () => {
-    expect(() => parseTransferPositionRequest({ ...valid, shares: 1.5 })).toThrow(InvalidRequestError);
+  it('refuses a missing or empty one rather than searching for nothing', () => {
+    expect(() => requireStringParam({}, 'accountId')).toThrow(InvalidRequestError);
+    expect(() => requireStringParam({ accountId: '' }, 'accountId')).toThrow(InvalidRequestError);
+  });
+});
+
+describe('decimals on the wire', () => {
+  const valid = {
+    originAccountId: 'A1',
+    destinationAccountId: 'A2',
+    symbol: 'AAPL',
+    assetClass: 'equity',
+    unitCost: '120.25',
+    size: '4',
+  };
+
+  it('reads a decimal from a string, keeping every digit sent', () => {
+    const request = parseTransferPositionRequest({ ...valid, unitCost: '120.123456789' });
+    expect(request.unitCost.toString()).toBe('120.123456789');
+    expect(request.timestamp).toBeUndefined();
+  });
+
+  /**
+   * The rule the whole redesign rests on, enforced at the one place a caller can reach.
+   * `JSON.parse` produces a double, so by the time a number arrives here whatever
+   * precision it could not hold is already gone — accepting it would let the failure
+   * this system exists to prevent in through the front door.
+   */
+  it('refuses a JSON number, and says to send a string instead', () => {
+    expect(() => parseTransferPositionRequest({ ...valid, unitCost: 120.25 })).toThrow(InvalidRequestError);
+    expect(() => parseTransferPositionRequest({ ...valid, unitCost: 120.25 })).toThrow(/must be sent as a string/);
+  });
+
+  it('refuses a string that is not a number rather than producing a NaN', () => {
+    expect(() => parseTransferPositionRequest({ ...valid, unitCost: 'cheap' })).toThrow(InvalidRequestError);
+  });
+
+  it('accepts a fractional size, because fractional shares and crypto are both real', () => {
+    expect(parseTransferPositionRequest({ ...valid, size: '0.333333333' }).size.toString()).toBe('0.333333333');
+  });
+
+  it('requires a positive size, since direction comes from which account is which', () => {
+    expect(() => parseTransferPositionRequest({ ...valid, size: '-4' })).toThrow(/greater than zero/);
+    expect(() => parseTransferPositionRequest({ ...valid, size: '0' })).toThrow(/greater than zero/);
   });
 
   it('rejects a missing side', () => {
-    expect(() => parseTransferPositionRequest({ ...valid, destinationGroupId: undefined })).toThrow(InvalidRequestError);
+    expect(() => parseTransferPositionRequest({ ...valid, destinationAccountId: undefined })).toThrow(InvalidRequestError);
+  });
+
+  it('takes a split ratio as a string too, so a three-for-two is exact', () => {
+    expect(parseStockSplitRequest({ accountId: 'A1', symbol: 'AAPL', ratio: '1.5' }).ratio.toString()).toBe('1.5');
+    expect(() => parseStockSplitRequest({ accountId: 'A1', symbol: 'AAPL', ratio: 1.5 })).toThrow(/must be sent as a string/);
   });
 });
 
-describe('parseListOrderGroupsQuery', () => {
+describe('parseListBrokerOrdersQuery', () => {
   it('treats an empty query parameter as absent, which is what Express hands back', () => {
     // `?symbol=` arrives as '', and passing that through would search for the empty
     // symbol rather than not filtering.
-    expect(parseListOrderGroupsQuery({ accountId: 'A1', symbol: '', status: '' })).toEqual({
-      accountId: 'A1',
-      correlationType: undefined,
-      correlationId: undefined,
-      symbol: undefined,
-      status: undefined,
-      startTimestamp: undefined,
-      endTimestamp: undefined,
-    });
+    const parsed = parseListBrokerOrdersQuery({ accountId: 'A1', symbol: '', status: '', assetClass: '', from: '1000', limit: '50', sort: 'asc' });
+    expect(parsed).toEqual({ accountId: 'A1', brokerAccountId: undefined, symbol: undefined, status: undefined, assetClass: undefined, from: 1000, limit: 50, sort: 'asc' });
   });
 
-  it('rejects an unknown status', () => {
-    expect(() => parseListOrderGroupsQuery({ status: 'settling' })).toThrow(InvalidRequestError);
-  });
-});
-
-describe('requireStringParam', () => {
-  it('rejects a missing parameter by name', () => {
-    expect(() => requireStringParam({}, 'accountId')).toThrow(/accountId/);
+  it('accepts an asset class and rejects one it does not know', () => {
+    expect(parseListBrokerOrdersQuery({ assetClass: 'option', from: '1000', limit: '50', sort: 'asc' }).assetClass).toBe('option');
+    expect(() => parseListBrokerOrdersQuery({ assetClass: 'futures', from: '1000', limit: '50', sort: 'asc' })).toThrow(InvalidRequestError);
   });
 });

@@ -1,21 +1,17 @@
 import {
-  assertArray,
   assertInteger,
   assertNonEmptyString,
-  assertNumber,
   assertOneOf,
   assertOptionalOneOf,
   assertOptionalString,
+  assertPositiveDecimal,
   assertRecord,
-  AppendDocumentsRequest,
+  AssetClass,
   CreateAccountRequest,
-  CreateOrderGroupRequest,
-  Document,
   InvalidRequestError,
   ListBrokerOrdersRequest,
   ListDividendsRequest,
   ListHistoricalPositionsRequest,
-  ListOrderGroupsRequest,
   ListPositionsRequest,
   ListTransactionsRequest,
   parseOptionalBooleanParam,
@@ -29,7 +25,7 @@ import {
 
 const ACCOUNT_TYPES = ['live', 'paper', 'mirror'] as const;
 const ACCOUNT_STATUSES = ['active', 'inactive'] as const;
-const ORDER_GROUP_STATUSES = ['open', 'closed'] as const;
+const ASSET_CLASSES: ReadonlyArray<AssetClass> = ['equity', 'option', 'crypto'];
 const SORT_DIRECTIONS: ReadonlyArray<SortDirection> = ['asc', 'desc'];
 
 /** Caps a page so one request cannot ask for the whole table. */
@@ -100,6 +96,7 @@ export function parseListPositionsQuery(query: unknown): ListPositionsRequest {
   return {
     accountId: requireStringParam(query, 'accountId'),
     includeClosed: parseOptionalBooleanParam(record['includeClosed'], 'includeClosed'),
+    assetClass: assertOptionalOneOf(record['assetClass'] === '' ? undefined : record['assetClass'], 'assetClass', ASSET_CLASSES),
   };
 }
 
@@ -113,14 +110,12 @@ export function parseListHistoricalPositionsQuery(query: unknown): ListHistorica
 
 export function parseStockSplitRequest(body: unknown): StockSplitRequest {
   const record = assertRecord(body, 'body');
-  const ratio = assertNumber(record['ratio'], 'ratio');
-  if (!(ratio > 0)) {
-    throw new InvalidRequestError(`ratio must be greater than zero, got ${ratio}.`);
-  }
   return {
     accountId: assertNonEmptyString(record['accountId'], 'accountId'),
     symbol: assertNonEmptyString(record['symbol'], 'symbol'),
-    ratio,
+    // A string, like every decimal on the wire. A three-for-two split is "1.5", and
+    // sending it as a JSON number is refused rather than quietly rounded.
+    ratio: assertPositiveDecimal(record['ratio'], 'ratio'),
   };
 }
 
@@ -129,12 +124,15 @@ export function parseTransferPositionRequest(body: unknown): TransferPositionReq
   const timestamp = record['timestamp'];
   return {
     originAccountId: assertNonEmptyString(record['originAccountId'], 'originAccountId'),
-    originGroupId: assertNonEmptyString(record['originGroupId'], 'originGroupId'),
     destinationAccountId: assertNonEmptyString(record['destinationAccountId'], 'destinationAccountId'),
-    destinationGroupId: assertNonEmptyString(record['destinationGroupId'], 'destinationGroupId'),
     symbol: assertNonEmptyString(record['symbol'], 'symbol'),
-    unitCost: assertNumber(record['unitCost'], 'unitCost'),
-    shares: assertInteger(record['shares'], 'shares'),
+    assetClass: assertOneOf(record['assetClass'], 'assetClass', ASSET_CLASSES),
+    // Per unit of `size`, which for an option means per contract.
+    unitCost: assertPositiveDecimal(record['unitCost'], 'unitCost'),
+    // Fractional sizes are allowed — fractional shares and crypto are both real — so
+    // this is a positive decimal rather than a whole number. Direction comes from which
+    // account is which.
+    size: assertPositiveDecimal(record['size'], 'size'),
     timestamp: timestamp === undefined ? undefined : assertInteger(timestamp, 'timestamp'),
   };
 }
@@ -151,50 +149,14 @@ export function parseListDividendsQuery(query: unknown): ListDividendsRequest {
   return { accountId: requireStringParam(query, 'accountId'), symbol: optionalStringParam(query, 'symbol') };
 }
 
-export function parseCreateOrderGroupRequest(body: unknown): CreateOrderGroupRequest {
-  const record = assertRecord(body, 'body');
-  return {
-    accountId: assertNonEmptyString(record['accountId'], 'accountId'),
-    correlationType: assertNonEmptyString(record['correlationType'], 'correlationType'),
-    correlationId: assertOptionalString(record['correlationId'], 'correlationId'),
-  };
-}
-
-export function parseListOrderGroupsQuery(query: unknown): ListOrderGroupsRequest {
-  const record = assertRecord(query, 'query');
-  return {
-    accountId: optionalStringParam(query, 'accountId'),
-    correlationType: optionalStringParam(query, 'correlationType'),
-    correlationId: optionalStringParam(query, 'correlationId'),
-    symbol: optionalStringParam(query, 'symbol'),
-    status: assertOptionalOneOf(record['status'] === '' ? undefined : record['status'], 'status', ORDER_GROUP_STATUSES),
-    startTimestamp: parseOptionalIntegerParam(record['startTimestamp'], 'startTimestamp'),
-    endTimestamp: parseOptionalIntegerParam(record['endTimestamp'], 'endTimestamp'),
-  };
-}
-
-export function parseAppendDocumentsRequest(body: unknown): AppendDocumentsRequest {
-  const record = assertRecord(body, 'body');
-  const raw = assertArray(record['documents'], 'documents');
-  const documents: Document[] = raw.map((entry, index) => {
-    const document = assertRecord(entry, `documents[${index}]`);
-    return {
-      type: assertOneOf(document['type'], `documents[${index}].type`, ['execution-configs'] as const),
-      documentId: assertNonEmptyString(document['documentId'], `documents[${index}].documentId`),
-      configId: assertNonEmptyString(document['configId'], `documents[${index}].configId`),
-      version: assertInteger(document['version'], `documents[${index}].version`),
-      obj: document['obj'],
-    };
-  });
-  return { groupId: assertNonEmptyString(record['groupId'], 'groupId'), documents };
-}
-
 export function parseListBrokerOrdersQuery(query: unknown): ListBrokerOrdersRequest {
+  const record = assertRecord(query, 'query');
   return {
     accountId: optionalStringParam(query, 'accountId'),
     brokerAccountId: optionalStringParam(query, 'brokerAccountId'),
     symbol: optionalStringParam(query, 'symbol'),
     status: optionalStringParam(query, 'status'),
+    assetClass: assertOptionalOneOf(record['assetClass'] === '' ? undefined : record['assetClass'], 'assetClass', ASSET_CLASSES),
     ...parseTimeWindowPage(query),
   };
 }

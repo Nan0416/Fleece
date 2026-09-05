@@ -6,7 +6,7 @@ P&L falls out of a single brokerage statement. Node 22, TypeScript, PostgreSQL.
 
 ## Shape
 
-An npm-workspaces monorepo, ten packages under `packages/`:
+An npm-workspaces monorepo, nine packages under `packages/`:
 
 | Package | What it is |
 | --- | --- |
@@ -19,11 +19,13 @@ An npm-workspaces monorepo, ten packages under `packages/`:
 | `marketdata` | Polygon client for splits and dividends |
 | `injector` | Turns broker order events into ledger entries |
 | `corporate-actions` | Records the dividends each account is owed |
-| `cli` | The `fleece` binary |
 
-Dependencies point one way: `cli` → `service`/`injector`/`corporate-actions` → `core` →
+Dependencies point one way: `service`/`injector`/`corporate-actions` → `core` →
 `shared`; `injector` → `alpaca`; `broker` → `alpaca`; `corporate-actions` → `marketdata`;
 `client` → `shared`.
+
+There is no CLI. Each runnable package has a `src/main.ts` that reads its configuration
+from the environment and starts; nothing parses arguments.
 
 `broker` has no consumer inside Fleece yet. It is groundwork for porting the execution
 service, and the reason it exists now is that its reservation accounting is the piece
@@ -46,13 +48,18 @@ coordination between the processes; add it to the SQL.**
 ## Running it
 
 ```bash
-npm start                              # the API on :3100 (builds + migrates first)
-npm run start:injector                 # the injector, in another terminal
-npm run cli -- corporate-actions run   # the dividend job, once
+npm start                     # the API on :3100 (builds + migrates first)
+npm run start:injector        # the injector, in another terminal
+npm run corporate-actions     # the dividend job, once
 ```
 
-`start` and `start:injector` rebuild first; skip that with `npm run cli -- serve`.
-Flags need a `--` separator: `npm start -- --port 4000`.
+Each of those builds first and then runs a `dist/main.js`. Node 22 also runs TypeScript
+directly, so `node packages/service/src/main.ts` skips the build — which is the quickest
+way to try a change, and how to run an experiment with values hardcoded in a script.
+
+Everything is configured from the environment; see `dev.md`. There are no command-line
+flags to learn, and `npm run build:all` type-checks every package including `broker`,
+which the default build leaves out because it does not compile yet.
 
 ## Tests
 

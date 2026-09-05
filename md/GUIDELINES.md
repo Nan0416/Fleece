@@ -10,13 +10,18 @@ and most of what follows exists because of that.
 
 1. **One monorepo, nine packages.** `shared` (models, contracts, utilities), `core`
    (the ledger), `service` (the HTTP API), `client` (typed client), `alpaca` (broker),
-   `marketdata` (Polygon), `injector` (broker events in), `corporate-actions` (the
-   dividend job), `cli` (the binary). A package exists when something needs to be
+   `broker` (order placement), `marketdata` (Polygon), `injector` (broker events in),
+   `corporate-actions` (the dividend job). A package exists when something needs to be
    installed separately — `core` is separate from `service` because the injector and
    the dividend job need the ledger without pulling in Express.
-2. **Dependencies point one way**: `cli` → `service`/`injector`/`corporate-actions` →
-   `core` → `shared`; `injector` → `alpaca`; `corporate-actions` → `marketdata`;
-   `client` → `shared`. Nothing imports upward, and `shared` imports nothing of ours.
+1a. **A runnable package has a `src/main.ts` and no arguments.** Configuration comes
+   from the environment, so there is one place a setting can come from rather than two
+   with a precedence rule between them. There is no CLI: Node runs TypeScript directly,
+   so an ad-hoc run is a script with the values in it.
+2. **Dependencies point one way**: `service`/`injector`/`corporate-actions` → `core` →
+   `shared`; `injector` → `alpaca`; `broker` → `alpaca`; `corporate-actions` →
+   `marketdata`; `client` → `shared`. Nothing imports upward, and `shared` imports
+   nothing of ours.
 3. **Every package declares its dev tooling, at the same range as the root.**
    `typescript` is `^5.7.3` everywhere, so npm resolves one copy and the whole repo
    compiles with one compiler. `npm i -D typescript` in one workspace takes `latest`,

@@ -3,7 +3,7 @@ import { createLedgerServices } from '@fleece/core';
 import { ErrorRequestHandler, RequestHandler } from 'express';
 import { Pool } from 'pg';
 import { bearerTokenAuth, corsMiddleware, errorHandler, requestLogger } from '../middleware';
-import { AccountEndpoints, BrokerOrderEndpoints, DividendEndpoints, Endpoints, HealthEndpoints, LedgerEndpoints, OrderGroupEndpoints } from '../routes';
+import { AccountEndpoints, BrokerOrderEndpoints, DividendEndpoints, Endpoints, HealthEndpoints, LedgerEndpoints } from '../routes';
 import { ServiceConfig } from '../stage-config';
 import { serviceVersion } from '../utils/version';
 
@@ -55,8 +55,7 @@ export class DependencyFactory {
       new AccountEndpoints({ accountService: ledger.accountService }),
       new LedgerEndpoints({ ledgerService: ledger.ledgerService }),
       new DividendEndpoints({ dividendService: ledger.dividendService }),
-      new OrderGroupEndpoints({ orderGroupService: ledger.orderGroupService }),
-      new BrokerOrderEndpoints({ brokerOrderService: ledger.brokerOrderService }),
+      new BrokerOrderEndpoints({ brokerOrderService: ledger.brokerOrderService, ledgerService: ledger.ledgerService }),
     ];
 
     return { middleware, endpoints, errorHandler };

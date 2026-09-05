@@ -9,7 +9,7 @@ nvm use                 # reads .nvmrc
 npm install
 createdb fleece_beta
 npm run build
-npm run cli -- migrate  # or just `npm start`, which migrates first
+npm start               # migrates on the way up
 ```
 
 ## Everyday commands
@@ -18,22 +18,38 @@ npm run cli -- migrate  # or just `npm start`, which migrates first
 | --- | --- |
 | `npm start` | Build, migrate, then serve the API on :3100 |
 | `npm run start:injector` | Build, then run the injector |
-| `npm run cli -- <args>` | Run the CLI without rebuilding |
-| `npm run migrate` | Apply pending migrations and exit |
+| `npm run corporate-actions` | Build, then run the dividend job once |
+| `npm run build:all` | Type-check every package, `broker` included |
 | `npm test` | Unit tests; integration suites skip without a database |
 | `npm run lint` / `lint:fix` | ESLint |
 | `npm run format:lint` / `format:fix` | Prettier |
 | `npm run clean` | Remove `dist/` and build info |
 
-Flags need a `--` separator, because npm appends arguments to the end of the script
-string: `npm start -- --port 4000`.
+There are no command-line flags. Every process reads its configuration from the
+environment, so `FLEECE_PORT=4000 npm start` is how you change a port — one place a
+setting can come from, rather than two with a precedence rule between them.
+
+Node 22 runs TypeScript directly, so the build is skippable:
+
+```bash
+node packages/service/src/main.ts           # the API, no build
+node packages/injector/src/main.ts          # the injector, no build
+```
+
+That is also how to run something one-off: write a script with the values in it and run
+it with `node`. `packages/playground/` exists for exactly that and is kept out of the
+build so a half-finished experiment cannot break it.
+
+`npm run build` deliberately leaves out `broker`, which does not compile against the
+ledger redesign yet — see `md/OPEN-ITEMS.md` item 0. `npm run build:all` includes it, so
+the gap is visible rather than forgotten.
 
 ## Running all three processes
 
 ```bash
-npm start                                  # terminal 1: the API
-npm run start:injector                     # terminal 2: the injector
-npm run cli -- corporate-actions run       # terminal 3: the dividend job, once
+npm start                     # terminal 1: the API
+npm run start:injector        # terminal 2: the injector
+npm run corporate-actions     # terminal 3: the dividend job, once
 ```
 
 All three want `FLEECE_DATABASE_URL` pointing at the same database. That is the design,
@@ -52,7 +68,7 @@ importing a package never throws for missing configuration.
 | `FLEECE_DATABASE_URL` | `postgres://localhost:5432/fleece_<stage>` | Where the ledger lives |
 | `FLEECE_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
-### The API (`fleece serve`)
+### The API (`packages/service/src/main.ts`)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -61,7 +77,7 @@ importing a package never throws for missing configuration.
 | `FLEECE_TOKEN` | *(unset)* | Bearer token callers must present. Unset disables authentication, and says so on every start |
 | `FLEECE_CORS_ORIGINS` | `*` | Comma-separated origins. Setting it *replaces* the default rather than adding to it |
 
-### The injector (`fleece injector start`)
+### The injector (`packages/injector/src/main.ts`)
 
 The first broker account uses unsuffixed names; further accounts are numbered from 2,
 so the usual single-account setup needs no numbering.
@@ -76,15 +92,23 @@ so the usual single-account setup needs no numbering.
 | `FLEECE_DEFAULT_PAPER_ACCOUNT_ID` | `0000000001` | Virtual account for unclaimed paper orders |
 | `FLEECE_DEFAULT_LIVE_ACCOUNT_ID` | `0000000002` | Virtual account for unclaimed live orders |
 | `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` | `60000` | How long to wait for a strategy to claim an order before booking it to the default account |
+| `FLEECE_INJECTOR_MIGRATE` | `false` | Apply migrations from the injector. Normally left to the API, which starts first |
 
-Both default accounts must exist before the injector can book anything to them:
+Both default accounts must exist before the injector can book anything to them, and
+nothing creates them — see `md/OPEN-ITEMS.md` item 8. With the API running:
 
 ```bash
-npm run cli -- account create --id 0000000001 --name "Unclaimed Paper" --type paper
-npm run cli -- account create --id 0000000002 --name "Unclaimed Live" --type live
+curl -s -X POST localhost:3100/account -H 'content-type: application/json' \
+  -d '{"accountId":"0000000001","name":"Unclaimed Paper","accountType":"paper"}'
+curl -s -X POST localhost:3100/account -H 'content-type: application/json' \
+  -d '{"accountId":"0000000002","name":"Unclaimed Live","accountType":"live"}'
 ```
 
-### The dividend job (`fleece corporate-actions run`)
+An order that lands in one of these stays there: a broker order's virtual account is
+written once. These accounts are also what "orphan" means — `GET /broker-orders?accountId=0000000001`
+is the list worth watching.
+
+### The dividend job (`packages/corporate-actions/src/main.ts`)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -125,11 +149,18 @@ differs between machines rather than an error.
 2. Add the method to the relevant service in `packages/core/src/services/`.
 3. Parse the request in `packages/service/src/utils/request-parsing.ts`.
 4. Bind the route in `packages/service/src/routes/`.
-5. Add the method to `packages/client/src/fleece-client.ts`.
-6. Add a CLI command in `packages/cli/src/commands/` if a person would want it.
+5. Add the method to `packages/client/src/fleece-client.ts`, reviving the response with
+   the helpers in `packages/shared/src/api/wire.ts`.
 
 Steps 1 and 5 are what keep the client and service from drifting: both compile against
 the same interfaces, so a contract change is a build failure rather than a runtime 400.
+
+**Decimals cross the wire as strings, in both directions.** A JSON number is a double,
+so accepting one would discard exactly the precision the ledger is built to keep — the
+service refuses a number where a decimal is expected and says to send a string instead.
+On the way back, a response therefore does not have the shape its `Response` type
+describes, and no cast can give it one; that is what the revivers are for, and why the
+client has no `as` at its boundary any more.
 
 ## Where the legacy source is
 
