@@ -14,13 +14,9 @@ import { HttpAlpacaRestClient } from '@fleece/alpaca';
 import { LoggerFactory } from '@fleece/shared';
 import { liveAccountInfo, paperAccountInfo } from './credentials';
 
-
 const logger = LoggerFactory.getLogger('CancelOrder');
 
-
-
 async function main(): Promise<void> {
-
   const account = paperAccountInfo ?? liveAccountInfo;
 
   const client = new HttpAlpacaRestClient({
@@ -29,9 +25,7 @@ async function main(): Promise<void> {
     baseUrl: account.restUrl,
   });
 
-  
   await client.cancelOrder({ brokerOrderId: '03ba6bb0-3e62-4508-ad44-9a3d8c1b2f67' });
-  
 }
 
 main().catch((err: unknown) => {

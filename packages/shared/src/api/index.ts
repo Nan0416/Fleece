@@ -6,3 +6,4 @@ export * from './health-api';
 export * from './position-api';
 export * from './profit-api';
 export * from './transaction-api';
+export * from './wire';

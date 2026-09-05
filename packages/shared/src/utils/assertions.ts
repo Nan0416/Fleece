@@ -1,4 +1,5 @@
 import { InvalidRequestError } from '../errors';
+import { Decimal } from './decimal';
 
 /**
  * Runtime assertions for data crossing a trust boundary — HTTP bodies, query
@@ -164,4 +165,37 @@ export function parseOptionalBooleanParam(value: unknown, field: string): boolea
     return false;
   }
   throw new InvalidRequestError(`${field} must be "true" or "false"`);
+}
+
+/**
+ * A decimal arriving from outside — a request body, a query string, a JSON response.
+ *
+ * **It must be a string, and a JSON number is refused.** `JSON.parse` produces a double,
+ * so by the time a number reaches here whatever precision it could not hold is already
+ * gone, and accepting it would let the one thing this system is built to prevent in
+ * through the front door. Refusing costs a caller quotation marks and says so.
+ */
+export function assertDecimal(value: unknown, field: string): Decimal {
+  if (typeof value === 'number') {
+    throw new InvalidRequestError(`${field} must be sent as a string, not a JSON number: a JSON number is a double and loses precision this ledger keeps. Send "${value}".`);
+  }
+  const text = assertNonEmptyString(value, field);
+  try {
+    return Decimal.parse(text, field);
+  } catch {
+    throw new InvalidRequestError(`${field} must be a decimal number in a string, got "${text}".`);
+  }
+}
+
+export function assertOptionalDecimal(value: unknown, field: string): Decimal | undefined {
+  return value === undefined || value === null ? undefined : assertDecimal(value, field);
+}
+
+/** A decimal that must be greater than zero — a price, a size, a ratio. */
+export function assertPositiveDecimal(value: unknown, field: string): Decimal {
+  const decimal = assertDecimal(value, field);
+  if (!decimal.isPositive()) {
+    throw new InvalidRequestError(`${field} must be greater than zero, got ${decimal.toString()}.`);
+  }
+  return decimal;
 }

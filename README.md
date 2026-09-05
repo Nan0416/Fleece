@@ -33,7 +33,7 @@ Three processes, one PostgreSQL database:
 
 ```
                     ┌──────────────────┐
-   Alpaca stream ──▶│  fleece injector │──┐
+   Alpaca stream ──▶│     injector     │──┐
    Alpaca REST   ──▶│                  │  │
                     └──────────────────┘  │
                                           ▼
@@ -42,17 +42,19 @@ Three processes, one PostgreSQL database:
                     └──────────────────┘ └────────────┘
                                           ▲
                     ┌──────────────────┐  │
-   HTTP callers  ──▶│   fleece serve   │──┘
-   fleece CLI    ──▶│                  │
+   HTTP callers  ──▶│     service      │──┘
                     └──────────────────┘
 ```
 
-- **`fleece serve`** answers questions about the ledger and handles account management
-  and transfers.
-- **`fleece injector start`** holds a websocket per broker account and records what the
-  broker reports. It also polls REST for events the stream dropped, because a missing
-  fill is not a gap in a log — it is a position that is silently wrong from then on.
-- **`fleece corporate-actions run`** is a daily job that records dividends.
+Each is a `src/main.ts` that reads its configuration from the environment and starts.
+There is no CLI and nothing parses arguments.
+
+- **`service`** answers questions about the ledger and handles account management and
+  transfers.
+- **`injector`** holds a websocket per broker account and records what the broker
+  reports. It also polls REST for events the stream dropped, because a missing fill is
+  not a gap in a log — it is a position that is silently wrong from then on.
+- **`corporate-actions`** is a daily job that records dividends.
 
 They write concurrently and do not coordinate. Two things make that safe, and both live
 in the database rather than in any process:
@@ -71,9 +73,15 @@ createdb fleece_beta
 npm install
 npm start                    # API on http://127.0.0.1:3100
 
-npm run cli -- account create --name "Momentum" --type paper
-npm run cli -- account list
+curl -s -X POST localhost:3100/account -H 'content-type: application/json' \
+  -d '{"name":"Momentum","accountType":"paper"}'
+curl -s localhost:3100/accounts
 ```
+
+Or use `@fleece/client`, which is typed against the same contracts the service compiles
+against — a caller that compiles is one that will not get a runtime 400. Note that money
+and sizes cross the wire as **strings**, not JSON numbers: a JSON number is a double, and
+sending one would discard the precision this ledger exists to keep.
 
 To record real fills, point the injector at an Alpaca account:
 

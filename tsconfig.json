@@ -13,7 +13,6 @@
     { "path": "./packages/service" },
     { "path": "./packages/injector" },
     { "path": "./packages/corporate-actions" },
-    { "path": "./packages/cli" },
     // Experiment scripts: referenced so editors resolve them, but left out of
     // `npm run build` so a half-finished experiment cannot break the product build.
     { "path": "./packages/playground" }

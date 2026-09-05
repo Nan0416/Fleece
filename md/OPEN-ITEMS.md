@@ -10,33 +10,31 @@ legacy; this records what is still open.
 
 ---
 
-## 0. The read side of the redesign is not ported
+## 0. `@fleece/broker` is not ported
 
-**Severity: none to the numbers — the write path is done and covered. The repository
-does not fully compile.**
+**Severity: none to the numbers — everything with a consumer is done and covered.
+`npm run build` is green; `npm run build:all` is not.**
 
 The schema redesign — exact decimals, total-cost accounting, asset classes, legs, stored
-fill progress, no order groups — has landed through the whole **write path**:
-`@fleece/shared`, `packages/core/migrations/`, `core/src/data`, `core/src/services`,
-`alpaca`, `injector` and `corporate-actions` all compile, and `write-path.test.ts`
-replays recorded Alpaca payloads through the converter, the tracking facade, the ledger
-service and the DAO against a real PostgreSQL.
+fill progress, no order groups — has landed everywhere except `broker`. The write path
+(`shared`, `core`, `alpaca`, `injector`, `corporate-actions`) and the read path
+(`service`, `client`) all compile and are covered end to end.
 
-What remains is the read side, plus the broker:
+The CLI was deleted rather than ported. Each runnable package now has a `src/main.ts`
+that reads its configuration from the environment; Node 22 runs TypeScript directly, so
+an ad-hoc run is a script with the values in it. Nothing was lost but argument parsing.
 
-| Package | What has to change |
-| --- | --- |
-| `service`, `client`, `cli` | Order-group routes and commands are gone; decimals cross the wire as **strings** and need parsing in at the trust boundary and reviving out in the client |
-| `broker` | Reservations still compute in doubles against a `roundPrice` that no longer exists — and see item 2b, which is a design problem rather than a port |
+**`broker` is left deliberately, and must not be ported by translating its arithmetic.**
+Its reservations are wrong for options by a factor of 100 (item 2b), so converting them
+to `Decimal` first would produce a package that looks converted while still being wrong.
+It is excluded from `npm run build` for that reason and included in `npm run build:all`,
+so the gap is visible rather than forgotten.
 
-The wire format is the one thing here that is a decision rather than a translation:
-`Decimal.toJSON()` emits a string, because a JSON number is a double and would undo the
-whole change at the process boundary. `service` parses incoming strings and `client`
-revives outgoing ones; neither is written yet.
-
-**Do not port `broker` by translating its arithmetic.** Its reservations are wrong for
-options by a factor of 100, and making them `Decimal` first would produce a package that
-looks converted while still being wrong — see item 2b.
+**The wire format** was the one decision rather than a translation, and it is settled:
+decimals cross as **strings** in both directions. The service refuses a JSON number where
+a decimal is expected and says to send a string; the client revives responses field by
+field with `packages/shared/src/api/wire.ts`, which retired the sanctioned `as` that
+guideline 18 used to allow at that boundary.
 
 ---
 

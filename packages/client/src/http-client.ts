@@ -41,8 +41,12 @@ function toAppError(status: number, message: string, errorCode: ErrorCode | unde
 
 /**
  * Thin wrapper over `fetch` that rebuilds the service's typed errors on the caller's
- * side, so `catch (err) { if (err instanceof NotFoundError) ... }` works the same in
- * the CLI as it does inside the service.
+ * side, so `catch (err) { if (err instanceof NotFoundError) ... }` works the same for a
+ * caller as it does inside the service.
+ *
+ * It returns `unknown`. Deciding what a response *is* belongs to `FleeceClient`, which
+ * has the revivers; a generic here could only promise a shape rather than establish one,
+ * and for decimals it would be promising something untrue.
  */
 export class HttpClient {
   private readonly baseUrl: string;
@@ -55,7 +59,7 @@ export class HttpClient {
     this.timeoutMs = props.timeoutMs ?? 10_000;
   }
 
-  async request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, options: { query?: Query; body?: unknown } = {}): Promise<T> {
+  async request(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, options: { query?: Query; body?: unknown } = {}): Promise<unknown> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) {
@@ -106,7 +110,11 @@ export class HttpClient {
       throw toAppError(response.status, message, this.toErrorCode(errorCode));
     }
 
-    return this.narrow<T>(payload);
+    // Returned raw. A response carries decimals as strings — a JSON number is a double
+    // and would lose the precision the ledger keeps — so the payload does not have the
+    // shape a `Response` type describes, and no cast can give it one. `FleeceClient`
+    // revives it field by field with the helpers in `@fleece/shared`.
+    return payload;
   }
 
   private parseJson(text: string, method: string, path: string): unknown {
@@ -115,16 +123,6 @@ export class HttpClient {
     } catch {
       throw new InternalServiceError(`${method} ${path} returned a response that is not JSON.`);
     }
-  }
-
-  /**
-   * The response shape is the API contract; the service is the only writer and both
-   * sides compile against the same interfaces, so this is the single narrowing point
-   * rather than re-validating every field on arrival.
-   */
-  private narrow<T>(payload: unknown): T {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one sanctioned cast: this is the client/server type boundary.
-    return payload as T;
   }
 
   private toErrorCode(value: string | undefined): ErrorCode | undefined {
