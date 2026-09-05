@@ -61,9 +61,9 @@ directly, so `node packages/service/src/main.ts` skips the build — which is th
 way to try a change, and how to run an experiment with values hardcoded in a script.
 
 Everything is configured from the environment; see `dev.md`. There are no command-line
-flags to learn. `npm run build:all` type-checks every package, `playground`'s experiment
-scripts included, which the default build leaves out so a half-finished experiment cannot
-break it.
+flags to learn. `npm run build:all` additionally type-checks `packages/playground`, which
+the default build and CI both leave out — its scripts import a gitignored `credentials.ts`
+holding real broker keys, so it compiles on a laptop and nowhere else.
 
 ## Tests
 

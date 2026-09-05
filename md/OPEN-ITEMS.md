@@ -287,12 +287,11 @@ rather than incidental:
   none of the locking, idempotency or client round-trip behaviour would otherwise be
   indistinguishable from a green one. `scripts/assert-suites-ran.js` reads the JSON jest
   already writes and fails when any suite ran nothing.
-- **`build:all` runs after the tests.** `npm run build` covers every package with a
-  consumer; this covers the ones with none, so a package cannot rot unnoticed for want of
-  an importer. `@fleece/broker` used to have a job of its own, allowed to fail, because it
-  did not compile against the redesign. It compiles now and is folded back into `check` —
-  a permanently red check is one people learn to ignore, and a green one that runs
-  nothing is worse.
+- **`@fleece/broker` is in the main job.** It used to have one of its own, allowed to
+  fail, because it did not compile against the redesign. It compiles now and is folded
+  back in — a permanently red check is one people learn to ignore. `npm run build:all` is
+  *not* run here and cannot be: it type-checks `playground` too, whose scripts import a
+  gitignored `credentials.ts` holding real broker keys. It is a laptop command.
 
 ---
 

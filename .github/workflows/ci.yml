@@ -68,8 +68,3 @@ jobs:
         if: always()
         run: node scripts/assert-suites-ran.js jest-results.json
 
-      # `npm run build` covers every package with a consumer. This covers the two that
-      # have none — `playground`'s experiment scripts and anything else referenced only
-      # by the solution file — so a package cannot rot unnoticed for want of an importer.
-      - name: Type-check every package
-        run: npm run build:all
