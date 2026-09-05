@@ -76,6 +76,14 @@ export function isTerminalStatus(status: string): boolean {
  * - `default` — nobody claimed it. Booked to the catch-all account so the ledger still
  *   reconciles against the brokerage statement, because the shares moved whether or not
  *   a strategy asked for them. **This is an orphan**, and it is the set worth watching.
+ *
+ * **Whichever answered is final.** An order's account and attribution are written once
+ * and never changed — not even to move one off the catch-all account once something
+ * later identifies it. Everything the order writes is keyed by the account it was booked
+ * to, so moving the order alone strands its transactions, its position, its realised
+ * profit and its fill-progress counter, and the next cumulative report then books the
+ * whole fill again under the new account. Correcting a genuinely mis-booked order means
+ * transferring the *position*, which moves the cost basis and leaves an audit trail.
  */
 export type BrokerOrderAttribution = 'correlation' | 'parent' | 'tracking' | 'internal' | 'default';
 

@@ -92,9 +92,11 @@ the injector's existing `existing?.accountId` lookup resolves it with no new cod
 the in-memory `associations` map disappears, and item 5 below goes away too. The cost is
 a row for an order the broker might reject, sitting visibly at `pending_new`.
 
-The redesign already supplies the other half: `claimBrokerOrder` is
-`UPDATE ... WHERE attribution = 'default'`, so a late tracking request can move an order
-off the catch-all account but can never move one that is already attributed.
+Note what the pre-created row must *not* become: a way to move an order between
+accounts later. An order's account is written once, because everything it produces is
+keyed by it — see the note on `broker_order` in `001_initial.sql`. The value of
+pre-creating the row is that the order is attributed *before* any fill is booked, which
+is the only moment attribution is free.
 
 ---
 

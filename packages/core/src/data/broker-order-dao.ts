@@ -30,11 +30,18 @@ import {
  * the row existed, and one of the two inserts would fail on the primary key.
  *
  * **What an existing row keeps.** `accountId`, `attribution`, `symbol` and everything
- * else describing what the order *is* are written once and never overwritten: an order's
- * account does not change, and a later report claiming otherwise is a bug upstream
- * rather than a correction. Only what a broker legitimately revises — the status, the
- * filled quantity and price, the fill time — is updated. Claiming an order that was
- * booked to the catch-all account is `claimBrokerOrder`, which is guarded in SQL.
+ * else describing what the order *is* are written once and never overwritten. Only what
+ * a broker legitimately revises — the status, the filled quantity and price, the fill
+ * time — is updated.
+ *
+ * **There is no way to change an order's account, and that is the point.** Every
+ * `ledger_transaction`, `position`, `profit` row and `order_fill_progress` counter the
+ * order produced is keyed by the account it was booked to. Moving the order alone leaves
+ * all of them behind and makes the next cumulative report read a counter that does not
+ * exist, which books the whole fill a second time under the new account. The legacy
+ * refused to move one for the same reason, logging a fatal-error metric instead. To
+ * correct a mis-booked orphan, move the *position* with `transferPosition`, which is
+ * double-entry and leaves an audit trail on both sides.
  */
 export interface UpsertBrokerOrderInput {
   readonly brokerOrderId: string;
@@ -114,25 +121,6 @@ export interface ListOrphanBrokerOrdersOutput {
   readonly brokerOrders: ReadonlyArray<BrokerOrder>;
 }
 
-/**
- * Moves an order off the catch-all account, and only off the catch-all account.
- *
- * `UPDATE ... WHERE attribution = 'default'` rather than a read followed by a write, so
- * a claim that arrives after the order has already been attributed cannot move it. That
- * guard is the reason this exists as its own method: a read-then-write would lose the
- * race, and losing it means a fill counted against the wrong strategy.
- */
-export interface ClaimBrokerOrderInput {
-  readonly brokerOrderId: string;
-  readonly accountId: string;
-  readonly attribution: BrokerOrderAttribution;
-}
-
-export interface ClaimBrokerOrderOutput {
-  /** Null when there is no such order, or when it was already attributed to somebody. */
-  readonly brokerOrder: BrokerOrder | null;
-}
-
 export interface DeleteBrokerOrderInput {
   readonly brokerOrderId: string;
 }
@@ -162,7 +150,6 @@ export interface BrokerOrderDao {
   listBrokerOrders(input: ListBrokerOrdersInput): Promise<ListBrokerOrdersOutput>;
   listBrokerOrderLegs(input: ListBrokerOrderLegsInput): Promise<ListBrokerOrderLegsOutput>;
   listOrphanBrokerOrders(input: ListOrphanBrokerOrdersInput): Promise<ListOrphanBrokerOrdersOutput>;
-  claimBrokerOrder(input: ClaimBrokerOrderInput): Promise<ClaimBrokerOrderOutput>;
   /** Records go with it, by foreign key cascade. Legs do not: they are orders in their own right. */
   deleteBrokerOrder(input: DeleteBrokerOrderInput): Promise<DeleteBrokerOrderOutput>;
   insertRecord(input: InsertBrokerOrderRecordInput): Promise<InsertBrokerOrderRecordOutput>;
