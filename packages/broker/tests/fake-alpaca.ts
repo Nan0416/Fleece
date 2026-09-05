@@ -22,7 +22,7 @@ import {
   ListPositionsOutput,
   OrderEventHandler,
 } from '@fleece/alpaca';
-import { TrackBrokerOrdersRequest } from '@fleece/shared';
+import { TrackBrokerOrdersRequest, TrackBrokerOrdersResponse } from '@fleece/shared';
 import { OrderTrackingClient } from '../src/l2/order-tracking-client';
 
 export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
@@ -256,13 +256,14 @@ export class RecordingOrderTrackingClient implements OrderTrackingClient {
   readonly requests: TrackBrokerOrdersRequest[] = [];
   failNext?: Error;
 
-  async trackBrokerOrders(request: TrackBrokerOrdersRequest): Promise<void> {
+  async trackBrokerOrders(request: TrackBrokerOrdersRequest): Promise<TrackBrokerOrdersResponse> {
     if (this.failNext !== undefined) {
       const err = this.failNext;
       this.failNext = undefined;
       throw err;
     }
     this.requests.push(request);
+    return {};
   }
 }
 
