@@ -1,9 +1,10 @@
 import {
-  BrokerAssetClass,
+  AssetClass,
   BrokerOrderClass,
   BrokerOrderEvent,
   BrokerOrderSide,
   BrokerPositionIntent,
+  Decimal,
   InternalServiceError,
   LimitBrokerOrderEvent,
   MarketBrokerOrderEvent,
@@ -34,8 +35,8 @@ import { AlpacaAccountIdentifier, AlpacaOrder } from './models';
  * produce is a container. A bracket's parent is itself a real order in a real symbol.
  * The cost of dropping it is the spread's net limit price, which lives nowhere else.
  *
- * **Every leg inherits the parent's correlation**, so a leg is booked to the account,
- * group and reservation encoded in the parent's client order id. Alpaca assigns legs
+ * **Every leg inherits the parent's correlation**, so a leg is booked to the account
+ * and reservation encoded in the parent's client order id. Alpaca assigns legs
  * client order ids of its own, so there is nothing else to attribute them from. For a
  * spread this is exactly right — the legs are the spread and cannot be traded apart
  * from it. For a bracket or an OTO it is a judgement rather than a fact, and it
@@ -102,9 +103,11 @@ function convert(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlati
 }
 
 function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, correlation: AlpacaOrderCorrelation, parentBrokerOrderId?: string): MarketBrokerOrderEvent {
-  const absoluteQty = strictParseFloat(order.qty, `order ${order.id} qty`);
-  const absoluteFilledQty = strictParseFloat(order.filled_qty, `order ${order.id} filled_qty`);
-  const { side, sign } = toDirection(order);
+  const { side, sell } = toDirection(order);
+  // Alpaca reports a magnitude plus a side; the accounting works in signed sizes.
+  const signed = (value: Decimal): Decimal => (sell ? value.neg() : value);
+  const absoluteQty = strictParseDecimal(order.qty, `order ${order.id} qty`);
+  const absoluteFilledQty = strictParseDecimal(order.filled_qty, `order ${order.id} filled_qty`);
 
   return {
     orderType: 'market',
@@ -115,7 +118,6 @@ function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, cor
     parentBrokerOrderId,
     correlationId: order.client_order_id,
     accountId: correlation.virtualAccountId,
-    groupId: correlation.groupId,
     reservationId: correlation.reservationId,
 
     replacedBy: order.replaced_by === null ? undefined : order.replaced_by,
@@ -131,13 +133,13 @@ function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, cor
 
     side,
     positionIntent: toPositionIntent(order),
-    ratioQty: order.ratio_qty === undefined || order.ratio_qty === null ? undefined : strictParseFloat(order.ratio_qty, `order ${order.id} ratio_qty`),
+    ratioQty: order.ratio_qty === undefined || order.ratio_qty === null ? undefined : strictParseDecimal(order.ratio_qty, `order ${order.id} ratio_qty`),
     extendedHours: order.extended_hours,
     limitPrice: undefined,
     stopPrice: undefined,
-    qty: sign * absoluteQty,
-    filledQty: sign * absoluteFilledQty,
-    filledAvgPrice: order.filled_avg_price === null ? undefined : strictParseFloat(order.filled_avg_price, `order ${order.id} filled_avg_price`),
+    qty: signed(absoluteQty),
+    filledQty: signed(absoluteFilledQty),
+    filledAvgPrice: order.filled_avg_price === null ? undefined : strictParseDecimal(order.filled_avg_price, `order ${order.id} filled_avg_price`),
 
     createdAt: strictParseDate(order.created_at, `order ${order.id} created_at`),
     updatedAt: strictParseDate(order.updated_at, `order ${order.id} updated_at`),
@@ -182,8 +184,8 @@ function toStopLimitEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, 
 interface OrderDirection {
   /** Undefined for a spread, which has no direction of its own. */
   readonly side: BrokerOrderSide | undefined;
-  /** What turns Alpaca's magnitude into a signed size. 1 where there is no direction. */
-  readonly sign: number;
+  /** Whether to negate Alpaca's magnitude. False where there is no direction. */
+  readonly sell: boolean;
 }
 
 /**
@@ -197,15 +199,15 @@ interface OrderDirection {
  */
 function toDirection(order: AlpacaOrder): OrderDirection {
   if (isMultiLegParent(order)) {
-    return { side: undefined, sign: 1 };
+    return { side: undefined, sell: false };
   }
   if (order.side !== 'buy' && order.side !== 'sell') {
     throw new InternalServiceError(`Alpaca order ${order.id} has side "${order.side}" and is not a multi-leg parent, so its direction cannot be established.`);
   }
-  return { side: order.side, sign: order.side === 'buy' ? 1 : -1 };
+  return { side: order.side, sell: order.side === 'sell' };
 }
 
-function toAssetClass(order: AlpacaOrder): BrokerAssetClass {
+function toAssetClass(order: AlpacaOrder): AssetClass {
   switch (order.asset_class) {
     case 'us_equity':
       return 'equity';
@@ -233,19 +235,26 @@ function toPositionIntent(order: AlpacaOrder): BrokerPositionIntent | undefined 
   return order.position_intent === undefined || order.position_intent === '' ? undefined : order.position_intent;
 }
 
-function strictParseFloat(value: string, field: string): number {
-  const parsed = Number(value);
-  if (Number.isNaN(parsed)) {
+/**
+ * Alpaca sends every quantity and price as a **string**, and this is where they become
+ * numbers. Parsing straight into `Decimal` rather than through `Number` is not a
+ * translation of the old behaviour but a strict improvement on it: a decimal string
+ * converts to a decimal exactly, where converting it to a double loses whatever the
+ * double cannot represent — before the ledger ever sees it.
+ */
+function strictParseDecimal(value: string, field: string): Decimal {
+  try {
+    return Decimal.of(value);
+  } catch {
     throw new InternalServiceError(`Alpaca sent "${value}" for ${field}, which is not a number.`);
   }
-  return parsed;
 }
 
-function requirePrice(value: string | null, field: string): number {
+function requirePrice(value: string | null, field: string): Decimal {
   if (value === null) {
     throw new InternalServiceError(`Alpaca sent no ${field}, but the order type requires one.`);
   }
-  return strictParseFloat(value, field);
+  return strictParseDecimal(value, field);
 }
 
 function strictParseDate(value: string, field: string): number {

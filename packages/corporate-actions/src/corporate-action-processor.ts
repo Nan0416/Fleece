@@ -1,7 +1,7 @@
 import { DividendService, LedgerService } from '@fleece/core';
 import { AccountService } from '@fleece/core';
 import { MarketDataClient } from '@fleece/marketdata';
-import { easternDate, LoggerFactory, shiftIsoDate } from '@fleece/shared';
+import { easternDate, LoggerFactory, shiftIsoDate, Decimal } from '@fleece/shared';
 
 const logger = LoggerFactory.getLogger('CorporateActionProcessor');
 
@@ -29,7 +29,7 @@ interface DateWindow {
 /** The position an account held at the close of a given trading day. */
 interface DailyClosePosition {
   readonly date: string;
-  readonly size: number;
+  readonly size: Decimal;
 }
 
 export interface CorporateActionProcessorProps {
@@ -119,7 +119,7 @@ export class CorporateActionProcessor {
        */
       const holding = lastPositionBefore(history, dividend.exDividendDate);
 
-      if (holding === undefined || holding.size === 0) {
+      if (holding === undefined || holding.size.isZero()) {
         continue;
       }
 
@@ -127,7 +127,10 @@ export class CorporateActionProcessor {
         accountId,
         symbol,
         size: holding.size,
-        amountPerShare: dividend.cashAmount,
+        // Polygon sends this inside a JSON body, so it reaches us as a double and the
+        // precision was decided before we saw it. Converting here does not recover
+        // anything, it stops anything further downstream from compounding it.
+        amountPerShare: Decimal.of(dividend.cashAmount),
         declarationDate: dividend.declarationDate,
         exDividendDate: dividend.exDividendDate,
         recordDate: dividend.recordDate,

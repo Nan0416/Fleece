@@ -1,4 +1,4 @@
-import { Dividend } from '@fleece/shared';
+import { Decimal, Dividend } from '@fleece/shared';
 
 export interface DividendIdentifier {
   readonly accountId: string;
@@ -29,8 +29,8 @@ export interface UpsertDividendInput {
   readonly accountId: string;
   readonly symbol: string;
   readonly exDividendDate: string;
-  readonly size: number;
-  readonly amountPerShare: number;
+  readonly size: Decimal;
+  readonly amountPerShare: Decimal;
   readonly declarationDate: string;
   readonly recordDate: string;
   readonly payDate: string;

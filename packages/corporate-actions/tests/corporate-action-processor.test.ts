@@ -48,7 +48,7 @@ describe('CorporateActionProcessor', () => {
       await processor.process({ referenceDate: REFERENCE_DATE });
 
       expect(dividends.recorded).toHaveLength(1);
-      expect(dividends.recorded[0].size).toBe(200);
+      expect(dividends.recorded[0].size.toString()).toBe('200');
     });
 
     it('uses the last close of that day when the position moved several times', async () => {
@@ -63,7 +63,7 @@ describe('CorporateActionProcessor', () => {
 
       await processor.process({ referenceDate: REFERENCE_DATE });
 
-      expect(dividends.recorded[0].size).toBe(300);
+      expect(dividends.recorded[0].size.toString()).toBe('300');
     });
 
     it('records nothing when the position was flat going into the ex-dividend date', async () => {
@@ -99,7 +99,7 @@ describe('CorporateActionProcessor', () => {
 
       await processor.process({ referenceDate: REFERENCE_DATE });
 
-      expect(dividends.recorded[0].size).toBe(-50);
+      expect(dividends.recorded[0].size.toString()).toBe('-50');
     });
   });
 
@@ -148,7 +148,7 @@ describe('CorporateActionProcessor', () => {
 
       await processor.process({ referenceDate: REFERENCE_DATE });
 
-      expect(dividends.recorded[0].size).toBe(100);
+      expect(dividends.recorded[0].size.toString()).toBe('100');
     });
 
     it('covers every account', async () => {

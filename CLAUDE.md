@@ -76,5 +76,5 @@ logging, failure handling, testing and style — each rule with the reasoning be
 - [dev.md](./dev.md) — setup, every environment variable, everyday commands
 - [md/PORTING.md](./md/PORTING.md) — what changed from the legacy service, and why
 - [md/OPEN-ITEMS.md](./md/OPEN-ITEMS.md) — decisions still open, and what to know before
-  trusting this with money. **Read item 1 and 2 before relying on leg attribution or
-  deleting an order group, and item 2b before placing an option through `broker`.**
+  trusting this with money. **Read item 1 before relying on leg attribution, and item 2b
+  before placing an option through `broker`.**

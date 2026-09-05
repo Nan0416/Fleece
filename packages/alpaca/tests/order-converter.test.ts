@@ -17,33 +17,42 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
   describe('signing quantities', () => {
     it('leaves a buy positive', () => {
       const event = convertOne(alpacaOrder({ side: 'buy', qty: '10', filled_qty: '4' }));
-      expect(event.qty).toBe(10);
-      expect(event.filledQty).toBe(4);
+      expect(event.qty.toString()).toBe('10');
+      expect(event.filledQty.toString()).toBe('4');
     });
 
     it('makes a sell negative, because Alpaca reports magnitude and side separately', () => {
       const event = convertOne(alpacaOrder({ side: 'sell', qty: '10', filled_qty: '4' }));
-      expect(event.qty).toBe(-10);
-      expect(event.filledQty).toBe(-4);
+      expect(event.qty.toString()).toBe('-10');
+      expect(event.filledQty.toString()).toBe('-4');
     });
 
     it('leaves the fill price unsigned', () => {
       const event = convertOne(alpacaOrder({ side: 'sell', filled_qty: '4', filled_avg_price: '150.25' }));
-      expect(event.filledAvgPrice).toBe(150.25);
+      expect(event.filledAvgPrice?.toString()).toBe('150.25');
     });
   });
 
   describe('correlation', () => {
     it('attributes the order to the account encoded in the client order id', () => {
-      const event = convertOne(alpacaOrder({ client_order_id: '_c@a:MOMENTUM01;g:group-1' }));
+      const event = convertOne(alpacaOrder({ client_order_id: '_c@a:MOMENTUM01;r:res-1' }));
       expect(event.accountId).toBe('MOMENTUM01');
-      expect(event.groupId).toBe('group-1');
+      expect(event.reservationId).toBe('res-1');
+    });
+
+    it('still reads the account out of an id written before order groups were removed', () => {
+      // A `g:` segment is no longer written, but one may still be sitting on a working
+      // order at the broker. Skipping an unrecognised segment rather than refusing the
+      // whole id is the difference between attributing that order and orphaning it.
+      const event = convertOne(alpacaOrder({ client_order_id: '_c@a:MOMENTUM01;r:res-1;g:group-1' }));
+      expect(event.accountId).toBe('MOMENTUM01');
+      expect(event.reservationId).toBe('res-1');
     });
 
     it('leaves an externally placed order unattributed rather than guessing', () => {
       const event = convertOne(alpacaOrder({ client_order_id: 'some-uuid-alpaca-made-up' }));
       expect(event.accountId).toBeUndefined();
-      expect(event.groupId).toBeUndefined();
+      expect(event.reservationId).toBeUndefined();
     });
   });
 
@@ -51,14 +60,14 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
     it('carries the limit price on a limit order', () => {
       const event = convertOne(alpacaOrder({ order_type: 'limit', limit_price: '148.50' }));
       expect(event.orderType).toBe('limit');
-      expect(event.limitPrice).toBe(148.5);
+      expect(event.limitPrice?.toString()).toBe('148.5');
       expect(event.stopPrice).toBeUndefined();
     });
 
     it('carries both prices on a stop-limit order', () => {
       const event = convertOne(alpacaOrder({ order_type: 'stop_limit', limit_price: '148.50', stop_price: '150.00' }));
-      expect(event.limitPrice).toBe(148.5);
-      expect(event.stopPrice).toBe(150);
+      expect(event.limitPrice?.toString()).toBe('148.5');
+      expect(event.stopPrice?.toString()).toBe('150');
     });
 
     it('rejects a limit order with no limit price rather than silently dropping it', () => {
@@ -91,7 +100,7 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
       const events = convertAlpacaOrderToBrokerOrderEvents(alpacaOrder({ id: 'parent-1', order_class: 'oto', legs: [leg] }), account);
 
       expect(events.map((event) => event.id)).toEqual(['parent-1', 'leg-1']);
-      expect(events[1].qty).toBe(-10);
+      expect(events[1].qty.toString()).toBe('-10');
     });
 
     it('names the parent on each leg, which is all that ties them together once flat', () => {
@@ -106,9 +115,9 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
       // Alpaca assigns each leg a client order id of its own, so there is nothing else
       // to attribute one from.
       const leg = alpacaOrder({ id: 'leg-1', client_order_id: 'alpaca-made-this-up', order_type: 'limit', limit_price: '160' });
-      const events = convertAlpacaOrderToBrokerOrderEvents(alpacaOrder({ client_order_id: '_c@a:MOMENTUM01;g:group-1;r:res-1', order_class: 'oto', legs: [leg] }), account);
+      const events = convertAlpacaOrderToBrokerOrderEvents(alpacaOrder({ client_order_id: '_c@a:MOMENTUM01;r:res-1', order_class: 'oto', legs: [leg] }), account);
 
-      expect(events[1]).toMatchObject({ accountId: 'MOMENTUM01', groupId: 'group-1', reservationId: 'res-1' });
+      expect(events[1]).toMatchObject({ accountId: 'MOMENTUM01', reservationId: 'res-1', parentBrokerOrderId: 'alpaca-order-1' });
     });
 
     it('keeps a plain order a single event', () => {
@@ -148,8 +157,10 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
 
     it('signs each leg from its own side, which is where the direction actually lives', () => {
       const [short, long] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
-      expect(short).toMatchObject({ symbol: 'AMZN261016C00280000', qty: -1, filledQty: -1, filledAvgPrice: 3.85, side: 'sell' });
-      expect(long).toMatchObject({ symbol: 'AMZN261016C00285000', qty: 1, filledQty: 1, filledAvgPrice: 2.95, side: 'buy' });
+      expect(short).toMatchObject({ symbol: 'AMZN261016C00280000', side: 'sell' });
+      expect([short.qty.toString(), short.filledQty.toString(), short.filledAvgPrice?.toString()]).toEqual(['-1', '-1', '3.85']);
+      expect(long).toMatchObject({ symbol: 'AMZN261016C00285000', side: 'buy' });
+      expect([long.qty.toString(), long.filledQty.toString(), long.filledAvgPrice?.toString()]).toEqual(['1', '1', '2.95']);
     });
 
     it('accepts a leg that carries no price, because the spread was priced as a package', () => {
@@ -167,13 +178,13 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
     it('carries the position intent and ratio each leg reports', () => {
       const [short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
       expect(short.positionIntent).toBe('sell_to_open');
-      expect(short.ratioQty).toBe(1);
+      expect(short.ratioQty?.toString()).toBe('1');
     });
 
     it('gives the legs the parent correlation, which is the only place a spread carries one', () => {
-      const [short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder({ client_order_id: '_c@a:MOMENTUM01;g:group-1' }), account);
+      const [short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder({ client_order_id: '_c@a:MOMENTUM01;r:res-1' }), account);
       expect(short.accountId).toBe('MOMENTUM01');
-      expect(short.groupId).toBe('group-1');
+      expect(short.reservationId).toBe('res-1');
     });
 
     it('refuses an ordinary order with no side rather than treating it as a sell', () => {

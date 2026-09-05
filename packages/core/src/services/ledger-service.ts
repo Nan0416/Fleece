@@ -1,5 +1,10 @@
 import {
   Account,
+  AssetClass,
+  Decimal,
+  defaultContractMultiplier,
+  GetOrderFillProgressRequest,
+  GetOrderFillProgressResponse,
   GetPositionRequest,
   GetPositionResponse,
   GetProfitRequest,
@@ -30,15 +35,26 @@ import { LedgerDao } from '../data/ledger-dao';
 
 const logger = LoggerFactory.getLogger('LedgerService');
 
-/** One fill to apply, with the resulting position left to the ledger to work out. */
+/**
+ * One fill to apply, with the resulting position left to the ledger to work out.
+ *
+ * **Sizes and costs are in ledger units**: a size counts the instrument's own units —
+ * contracts for an option — and the cost is dollars. A caller holding a broker's quoted
+ * premium multiplies it out before it gets here, because the caller is what knows the
+ * contract multiplier. `multiplier` travels alongside so the row can record what was
+ * used, not so anything here can apply it.
+ */
 export interface ApplyFillRequest {
   /** The broker order the fill belongs to. Several fills may share one. */
   readonly referenceId: string;
   readonly accountId: string;
   readonly symbol: string;
+  readonly assetClass: AssetClass;
+  readonly multiplier: Decimal;
   /** Negative means sell. */
-  readonly transactionSize: number;
-  readonly transactionUnitCost: number;
+  readonly transactionSize: Decimal;
+  /** Dollars this fill moved, signed the same way as `transactionSize`. */
+  readonly transactionTotalCost: Decimal;
   readonly timestamp: number;
 }
 
@@ -54,8 +70,11 @@ export interface ApplyCumulativeFillRequest {
   readonly referenceId: string;
   readonly accountId: string;
   readonly symbol: string;
-  readonly cumulativeFilledSize: number;
-  readonly cumulativeFilledAvgPrice: number;
+  readonly assetClass: AssetClass;
+  readonly multiplier: Decimal;
+  readonly cumulativeFilledSize: Decimal;
+  /** Dollars that whole cumulative fill has moved, signed the same way. */
+  readonly cumulativeFilledTotalCost: Decimal;
   readonly timestamp: number;
 }
 
@@ -73,11 +92,13 @@ export interface AppendTransactionRequest {
   readonly referenceId: string;
   readonly accountId: string;
   readonly symbol: string;
-  readonly transactionSize: number;
-  readonly transactionUnitCost: number;
-  readonly transactionProfit?: number;
-  readonly positionSize: number;
-  readonly positionUnitCost: number;
+  readonly assetClass: AssetClass;
+  readonly multiplier: Decimal;
+  readonly transactionSize: Decimal;
+  readonly transactionTotalCost: Decimal;
+  readonly transactionProfit?: Decimal;
+  readonly positionSize: Decimal;
+  readonly positionTotalCost: Decimal;
   readonly timestamp: number;
 }
 
@@ -100,7 +121,7 @@ export class LedgerService {
 
   async listPositions(request: ListPositionsRequest): Promise<ListPositionsResponse> {
     await this.requireAccount(request.accountId);
-    return await this.ledgerDao.listPositions({ accountId: request.accountId, includeClosed: request.includeClosed ?? false });
+    return await this.ledgerDao.listPositions({ accountId: request.accountId, includeClosed: request.includeClosed ?? false, assetClass: request.assetClass });
   }
 
   async getPosition(request: GetPositionRequest): Promise<GetPositionResponse> {
@@ -141,18 +162,42 @@ export class LedgerService {
   }
 
   /**
-   * A split changes the share count and the cost basis but not the value of the
-   * holding, so no transaction is written and no profit is realised.
+   * What the ledger has booked against one broker order, and whether the stored counter
+   * still agrees with the transactions it counts.
+   *
+   * The agreement used to be free: the applied total was summed from the log on every
+   * fill, so the two could not disagree. Storing it made the write path cheaper and made
+   * drift possible, so the check has to be asked for — and this is where it is asked.
+   */
+  async getOrderFillProgress(request: GetOrderFillProgressRequest): Promise<GetOrderFillProgressResponse> {
+    const [{ progress }, { discrepancies }] = await Promise.all([
+      this.ledgerDao.getOrderFillProgress({ referenceId: request.referenceId }),
+      this.ledgerDao.reconcileOrderFillProgress({ referenceId: request.referenceId }),
+    ]);
+    if (discrepancies.length > 0) {
+      for (const discrepancy of discrepancies) {
+        logger.error(
+          `Fill progress for broker order ${discrepancy.referenceId} in account ${discrepancy.accountId} says ${discrepancy.storedSize.toString()} ${discrepancy.symbol} at ${discrepancy.storedTotalCost.toString()}, but its transactions total ${discrepancy.summedSize.toString()} at ${discrepancy.summedTotalCost.toString()}. The transactions are the record; the counter is not.`,
+        );
+      }
+    }
+    return { progress, reconciled: discrepancies.length === 0 };
+  }
+
+  /**
+   * A split changes how many units a position is counted in. It does not change what
+   * was paid for it, so the stored total cost is left alone, no transaction is written
+   * and no profit is realised.
    *
    * Not idempotent: running it twice splits twice. The corporate-action job leaves
    * splits alone for exactly this reason, and they are applied deliberately.
    */
   async stockSplit(request: StockSplitRequest): Promise<StockSplitResponse> {
-    if (!(request.ratio > 0)) {
-      throw new InvalidRequestError(`Split ratio must be greater than zero, got ${request.ratio}.`);
+    if (!request.ratio.isPositive()) {
+      throw new InvalidRequestError(`Split ratio must be greater than zero, got ${request.ratio.toString()}.`);
     }
     await this.requireAccount(request.accountId);
-    logger.info(`Applying a ${request.ratio}-for-1 split to ${request.symbol} in account ${request.accountId}.`);
+    logger.info(`Applying a ${request.ratio.toString()}-for-1 split to ${request.symbol} in account ${request.accountId}.`);
     const { position } = await this.ledgerDao.applyStockSplit(request);
     if (position === null) {
       logger.info(`Account ${request.accountId} has never held ${request.symbol}; nothing to split.`);
@@ -165,7 +210,7 @@ export class LedgerService {
     await this.requireAccount(request.accountId);
     const { transaction } = await this.ledgerDao.applyFill(request);
     logger.info(
-      `Applied ${request.transactionSize} ${request.symbol} at ${request.transactionUnitCost} to account ${request.accountId}: position now ${transaction.cumulativeSize} at ${transaction.cumulativeAvgPrice}, realised ${transaction.profit ?? 'nothing'}.`,
+      `Applied ${transaction.size.toString()} ${request.symbol} for ${transaction.totalCost.toString()} to account ${request.accountId}: position now ${transaction.cumulativeSize.toString()} at ${transaction.cumulativeAvgPrice.toString()}, realised ${transaction.profit?.toString() ?? 'nothing'}.`,
     );
     return { transaction };
   }
@@ -185,7 +230,7 @@ export class LedgerService {
       return { transaction: null };
     }
     logger.info(
-      `Recorded ${transaction.size} ${request.symbol} at ${transaction.avgPrice} from broker order ${request.referenceId} in account ${request.accountId}: position now ${transaction.cumulativeSize} at ${transaction.cumulativeAvgPrice}, realised ${transaction.profit ?? 'nothing'}.`,
+      `Recorded ${transaction.size.toString()} ${request.symbol} for ${transaction.totalCost.toString()} from broker order ${request.referenceId} in account ${request.accountId}: position now ${transaction.cumulativeSize.toString()} at ${transaction.cumulativeAvgPrice.toString()}, realised ${transaction.profit?.toString() ?? 'nothing'}.`,
     );
     return { transaction };
   }
@@ -201,9 +246,9 @@ export class LedgerService {
   }
 
   /**
-   * Moves shares between two virtual accounts, booking both sides as a matched pair
-   * of synthetic orders so each account's cost basis and realised profit move exactly
-   * as they would for a real fill.
+   * Moves units between two virtual accounts, booking both sides as a matched pair of
+   * synthetic orders so each account's cost basis and realised profit move exactly as
+   * they would for a real fill.
    */
   async transferPosition(request: TransferPositionRequest): Promise<TransferPositionResponse> {
     this.assertTransferable(request);
@@ -223,41 +268,47 @@ export class LedgerService {
     const occurredAt = new Date(timestamp).toISOString();
     const originOrderId = crypto.randomUUID();
     const destinationOrderId = crypto.randomUUID();
+    // `unitCost` is per unit of `size`, which for an option is per contract, so this is
+    // already dollars and the multiplier does not enter it. It is recorded so the
+    // premium behind the figure stays recoverable.
+    const totalCost = request.size.mul(request.unitCost);
+    const multiplier = defaultContractMultiplier(request.assetClass);
 
-    const record = (accountId: string, counterpartAccountId: string, orderId: string, signedShares: number): TransferOrderRecord => ({
+    const record = (accountId: string, counterpartAccountId: string, orderId: string, signedSize: Decimal): TransferOrderRecord => ({
       id: orderId,
       accountId,
       counterpartAccountId,
       status: 'filled',
       symbol: request.symbol,
-      size: signedShares,
-      filledSize: signedShares,
-      filledAvgPrice: request.unitCost,
+      assetClass: request.assetClass,
+      size: signedSize,
+      filledSize: signedSize,
+      filledTotalCost: signedSize.mul(request.unitCost),
       createdAt: occurredAt,
       filledAt: occurredAt,
     });
 
     logger.info(
-      `Transferring ${request.shares} ${request.symbol} from account ${request.originAccountId} to ${request.destinationAccountId} at ${request.unitCost}, dated ${occurredAt}.`,
+      `Transferring ${request.size.toString()} ${request.symbol} from account ${request.originAccountId} to ${request.destinationAccountId} at ${request.unitCost.toString()}, dated ${occurredAt}.`,
     );
 
     await this.ledgerDao.transferPosition({
       symbol: request.symbol,
-      unitCost: request.unitCost,
-      shares: request.shares,
+      assetClass: request.assetClass,
+      multiplier,
+      size: request.size,
+      totalCost,
       timestamp,
       brokerAccountId: TRANSFER_BROKER_ACCOUNT_ID,
       origin: {
         accountId: request.originAccountId,
-        groupId: request.originGroupId,
         orderId: originOrderId,
-        record: record(request.originAccountId, request.destinationAccountId, originOrderId, -1 * request.shares),
+        record: record(request.originAccountId, request.destinationAccountId, originOrderId, request.size.neg()),
       },
       destination: {
         accountId: request.destinationAccountId,
-        groupId: request.destinationGroupId,
         orderId: destinationOrderId,
-        record: record(request.destinationAccountId, request.originAccountId, destinationOrderId, request.shares),
+        record: record(request.destinationAccountId, request.originAccountId, destinationOrderId, request.size),
       },
     });
 
@@ -268,14 +319,13 @@ export class LedgerService {
     if (request.originAccountId === request.destinationAccountId) {
       throw new InvalidRequestError('A transfer needs two different accounts; origin and destination are the same.');
     }
-    if (request.originGroupId === request.destinationGroupId) {
-      throw new InvalidRequestError('A transfer needs a different order group on each side; origin and destination are the same.');
+    // Fractional sizes are allowed — fractional shares and crypto are both real — so the
+    // only constraint is a positive magnitude. Direction comes from which side is which.
+    if (!request.size.isPositive()) {
+      throw new InvalidRequestError(`Size must be greater than zero, got ${request.size.toString()}. To transfer the other way, swap origin and destination.`);
     }
-    if (!Number.isInteger(request.shares) || request.shares <= 0) {
-      throw new InvalidRequestError(`Shares must be a whole number greater than zero, got ${request.shares}. To transfer the other way, swap origin and destination.`);
-    }
-    if (!(request.unitCost > 0)) {
-      throw new InvalidRequestError(`Unit cost must be greater than zero, got ${request.unitCost}.`);
+    if (!request.unitCost.isPositive()) {
+      throw new InvalidRequestError(`Unit cost must be greater than zero, got ${request.unitCost.toString()}.`);
     }
   }
 

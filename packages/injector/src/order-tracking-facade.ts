@@ -1,5 +1,16 @@
-import { AsyncQueue, Broker, BrokerOrderEvent, BrokerOrderRecord, contractMultiplier, isTerminalStatus, LoggerFactory, NotFoundError } from '@fleece/shared';
-import { BrokerOrderService, LedgerService } from '@fleece/core';
+import {
+  AsyncQueue,
+  Broker,
+  BrokerOrder,
+  BrokerOrderAttribution,
+  BrokerOrderEvent,
+  BrokerOrderRecord,
+  Decimal,
+  defaultContractMultiplier,
+  isTerminalStatus,
+  LoggerFactory,
+} from '@fleece/shared';
+import { BrokerOrderService, LedgerService, RecordBrokerOrderRequest } from '@fleece/core';
 
 const logger = LoggerFactory.getLogger('OrderTrackingFacade');
 
@@ -27,13 +38,12 @@ export interface BrokerOrderEventJob {
 }
 
 /**
- * An upstream service naming the virtual account and group for orders it has just
- * placed, for the orders it could not stamp that onto itself.
+ * An upstream service naming the virtual account for orders it has just placed, for
+ * the orders it could not stamp that onto itself.
  */
 export interface TrackBrokerOrdersRequest {
   readonly brokerOrderIds: ReadonlyArray<string>;
   readonly accountId: string;
-  readonly groupId?: string;
 }
 
 export type DefaultAccountIdProvider = (broker: Broker, brokerAccountId: string, live: boolean) => string;
@@ -45,14 +55,15 @@ export interface OrderTrackingFacadeProps {
   readonly unresolvedTimeoutMs?: number;
 }
 
-interface Association {
-  readonly accountId: string;
-  readonly groupId?: string;
-}
-
 interface HeldEvents {
   timeout?: NodeJS.Timeout;
   readonly jobs: BrokerOrderEventJob[];
+}
+
+/** Which account an event belongs to, and how that was decided. */
+interface Attribution {
+  readonly accountId: string;
+  readonly attribution: BrokerOrderAttribution;
 }
 
 type Work = { readonly type: 'event'; readonly job: BrokerOrderEventJob } | { readonly type: 'tracking'; readonly request: TrackBrokerOrdersRequest };
@@ -64,15 +75,17 @@ type Work = { readonly type: 'event'; readonly job: BrokerOrderEventJob } | { re
  * fill an event is. An order's virtual account can come from four places, in
  * descending order of trust: the correlation the broker echoes back, the broker order
  * already recorded, a tracking request from the execution service, and finally a
- * default account for orders that belong to nobody.
+ * default account for orders that belong to nobody. Which one answered is recorded on
+ * the row as `attribution`, so a number can be traced back to how much it should be
+ * trusted rather than only to what it says.
  *
  * Everything runs through one queue. Two events for the same order processed
- * concurrently would each decide independently whether to create the broker order,
- * and one of the two inserts would fail on the primary key.
+ * concurrently would each decide independently what to record, and while the write is
+ * now an upsert and would survive that, the reads that feed it would not.
  */
 export class OrderTrackingFacade {
   private readonly queue: AsyncQueue<Work>;
-  private readonly associations = new Map<string, Association>();
+  private readonly associations = new Map<string, string>();
   private readonly held = new Map<string, HeldEvents>();
   private readonly unresolvedTimeoutMs: number;
 
@@ -92,37 +105,29 @@ export class OrderTrackingFacade {
   }
 
   /**
-   * Accepts a hint from whoever placed an order about which virtual account and group
-   * it belongs to.
+   * Accepts a hint from whoever placed an order about which virtual account it belongs
+   * to.
    *
    * **Why this exists.** An order normally carries its own identity: the execution
-   * service encodes the account and group into Alpaca's `client_order_id`, and Alpaca
-   * echoes that back on every event. That covers any order we place directly. It does
-   * not cover the *legs* of a composite order — a bracket, OTO or OCO — because Alpaca
-   * creates those itself and assigns them client order ids of its own. A leg therefore
-   * arrives carrying nothing that says whose it is, and only the service that asked for
-   * the composite order knows.
+   * service encodes the account into Alpaca's `client_order_id`, and Alpaca echoes that
+   * back on every event. That covers any order we place directly, and — since the
+   * converter gives every leg its parent's correlation — the legs of anything we place
+   * as a composite. What it does not cover is an order Alpaca reports standalone that
+   * Fleece never placed.
    *
    * **What it is worth.** Without a tracking request, an unattributable event sits in
    * the holding pen until `unresolvedTimeoutMs` expires and is then booked to the
-   * default account — so every bracket leg would be attributed to nobody a minute after
-   * the fact. A tracking request releases the held events at once and books them to the
-   * strategy that earned them.
+   * default account. A tracking request releases the held events at once and books them
+   * to the strategy that earned them.
    *
    * **What it is not.** It is a fallback, not an override: it sits last in the
    * resolution order, behind the broker's own echo and behind whatever the broker order
-   * already records. It cannot move an order that is already attributed — a
-   * disagreement is logged and the existing attribution stands. Ordering does not
-   * matter either way; a request arriving before the events is remembered, and one
-   * arriving after releases what is held.
+   * already records. It cannot move an order that is already attributed — `claimBrokerOrder`
+   * guards that in the UPDATE — and a disagreement is logged with the existing
+   * attribution left standing. Ordering does not matter either way; a request arriving
+   * before the events is remembered, and one arriving after releases what is held.
    *
-   * **Nothing calls this yet.** Its transport is unported. In the legacy system the
-   * request arrived over a message stream: `TrackingProcessor` was bound to `PUT /track`
-   * on a `lite-server` listening on the `OrderTracking.{STAGE}` topic, and the whole
-   * `lite-server` / `message-subscriber` layer belongs to the platform this port leaves
-   * behind. Its only client was `order-execution-service`, which is also unported — so
-   * this is currently unreachable rather than broken, and it matters the day composite
-   * orders start being placed. See `md/PORTING.md`.
+   * **Nothing calls this yet.** Its transport is unported; see `md/OPEN-ITEMS.md` item 1.
    */
   track(request: TrackBrokerOrdersRequest): void {
     this.queue.enqueue({ type: 'tracking', request });
@@ -146,42 +151,32 @@ export class OrderTrackingFacade {
   private async processEvent(job: BrokerOrderEventJob): Promise<void> {
     const { event } = job;
     const existing = await this.props.brokerOrderService.findBrokerOrder(event.id);
-    const association = this.associations.get(event.id);
+    const resolved = this.resolve(job, existing);
 
-    const groupId = event.groupId ?? existing?.groupId ?? association?.groupId;
-    const accountId = event.accountId ?? existing?.accountId ?? association?.accountId ?? job.defaultAccountId;
-
-    if (accountId === undefined) {
+    if (resolved === undefined) {
       this.hold(job);
       return;
     }
 
-    if (existing === null) {
-      logger.info(`Recording new ${job.broker} order ${event.id} for account ${accountId}${groupId === undefined ? ' with no group' : ` in group ${groupId}`}.`);
-      await this.props.brokerOrderService.createBrokerOrder({
-        brokerOrderId: event.id,
-        symbol: event.symbol,
-        broker: job.broker,
-        brokerAccountId: job.brokerAccountId,
-        status: event.status,
-        accountId,
-        groupId,
-      });
-    } else {
-      if (existing.status !== event.status) {
-        await this.props.brokerOrderService.setStatus({ brokerOrderId: event.id, status: event.status });
-      }
-      if (existing.groupId === undefined && groupId !== undefined) {
-        await this.props.brokerOrderService.setGroupId({ brokerOrderId: event.id, groupId });
-      } else if (existing.groupId !== undefined && groupId !== undefined && existing.groupId !== groupId) {
-        // An order's group never changes. If this fires, something upstream is
-        // reporting a different group for an order it already placed.
-        logger.error(`Broker order ${event.id} is in group ${existing.groupId} but was just reported as being in ${groupId}. Leaving it where it is.`);
-      }
+    if (existing !== null && existing.accountId !== resolved.accountId) {
+      // An order's account does not change. The upsert below will not move it, so this
+      // says what was ignored rather than warning about something that then happens.
+      logger.error(
+        `Broker order ${event.id} is booked to account ${existing.accountId} by ${existing.attribution} but was just reported as belonging to ${resolved.accountId}. Leaving it where it is.`,
+      );
+    }
+
+    await this.props.brokerOrderService.recordBrokerOrder(this.toRecordRequest(job, existing?.accountId ?? resolved.accountId, existing?.attribution ?? resolved.attribution));
+
+    // An order that fell through to the catch-all account and has since acquired a real
+    // attribution is moved onto it. Guarded in the UPDATE, so this cannot take an order
+    // away from an attribution that already stuck.
+    if (existing !== null && existing.attribution === 'default' && resolved.attribution !== 'default') {
+      await this.props.brokerOrderService.claimBrokerOrder({ brokerOrderId: event.id, accountId: resolved.accountId, attribution: resolved.attribution });
     }
 
     await this.props.brokerOrderService.insertRecord({ record: job.originalEvent });
-    await this.applyFill(event, accountId);
+    await this.applyFill(event, existing?.accountId ?? resolved.accountId);
 
     if (isTerminalStatus(event.status)) {
       // Nothing more will arrive for this order, so stop holding what was learned
@@ -190,12 +185,77 @@ export class OrderTrackingFacade {
     }
   }
 
+  /**
+   * Which account this event belongs to, and how that was decided.
+   *
+   * The order of the branches *is* the order of trust, and each one names a different
+   * kind of claim:
+   *
+   * - a leg carrying its parent's correlation is attributed `parent`, because that is
+   *   what it is — Alpaca gives legs client order ids of its own, so an account on a leg
+   *   can only have come from the composite it belongs to;
+   * - anything else carrying a correlation said so itself;
+   * - a broker order already recorded keeps whatever decided it the first time;
+   * - a tracking request is somebody else's word for it;
+   * - and a default account means nobody claimed it at all.
+   */
+  private resolve(job: BrokerOrderEventJob, existing: BrokerOrder | null): Attribution | undefined {
+    const { event } = job;
+    if (event.accountId !== undefined) {
+      return { accountId: event.accountId, attribution: event.parentBrokerOrderId === undefined ? 'correlation' : 'parent' };
+    }
+    if (existing !== null) {
+      return { accountId: existing.accountId, attribution: existing.attribution };
+    }
+    const association = this.associations.get(event.id);
+    if (association !== undefined) {
+      return { accountId: association, attribution: 'tracking' };
+    }
+    if (job.defaultAccountId !== undefined) {
+      return { accountId: job.defaultAccountId, attribution: 'default' };
+    }
+    return undefined;
+  }
+
+  private toRecordRequest(job: BrokerOrderEventJob, accountId: string, attribution: BrokerOrderAttribution): RecordBrokerOrderRequest {
+    const { event } = job;
+    return {
+      brokerOrderId: event.id,
+      parentBrokerOrderId: event.parentBrokerOrderId,
+      accountId,
+      broker: job.broker,
+      brokerAccountId: job.brokerAccountId,
+      attribution,
+      // A composite parent trades no instrument of its own, and the column is NULL
+      // rather than an empty string for it. The converter discards spread parents, so
+      // nothing writes one today.
+      symbol: isMultiLegParent(event) ? undefined : event.symbol,
+      assetClass: event.assetClass,
+      multiplier: multiplierFor(event),
+      status: event.status,
+      orderClass: event.orderClass,
+      orderType: event.orderType,
+      side: event.side,
+      positionIntent: event.positionIntent,
+      timeInForce: event.timeInForce,
+      extendedHours: event.extendedHours,
+      qty: event.qty,
+      ratioQty: event.ratioQty,
+      limitPrice: event.limitPrice,
+      stopPrice: event.stopPrice,
+      filledQty: event.filledQty,
+      filledAvgPrice: event.filledAvgPrice,
+      submittedAt: event.createdAt,
+      filledAt: event.filledAt,
+    };
+  }
+
   private async applyFill(event: BrokerOrderEvent, accountId: string): Promise<void> {
     // A spread's parent trades no instrument: its symbol is empty and its filled price
     // is the package's net debit or credit — `-0.9` for one that sold a contract at 3.85
     // and bought another at 2.95. Booking it would open a position keyed on the empty
-    // string at a price nothing traded at, and nothing anywhere would report it. The
-    // legs carry the real instruments and arrive as events of their own.
+    // string at a price nothing traded at. The legs carry the real instruments and
+    // arrive as events of their own.
     if (isMultiLegParent(event)) {
       return;
     }
@@ -203,20 +263,27 @@ export class OrderTrackingFacade {
     if (event.status !== 'filled' && event.status !== 'partially_filled') {
       return;
     }
-    if (typeof event.filledAvgPrice !== 'number') {
+    if (event.filledAvgPrice === undefined) {
       logger.error(`Broker order ${event.id} reports status ${event.status} with no filled price. Not recording a fill for it.`);
       return;
     }
 
-    // An option contract is a claim on 100 shares and its price is quoted per share, so
-    // the size is scaled and the price is left exactly as the broker reported it. That
-    // keeps `size * price` in dollars for every instrument, which is what lets one
-    // virtual account hold stock and options and still total its realised profit.
-    const multiplier = contractMultiplier(event.assetClass);
-    const cumulativeFilledSize = event.filledQty * multiplier;
-    if (multiplier !== 1) {
+    // **This is where the broker's units become the ledger's.** An option contract is a
+    // claim on `multiplier` shares and the broker quotes its premium per share, so a
+    // contract filled at 3.85 moved $385. The size stays in contracts — two contracts
+    // read as 2, which is what anyone looking at a position means — and the multiplier
+    // goes into the dollars. That keeps a total cost in dollars for every instrument,
+    // which is what lets one virtual account hold stock and options and still add up.
+    //
+    // The multiplier is recorded alongside rather than assumed downstream, so an
+    // adjusted contract booked at the default 100 is findable rather than silently
+    // wrong by the ratio of its real multiplier to 100. See `md/OPEN-ITEMS.md` item 2b.
+    const multiplier = multiplierFor(event);
+    const cumulativeFilledTotalCost = event.filledQty.mul(event.filledAvgPrice).mul(multiplier);
+
+    if (!multiplier.eq(Decimal.ONE)) {
       logger.info(
-        `Broker order ${event.id} filled ${event.filledQty} ${event.symbol} contracts at ${event.filledAvgPrice}, booked as ${cumulativeFilledSize} units of the underlying.`,
+        `Broker order ${event.id} filled ${event.filledQty.toString()} ${event.symbol} contracts at ${event.filledAvgPrice.toString()}, booked as ${cumulativeFilledTotalCost.toString()} at a multiplier of ${multiplier.toString()}.`,
       );
     }
 
@@ -227,8 +294,10 @@ export class OrderTrackingFacade {
       referenceId: event.id,
       accountId,
       symbol: event.symbol,
-      cumulativeFilledSize,
-      cumulativeFilledAvgPrice: event.filledAvgPrice,
+      assetClass: event.assetClass,
+      multiplier,
+      cumulativeFilledSize: event.filledQty,
+      cumulativeFilledTotalCost,
       timestamp: event.filledAt ?? event.updatedAt,
     });
   }
@@ -241,26 +310,20 @@ export class OrderTrackingFacade {
 
       if (existing === null) {
         // Not seen yet; remember it for whenever the first event arrives.
-        this.associations.set(brokerOrderId, { accountId: request.accountId, groupId: request.groupId });
+        this.associations.set(brokerOrderId, request.accountId);
         continue;
       }
 
-      if (existing.accountId !== request.accountId) {
-        logger.error(`Broker order ${brokerOrderId} is booked to account ${existing.accountId} but was just claimed by ${request.accountId}. Leaving it where it is.`);
+      if (existing.accountId === request.accountId) {
+        continue;
       }
 
-      if (existing.groupId === undefined && request.groupId !== undefined) {
-        try {
-          await this.props.brokerOrderService.setGroupId({ brokerOrderId, groupId: request.groupId });
-        } catch (err) {
-          if (err instanceof NotFoundError) {
-            logger.error(`Cannot bind broker order ${brokerOrderId} to group ${request.groupId}: ${err.message}`);
-          } else {
-            throw err;
-          }
-        }
-      } else if (existing.groupId !== undefined && request.groupId !== undefined && existing.groupId !== request.groupId) {
-        logger.error(`Broker order ${brokerOrderId} is in group ${existing.groupId} but was just claimed for ${request.groupId}. Leaving it where it is.`);
+      // Only an order nobody claimed can be moved, and the UPDATE is what enforces it.
+      const { claimed } = await this.props.brokerOrderService.claimBrokerOrder({ brokerOrderId, accountId: request.accountId, attribution: 'tracking' });
+      if (!claimed) {
+        logger.error(
+          `Broker order ${brokerOrderId} is booked to account ${existing.accountId} by ${existing.attribution} but was just claimed by ${request.accountId}. Leaving it where it is.`,
+        );
       }
     }
 
@@ -310,6 +373,9 @@ export class OrderTrackingFacade {
    * most often — still lands in the ledger. It is booked to a catch-all account rather
    * than dropped, because the shares moved whether or not a strategy asked for them,
    * and a ledger that omits them will not reconcile against the brokerage statement.
+   *
+   * It is recorded as `attribution: 'default'`, which is what "orphan" now means and
+   * what `broker-order orphans` lists.
    */
   private releaseToDefaultAccount(brokerOrderId: string): void {
     const entry = this.held.get(brokerOrderId);
@@ -342,15 +408,24 @@ export class OrderTrackingFacade {
 }
 
 /**
+ * Units of the underlying per contract.
+ *
+ * The event carries one only if the broker told us; otherwise the asset class supplies
+ * the default, which is 100 for an option and 1 for everything else. Whichever it is,
+ * it is written onto every row the fill touches — that is what makes an adjusted
+ * contract a query rather than a silent error.
+ */
+function multiplierFor(event: BrokerOrderEvent): Decimal {
+  return event.multiplier ?? defaultContractMultiplier(event.assetClass);
+}
+
+/**
  * The container of a spread, as opposed to one of its contracts.
  *
- * Both carry `orderClass: 'mleg'`, and after flattening both arrive as their own event;
- * only the parent has no symbol. See `isMultiLegParent` in `@fleece/alpaca`'s order
- * converter, which draws the same line at the other end of the pipe.
- *
- * The parent is still recorded as a `broker_order` — it is the id `@fleece/broker`
- * announces, the id a tracking request names, and the id a cancel goes to. It just
- * never books a fill.
+ * Both carry `orderClass: 'mleg'`, and only the parent has no symbol. The converter
+ * discards spread parents, so nothing here sees one today; the check stays because the
+ * cost of being wrong is a position keyed on the empty string, which is a wrong number
+ * that looks like a right one.
  */
 function isMultiLegParent(event: BrokerOrderEvent): boolean {
   return event.orderClass === 'mleg' && event.symbol === '';

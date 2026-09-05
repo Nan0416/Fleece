@@ -4,6 +4,12 @@ Fleece is a rewrite of a private trading system that ran on MongoDB across many 
 repositories. This records what changed and why, so a difference from the old
 behaviour reads as a decision rather than an accident.
 
+**One thing here is now history twice over.** Order groups were ported faithfully and
+then removed in the schema redesign, along with the correlation fields they carried, and
+so was the `DOUBLE PRECISION` money the port inherited. Where this document describes
+them it is describing the legacy and the port that followed it, not the system as it
+stands — see `md/OPEN-ITEMS.md` items 2 and 3, and `packages/core/migrations/`.
+
 The legacy source is cloned to `/Users/nan/workplace/alpaca-legacy/`. The service
 itself was thin; the logic lived in packages published to a private registry:
 

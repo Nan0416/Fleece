@@ -1,11 +1,27 @@
-import { BrokerOrderStatus, MarketBrokerOrderEvent } from '@fleece/shared';
+import { BrokerOrderStatus, Decimal, MarketBrokerOrderEvent } from '@fleece/shared';
 import { LedgerService, BrokerOrderService } from '@fleece/core';
 import { BrokerOrderEventJob, OrderTrackingFacade } from '../src/order-tracking-facade';
 import { FakeBrokerOrderService, FakeLedgerService } from './fake-ledger';
 
+/**
+ * Quantities are written as plain numbers here and converted on the way in, so a case
+ * still reads as "one contract at 3.85" rather than as a wall of constructors. The
+ * facade sees `Decimal` throughout, which is what it is under test with.
+ */
+type EventOverrides = Omit<Partial<MarketBrokerOrderEvent>, 'qty' | 'filledQty' | 'filledAvgPrice' | 'multiplier'> & {
+  readonly qty?: number;
+  readonly filledQty?: number;
+  readonly filledAvgPrice?: number;
+  readonly multiplier?: number;
+};
+
+const d = (value: number): Decimal => Decimal.of(value);
+const optional = (value: number | undefined): Decimal | undefined => (value === undefined ? undefined : Decimal.of(value));
+
 // Market orders throughout: the facade never branches on order type, so a union of
 // them would add noise without adding a case.
-function event(overrides: Partial<MarketBrokerOrderEvent> = {}): MarketBrokerOrderEvent {
+function event(overrides: EventOverrides = {}): MarketBrokerOrderEvent {
+  const { qty, filledQty, filledAvgPrice, multiplier, ...rest } = overrides;
   return {
     orderType: 'market',
     broker: 'alpaca',
@@ -21,15 +37,17 @@ function event(overrides: Partial<MarketBrokerOrderEvent> = {}): MarketBrokerOrd
     extendedHours: false,
     limitPrice: undefined,
     stopPrice: undefined,
-    qty: 10,
-    filledQty: 0,
     createdAt: 1_000,
     updatedAt: 1_000,
-    ...overrides,
+    ...rest,
+    qty: d(qty ?? 10),
+    filledQty: d(filledQty ?? 0),
+    filledAvgPrice: optional(filledAvgPrice),
+    multiplier: optional(multiplier),
   };
 }
 
-function job(overrides: Partial<MarketBrokerOrderEvent> = {}, jobOverrides: Partial<BrokerOrderEventJob> = {}): BrokerOrderEventJob {
+function job(overrides: EventOverrides = {}, jobOverrides: Partial<BrokerOrderEventJob> = {}): BrokerOrderEventJob {
   const built = event(overrides);
   return { event: built, originalEvent: { id: built.id }, broker: 'alpaca', brokerAccountId: 'PAPER001', live: false, ...jobOverrides };
 }
@@ -56,7 +74,7 @@ describe('OrderTrackingFacade', () => {
 
   describe('attributing an event to a virtual account', () => {
     it('trusts the correlation the broker echoed back', async () => {
-      facade.enqueue(job({ accountId: 'MOMENTUM01', groupId: 'group-1', status: 'filled', filledQty: 10, filledAvgPrice: 100 }));
+      facade.enqueue(job({ accountId: 'MOMENTUM01', status: 'filled', filledQty: 10, filledAvgPrice: 100 }));
       await facade.drain();
 
       expect(brokerOrders.orders.get('order-1')?.accountId).toBe('MOMENTUM01');
@@ -74,13 +92,13 @@ describe('OrderTrackingFacade', () => {
     });
 
     it('uses a tracking request for an order the broker could not attribute', async () => {
-      facade.track({ brokerOrderIds: ['order-1'], accountId: 'REVERSION1', groupId: 'group-9' });
+      facade.track({ brokerOrderIds: ['order-1'], accountId: 'REVERSION1' });
       await facade.drain();
       facade.enqueue(job({ accountId: undefined, status: 'filled', filledQty: 10, filledAvgPrice: 100 }));
       await facade.drain();
 
       expect(brokerOrders.orders.get('order-1')?.accountId).toBe('REVERSION1');
-      expect(brokerOrders.orders.get('order-1')?.groupId).toBe('group-9');
+      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('tracking');
     });
   });
 
@@ -97,7 +115,7 @@ describe('OrderTrackingFacade', () => {
       facade.enqueue(job({ accountId: undefined, status: 'filled', filledQty: 10, filledAvgPrice: 100 }));
       await facade.drain();
 
-      facade.track({ brokerOrderIds: ['order-1'], accountId: 'REVERSION1', groupId: 'group-9' });
+      facade.track({ brokerOrderIds: ['order-1'], accountId: 'REVERSION1' });
       await facade.drain();
 
       expect(ledger.fills).toHaveLength(1);
@@ -114,7 +132,8 @@ describe('OrderTrackingFacade', () => {
 
       expect(ledger.fills).toHaveLength(1);
       expect(ledger.fills[0].accountId).toBe('DEFAULTPAPR');
-      expect(brokerOrders.orders.get('order-1')?.groupId).toBeUndefined();
+      // Which is what "orphan" now means, and what `broker-order orphans` lists.
+      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('default');
     });
 
     it("sends a live account's orphans to the live default, never the paper one", async () => {
@@ -134,7 +153,7 @@ describe('OrderTrackingFacade', () => {
       facade.track({ brokerOrderIds: ['order-1'], accountId: 'MOMENTUM01' });
       await facade.drain();
 
-      expect(ledger.fills.map((fill) => fill.cumulativeFilledSize)).toEqual([4, 10]);
+      expect(ledger.fills.map((fill) => fill.cumulativeFilledSize.toString())).toEqual(['4', '10']);
     });
   });
 
@@ -150,11 +169,11 @@ describe('OrderTrackingFacade', () => {
       facade.enqueue(job({ accountId: 'MOMENTUM01', status: 'filled', filledQty: 10, filledAvgPrice: 106, filledAt: 5_000 }));
       await facade.drain();
 
-      expect(ledger.fills.map((fill) => [fill.cumulativeFilledSize, fill.cumulativeFilledAvgPrice])).toEqual([
-        [4, 100],
-        [10, 106],
+      expect(ledger.fills.map((fill) => [fill.cumulativeFilledSize.toString(), fill.cumulativeFilledTotalCost.toString()])).toEqual([
+        ['4', '400'],
+        ['10', '1060'],
       ]);
-      expect(ledger.netSize('MOMENTUM01', 'AAPL')).toBe(10);
+      expect(ledger.netSize('MOMENTUM01', 'AAPL').toString()).toBe('10');
     });
 
     it('dates a fill by when it filled, not by when the event was handled', async () => {
@@ -171,21 +190,39 @@ describe('OrderTrackingFacade', () => {
   });
 
   describe('recording an option fill', () => {
-    it('scales the size by the contract multiplier and leaves the premium alone', async () => {
-      // One contract at 3.85 is $385 of cash. Booking the size in units of the
-      // underlying keeps `size * price` in dollars, so this account's realised profit
-      // can be added to an equity trade's without being 100x light.
+    it('counts contracts and puts the multiplier into the dollars', async () => {
+      // One contract at a premium of 3.85 moved $385. The size stays in contracts —
+      // which is what anyone reading a position means — and the multiplier goes into the
+      // cost, so this account's realised profit adds to an equity trade's without being
+      // 100x light.
       facade.enqueue(job({ accountId: 'MOMENTUM01', assetClass: 'option', symbol: 'AMZN261016C00280000', status: 'filled', filledQty: -1, filledAvgPrice: 3.85 }));
       await facade.drain();
 
-      expect(ledger.fills[0].cumulativeFilledSize).toBe(-100);
-      expect(ledger.fills[0].cumulativeFilledAvgPrice).toBe(3.85);
+      expect(ledger.fills[0].cumulativeFilledSize.toString()).toBe('-1');
+      expect(ledger.fills[0].cumulativeFilledTotalCost.toString()).toBe('-385');
     });
 
-    it('leaves an equity fill unscaled', async () => {
+    it('records the multiplier it used, so a contract booked on a wrong assumption is findable', async () => {
+      facade.enqueue(job({ accountId: 'MOMENTUM01', assetClass: 'option', symbol: 'AMZN261016C00280000', status: 'filled', filledQty: -1, filledAvgPrice: 3.85 }));
+      await facade.drain();
+      expect(ledger.fills[0].multiplier.toString()).toBe('100');
+    });
+
+    it('honours a multiplier the broker supplied over the default for the asset class', async () => {
+      // An adjusted contract delivers something other than 100 shares. Nothing fetches
+      // that figure yet, but when something does, this is the path it takes.
+      facade.enqueue(job({ accountId: 'MOMENTUM01', assetClass: 'option', symbol: 'AMZN261016C00280000', status: 'filled', filledQty: 1, filledAvgPrice: 4, multiplier: 10 }));
+      await facade.drain();
+      expect(ledger.fills[0].cumulativeFilledTotalCost.toString()).toBe('40');
+      expect(ledger.fills[0].multiplier.toString()).toBe('10');
+    });
+
+    it('leaves an equity fill at a multiplier of one', async () => {
       facade.enqueue(job({ accountId: 'MOMENTUM01', status: 'filled', filledQty: 10, filledAvgPrice: 100 }));
       await facade.drain();
-      expect(ledger.fills[0].cumulativeFilledSize).toBe(10);
+      expect(ledger.fills[0].cumulativeFilledSize.toString()).toBe('10');
+      expect(ledger.fills[0].cumulativeFilledTotalCost.toString()).toBe('1000');
+      expect(ledger.fills[0].multiplier.toString()).toBe('1');
     });
   });
 
@@ -195,7 +232,7 @@ describe('OrderTrackingFacade', () => {
      * converter now renders it: three flat events, not one nested one. The parent has no
      * symbol and a net credit for a price; each leg names it in `parentBrokerOrderId`.
      */
-    const parent = (): Partial<MarketBrokerOrderEvent> => ({
+    const parent = (): EventOverrides => ({
       id: 'mleg-parent-1',
       accountId: 'MOMENTUM01',
       orderClass: 'mleg',
@@ -208,7 +245,7 @@ describe('OrderTrackingFacade', () => {
       filledAvgPrice: -0.9,
     });
 
-    const shortLeg = (): Partial<MarketBrokerOrderEvent> => ({
+    const shortLeg = (): EventOverrides => ({
       id: 'mleg-leg-short',
       parentBrokerOrderId: 'mleg-parent-1',
       accountId: 'MOMENTUM01',
@@ -222,7 +259,7 @@ describe('OrderTrackingFacade', () => {
       filledAvgPrice: 3.85,
     });
 
-    const longLeg = (): Partial<MarketBrokerOrderEvent> => ({
+    const longLeg = (): EventOverrides => ({
       id: 'mleg-leg-long',
       parentBrokerOrderId: 'mleg-parent-1',
       accountId: 'MOMENTUM01',
@@ -246,9 +283,9 @@ describe('OrderTrackingFacade', () => {
       enqueueSpread();
       await facade.drain();
 
-      expect(ledger.fills.map((fill) => [fill.referenceId, fill.symbol, fill.cumulativeFilledSize, fill.cumulativeFilledAvgPrice])).toEqual([
-        ['mleg-leg-short', 'AMZN261016C00280000', -100, 3.85],
-        ['mleg-leg-long', 'AMZN261016C00285000', 100, 2.95],
+      expect(ledger.fills.map((fill) => [fill.referenceId, fill.symbol, fill.cumulativeFilledSize.toString(), fill.cumulativeFilledTotalCost.toString()])).toEqual([
+        ['mleg-leg-short', 'AMZN261016C00280000', '-1', '-385'],
+        ['mleg-leg-long', 'AMZN261016C00285000', '1', '295'],
       ]);
       // The parent's -0.9 is the spread's net credit, not a price any contract traded
       // at, and '' is not an instrument. Booking either is the bug this guards.
@@ -263,8 +300,10 @@ describe('OrderTrackingFacade', () => {
 
       expect(brokerOrders.orders.get('mleg-leg-short')?.symbol).toBe('AMZN261016C00280000');
       expect(brokerOrders.orders.get('mleg-leg-long')?.symbol).toBe('AMZN261016C00285000');
-      // The parent is still recorded: it is the id a cancel or a tracking request names.
-      expect(brokerOrders.orders.get('mleg-parent-1')?.symbol).toBe('');
+      // The parent is still recorded — it is the id a cancel or a tracking request names
+      // — but with no symbol at all rather than an empty string, which is what the
+      // column allows and what stops the old sentinel coming back.
+      expect(brokerOrders.orders.get('mleg-parent-1')?.symbol).toBeUndefined();
     });
 
     it('gives each leg its own reference id, so a redelivered spread stays idempotent', async () => {
@@ -273,8 +312,8 @@ describe('OrderTrackingFacade', () => {
       await facade.drain();
 
       expect(ledger.fills).toHaveLength(4);
-      expect(ledger.netSize('MOMENTUM01', 'AMZN261016C00280000')).toBe(-100);
-      expect(ledger.netSize('MOMENTUM01', 'AMZN261016C00285000')).toBe(100);
+      expect(ledger.netSize('MOMENTUM01', 'AMZN261016C00280000').toString()).toBe('-1');
+      expect(ledger.netSize('MOMENTUM01', 'AMZN261016C00285000').toString()).toBe('1');
     });
 
     it('attributes the legs to the account the parent was correlated to', async () => {
@@ -315,22 +354,41 @@ describe('OrderTrackingFacade', () => {
       expect(brokerOrders.orders.get('order-1')?.status).toBe('filled');
     });
 
-    it('binds a group to an order that has none', async () => {
-      facade.enqueue(job({ accountId: 'MOMENTUM01', groupId: undefined }));
+    it('moves an order off the catch-all account once a real attribution turns up', async () => {
+      // Booked to the default because nobody claimed it in time, then a later event
+      // arrives carrying the correlation after all — a websocket reconnect delivering
+      // what the backfill had already guessed at.
+      facade.enqueue(job({ accountId: undefined }, { defaultAccountId: 'DEFAULTPAPR' }));
       await facade.drain();
-      facade.enqueue(job({ accountId: 'MOMENTUM01', groupId: 'group-1' }));
+      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('default');
+
+      facade.enqueue(job({ accountId: 'MOMENTUM01' }));
       await facade.drain();
 
-      expect(brokerOrders.orders.get('order-1')?.groupId).toBe('group-1');
+      expect(brokerOrders.orders.get('order-1')?.accountId).toBe('MOMENTUM01');
+      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('correlation');
     });
 
-    it('never moves an order to a different group', async () => {
-      facade.enqueue(job({ accountId: 'MOMENTUM01', groupId: 'group-1' }));
+    it('never moves an order that something has already claimed', async () => {
+      // An order's account does not change. A later report that disagrees is a bug
+      // upstream, not a correction to apply, and the guard is in the UPDATE.
+      facade.enqueue(job({ accountId: 'MOMENTUM01' }));
       await facade.drain();
-      facade.enqueue(job({ accountId: 'MOMENTUM01', groupId: 'group-2' }));
+      facade.enqueue(job({ accountId: 'REVERSION1', status: 'filled', filledQty: 10, filledAvgPrice: 100 }));
       await facade.drain();
 
-      expect(brokerOrders.orders.get('order-1')?.groupId).toBe('group-1');
+      expect(brokerOrders.orders.get('order-1')?.accountId).toBe('MOMENTUM01');
+      expect(ledger.fills[0].accountId).toBe('MOMENTUM01');
+    });
+
+    it('attributes a leg to its parent rather than to a correlation of its own', async () => {
+      // Alpaca gives legs client order ids of its own, so an account on a leg can only
+      // have come from the composite it belongs to. Recording which it was is the
+      // difference between a fact and an assumption.
+      facade.enqueue(job({ accountId: 'MOMENTUM01', id: 'leg-1', parentBrokerOrderId: 'parent-1' }));
+      await facade.drain();
+
+      expect(brokerOrders.orders.get('leg-1')?.attribution).toBe('parent');
     });
 
     it('keeps every raw broker event, so an execution can be replayed', async () => {

@@ -1,4 +1,5 @@
-import { BrokerOrder, BrokerOrderRecord } from '../models/order';
+import { AssetClass } from '../models/asset-class';
+import { BrokerOrder, BrokerOrderRecord, OrderFillProgress } from '../models/order';
 import { TimeWindowPage } from './common';
 
 export interface GetBrokerOrderRequest {
@@ -9,31 +10,47 @@ export interface GetBrokerOrderResponse {
   readonly brokerOrder: BrokerOrder;
 }
 
-/** At most one search property, for the same index-coverage reason as order groups. */
+/**
+ * At most one search property, plus a time window.
+ *
+ * Not taste: each property has an index paired with `created_at`, so one property plus a
+ * window is a range scan and anything else is a table scan. The error message names the
+ * properties to pick from.
+ */
 export interface ListBrokerOrdersRequest extends TimeWindowPage {
   readonly accountId?: string;
   readonly brokerAccountId?: string;
   readonly symbol?: string;
   readonly status?: string;
+  readonly assetClass?: AssetClass;
 }
 
 export interface ListBrokerOrdersResponse {
   readonly brokerOrders: ReadonlyArray<BrokerOrder>;
 }
 
-export interface ListBrokerOrdersByGroupIdRequest {
-  readonly groupId: string;
+/**
+ * The legs of one composite order.
+ *
+ * Takes the parent's broker order id even though this table may hold no row for it: a
+ * multi-leg parent is discarded by the converter, so for a spread this is the only way
+ * back to the contracts it traded.
+ */
+export interface ListBrokerOrderLegsRequest {
+  readonly parentBrokerOrderId: string;
 }
 
-export interface ListBrokerOrdersByGroupIdResponse {
+export interface ListBrokerOrderLegsResponse {
   readonly brokerOrders: ReadonlyArray<BrokerOrder>;
 }
 
 /**
- * Orders with no order group: placed outside the system, or a leg whose parent could
- * not be resolved before the injector gave up waiting. Worth reviewing, because each
- * one was booked against a default virtual account rather than the strategy that
- * caused it.
+ * Orders nobody claimed — `attribution` is `default`.
+ *
+ * Placed outside the system, typically by hand on the broker's own website, or a leg
+ * whose parent could not be resolved before the injector gave up waiting. Worth
+ * reviewing, because each one was booked against a catch-all virtual account rather
+ * than the strategy that caused it.
  */
 export interface ListOrphanBrokerOrdersRequest {}
 
@@ -48,6 +65,29 @@ export interface ListBrokerOrderRecordsRequest {
 
 export interface ListBrokerOrderRecordsResponse {
   readonly records: ReadonlyArray<BrokerOrderRecord>;
+}
+
+/**
+ * What the ledger has booked against one broker order, next to what the broker says it
+ * filled.
+ *
+ * The two are different numbers in different units, and this is where they can be
+ * compared. `reconciled` is the check that the stored progress still agrees with the
+ * transactions it counts — the guarantee that came free when the figure was summed on
+ * every read, and that has to be asked for now that it is stored.
+ */
+export interface GetOrderFillProgressRequest {
+  readonly referenceId: string;
+}
+
+export interface GetOrderFillProgressResponse {
+  /**
+   * One entry per account and symbol the order booked against — normally exactly one,
+   * and a list rather than a single value because that is what the key actually is.
+   */
+  readonly progress: ReadonlyArray<OrderFillProgress>;
+  /** False when a stored counter no longer agrees with the transactions it counts. */
+  readonly reconciled: boolean;
 }
 
 /** Takes the order's records with it. Does not unwind the transactions it produced. */

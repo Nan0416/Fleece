@@ -1,4 +1,5 @@
-import { BrokerOrder, BrokerOrderRecord } from '@fleece/shared';
+import { AssetClass, BrokerOrder, BrokerOrderAttribution, BrokerOrderRecord, Decimal } from '@fleece/shared';
+import { RecordBrokerOrderRequest } from '@fleece/core';
 
 /**
  * Fakes that store what they are given, rather than mocks that record calls.
@@ -6,40 +7,46 @@ import { BrokerOrder, BrokerOrderRecord } from '@fleece/shared';
  * The order-tracking facade is almost entirely sequencing, so a test asserting on call
  * arguments would restate the implementation line by line and pass just as happily
  * when the order is wrong. Against these, a test says what a caller would observe.
+ *
+ * Where a caller depends on a rule, the fake implements the rule — notably that an
+ * upsert never overwrites what an order *is*, and that an attribution can only ever be
+ * moved off the catch-all account.
  */
 
 export interface RecordedFill {
   readonly referenceId: string;
   readonly accountId: string;
   readonly symbol: string;
-  readonly cumulativeFilledSize: number;
-  readonly cumulativeFilledAvgPrice: number;
+  readonly assetClass: AssetClass;
+  readonly multiplier: Decimal;
+  readonly cumulativeFilledSize: Decimal;
+  readonly cumulativeFilledTotalCost: Decimal;
   readonly timestamp: number;
 }
 
 export class FakeLedgerService {
   /** Cumulative reports as they arrived, so a test can see what was and was not applied. */
   readonly fills: RecordedFill[] = [];
-  /** Net position per `${accountId}:${symbol}`, applying the same "only what is new" rule as the real ledger. */
-  private readonly appliedSize = new Map<string, number>();
+  /** Net position per `${accountId}:${symbol}:${referenceId}`, applying the same "only what is new" rule as the real ledger. */
+  private readonly appliedSize = new Map<string, Decimal>();
 
-  async applyCumulativeFill(request: RecordedFill): Promise<{ transaction: { size: number } | null }> {
+  async applyCumulativeFill(request: RecordedFill): Promise<{ transaction: { size: Decimal } | null }> {
     this.fills.push(request);
     const key = `${request.accountId}:${request.symbol}:${request.referenceId}`;
-    const already = this.appliedSize.get(key) ?? 0;
-    const delta = request.cumulativeFilledSize - already;
-    if (delta === 0) {
+    const already = this.appliedSize.get(key) ?? Decimal.ZERO;
+    const delta = request.cumulativeFilledSize.sub(already);
+    if (delta.isZero()) {
       return { transaction: null };
     }
     this.appliedSize.set(key, request.cumulativeFilledSize);
     return { transaction: { size: delta } };
   }
 
-  netSize(accountId: string, symbol: string): number {
-    let total = 0;
+  netSize(accountId: string, symbol: string): Decimal {
+    let total = Decimal.ZERO;
     for (const [key, size] of this.appliedSize) {
       if (key.startsWith(`${accountId}:${symbol}:`)) {
-        total += size;
+        total = total.add(size);
       }
     }
     return total;
@@ -49,42 +56,43 @@ export class FakeLedgerService {
 export class FakeBrokerOrderService {
   readonly orders = new Map<string, BrokerOrder>();
   readonly records: BrokerOrderRecord[] = [];
-  readonly knownGroupIds = new Set<string>();
 
   async findBrokerOrder(brokerOrderId: string): Promise<BrokerOrder | null> {
     return this.orders.get(brokerOrderId) ?? null;
   }
 
-  async createBrokerOrder(request: {
-    brokerOrderId: string;
-    symbol: string;
-    accountId: string;
-    broker: 'alpaca' | 'traderq';
-    brokerAccountId: string;
-    status: string;
-    groupId?: string;
-  }): Promise<{ brokerOrder: BrokerOrder }> {
-    const brokerOrder: BrokerOrder = { ...request, createdAt: 1, lastUpdatedAt: 1 };
+  /**
+   * Implements the real upsert rule: an existing row keeps everything describing what
+   * the order *is* — its account, how that was decided, its instrument, its size — and
+   * only what a broker legitimately revises moves.
+   */
+  async recordBrokerOrder(request: RecordBrokerOrderRequest): Promise<{ brokerOrder: BrokerOrder; created: boolean }> {
+    const existing = this.orders.get(request.brokerOrderId);
+    if (existing === undefined) {
+      const brokerOrder: BrokerOrder = { ...request, createdAt: 1, lastUpdatedAt: 1 };
+      this.orders.set(request.brokerOrderId, brokerOrder);
+      return { brokerOrder, created: true };
+    }
+    const brokerOrder: BrokerOrder = {
+      ...existing,
+      status: request.status,
+      filledQty: request.filledQty,
+      filledAvgPrice: request.filledAvgPrice ?? existing.filledAvgPrice,
+      filledAt: request.filledAt ?? existing.filledAt,
+      lastUpdatedAt: 2,
+    };
     this.orders.set(request.brokerOrderId, brokerOrder);
-    return { brokerOrder };
+    return { brokerOrder, created: false };
   }
 
-  async setStatus(request: { brokerOrderId: string; status: string }): Promise<Record<string, never>> {
+  /** Implements the real rule: an order is only ever moved off the catch-all account. */
+  async claimBrokerOrder(request: { brokerOrderId: string; accountId: string; attribution: BrokerOrderAttribution }): Promise<{ claimed: boolean }> {
     const existing = this.orders.get(request.brokerOrderId);
-    if (existing !== undefined) {
-      this.orders.set(request.brokerOrderId, { ...existing, status: request.status });
+    if (existing === undefined || existing.attribution !== 'default') {
+      return { claimed: false };
     }
-    return {};
-  }
-
-  /** Implements the real rule: a group is only ever set on an order that has none. */
-  async setGroupId(request: { brokerOrderId: string; groupId: string }): Promise<{ bound: boolean }> {
-    const existing = this.orders.get(request.brokerOrderId);
-    if (existing === undefined || existing.groupId !== undefined) {
-      return { bound: false };
-    }
-    this.orders.set(request.brokerOrderId, { ...existing, groupId: request.groupId });
-    return { bound: true };
+    this.orders.set(request.brokerOrderId, { ...existing, accountId: request.accountId, attribution: request.attribution });
+    return { claimed: true };
   }
 
   async insertRecord(request: { record: BrokerOrderRecord }): Promise<Record<string, never>> {

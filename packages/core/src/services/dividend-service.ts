@@ -1,4 +1,4 @@
-import { Dividend, easternDate, isIsoDate, InvalidRequestError, ListDividendsRequest, ListDividendsResponse, LoggerFactory, NotFoundError } from '@fleece/shared';
+import { Dividend, easternDate, isIsoDate, InvalidRequestError, ListDividendsRequest, ListDividendsResponse, LoggerFactory, NotFoundError, Decimal } from '@fleece/shared';
 import { AccountDao } from '../data/account-dao';
 import { DividendDao } from '../data/dividend-dao';
 
@@ -14,8 +14,8 @@ export interface RecordDividendRequest {
   readonly symbol: string;
   readonly exDividendDate: string;
   /** The position held going into the ex-dividend date; negative for a short. */
-  readonly size: number;
-  readonly amountPerShare: number;
+  readonly size: Decimal;
+  readonly amountPerShare: Decimal;
   readonly declarationDate: string;
   readonly recordDate: string;
   readonly payDate: string;
@@ -62,7 +62,7 @@ export class DividendService {
     }
 
     logger.info(
-      `Recording a ${request.amountPerShare}/share dividend on ${request.symbol} for account ${request.accountId}, ex-dividend ${request.exDividendDate}, size ${request.size}.`,
+      `Recording a ${request.amountPerShare.toString()}/share dividend on ${request.symbol} for account ${request.accountId}, ex-dividend ${request.exDividendDate}, size ${request.size.toString()}.`,
     );
     return await this.dividendDao.upsertDividend({ ...request, today: easternDate(this.now()) });
   }

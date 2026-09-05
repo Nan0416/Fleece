@@ -1,14 +1,14 @@
 import { Dividend } from '@fleece/shared';
 import { Pool } from 'pg';
 import { DividendDao, GetDividendInput, GetDividendOutput, ListDividendsInput, ListDividendsOutput, UpsertDividendInput, UpsertDividendOutput } from './dividend-dao';
-import { toDividendStatus } from './row-parsers';
+import { toDecimal, toDividendStatus } from './row-parsers';
 
 interface DividendRow {
   readonly account_id: string;
   readonly symbol: string;
   readonly ex_dividend_date: string;
-  readonly size: number;
-  readonly amount_per_share: number;
+  readonly size: string;
+  readonly amount_per_share: string;
   readonly declaration_date: string;
   readonly record_date: string;
   readonly pay_date: string;
@@ -24,8 +24,8 @@ function toDividend(row: DividendRow, today: string): Dividend {
   return {
     accountId: row.account_id,
     symbol: row.symbol,
-    size: row.size,
-    amountPerShare: row.amount_per_share,
+    size: toDecimal(row.size, `Dividend ${row.account_id}/${row.symbol} size`),
+    amountPerShare: toDecimal(row.amount_per_share, `Dividend ${row.account_id}/${row.symbol} amount_per_share`),
     ...dates,
     status: toDividendStatus(dates, today),
   };
@@ -71,7 +71,7 @@ export class PgDividendDao implements DividendDao {
          SET size = EXCLUDED.size, amount_per_share = EXCLUDED.amount_per_share, declaration_date = EXCLUDED.declaration_date,
              record_date = EXCLUDED.record_date, pay_date = EXCLUDED.pay_date, updated_at = now()
        RETURNING ${SELECT_COLUMNS}`,
-      [input.accountId, input.symbol, input.exDividendDate, input.size, input.amountPerShare, input.declarationDate, input.recordDate, input.payDate],
+      [input.accountId, input.symbol, input.exDividendDate, input.size.toString(), input.amountPerShare.toString(), input.declarationDate, input.recordDate, input.payDate],
     );
     return { dividend: toDividend(result.rows[0], input.today) };
   }
