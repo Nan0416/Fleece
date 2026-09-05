@@ -56,42 +56,6 @@ export function isTerminalStatus(status: string): boolean {
 }
 
 /**
- * How an order came to be booked to the virtual account it is booked to.
- *
- * Recorded because it is the difference between a number you can trust and one you are
- * merely hoping about, and because it is what "orphan" now means. It replaces the
- * previous definition — an order with no group — which disappeared with order groups.
- *
- * In descending order of trust:
- *
- * - `correlation` — the account was decoded from the client order id the broker echoes
- *   back. This is the order's own statement about itself and is always right.
- * - `parent` — inherited from the composite order this is a leg of. A fact for a spread,
- *   whose legs cannot be traded apart from it; a judgement for a bracket or an OTO,
- *   though a correct one for everything `@fleece/broker` places.
- * - `tracking` — whoever placed the order said so afterwards, out of band.
- * - `internal` — the ledger wrote this order itself. The only orders in this class are
- *   the matched synthetic pair a position transfer writes, one on each side, which name
- *   their accounts by construction rather than by inference.
- * - `default` — nobody claimed it. Booked to the catch-all account so the ledger still
- *   reconciles against the brokerage statement, because the shares moved whether or not
- *   a strategy asked for them. **This is an orphan**, and it is the set worth watching.
- *
- * **Whichever answered is final.** An order's account and attribution are written once
- * and never changed — not even to move one off the catch-all account once something
- * later identifies it. Everything the order writes is keyed by the account it was booked
- * to, so moving the order alone strands its transactions, its position, its realised
- * profit and its fill-progress counter, and the next cumulative report then books the
- * whole fill again under the new account. Correcting a genuinely mis-booked order means
- * transferring the *position*, which moves the cost basis and leaves an audit trail.
- */
-export type BrokerOrderAttribution = 'correlation' | 'parent' | 'tracking' | 'internal' | 'default';
-
-export function isBrokerOrderAttribution(value: string): value is BrokerOrderAttribution {
-  return value === 'correlation' || value === 'parent' || value === 'tracking' || value === 'internal' || value === 'default';
-}
-
-/**
  * One order at one broker, tied to the virtual account it trades for.
  *
  * **A leg is one of these, not a child row of one.** A leg of a spread, a bracket or an
@@ -103,6 +67,19 @@ export function isBrokerOrderAttribution(value: string): value is BrokerOrderAtt
  * reaching us without its parent, for any reason at all, must still land. A foreign key
  * turns "the parent row is missing" into "the leg is rejected", and a rejected leg is a
  * fill the ledger never learns about.
+ *
+ * **`accountId` is written once and never changed.** Everything the order produces —
+ * transactions, its position, its realised profit, its fill-progress counter — is keyed
+ * by it, so moving the order alone strands all of them and makes the next cumulative
+ * report book the whole fill again under the new account. An order genuinely in the
+ * wrong account is corrected by transferring the *position*, which moves the cost basis
+ * and leaves an audit trail on both sides.
+ *
+ * How the account was decided is not stored. An order Fleece placed says so itself in
+ * the `client_order_id` kept verbatim in `broker_order_record`; a leg inherits its
+ * parent's, which `parentBrokerOrderId` already records; and an order nobody claimed is
+ * one booked to a configured catch-all account, which is a fact about that account
+ * rather than about every order pointing at it.
  *
  * `symbol` is absent only on a composite parent that trades no instrument of its own.
  * No such row is written today, for the reason above; the column allows it so that
@@ -116,8 +93,6 @@ export interface BrokerOrder {
   readonly accountId: string;
   readonly broker: Broker;
   readonly brokerAccountId: string;
-  /** How `accountId` was decided. `default` means orphan. */
-  readonly attribution: BrokerOrderAttribution;
 
   /**
    * Absent only on a composite parent, which trades no instrument of its own.

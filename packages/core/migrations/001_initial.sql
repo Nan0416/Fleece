@@ -221,19 +221,19 @@ CREATE INDEX IF NOT EXISTS dividend_account_symbol_idx ON dividend (account_id, 
 -- kept here because it is what the spread was actually traded at and it exists nowhere
 -- else — the legs price themselves at nothing.
 --
--- `attribution` records **how** the account was decided, and replaces the previous
--- definition of an orphan — an order with no group — which disappeared with order
--- groups. An orphan is now `attribution = 'default'`: nobody claimed it, so it was
--- booked to a catch-all account rather than dropped, because the shares moved whether
--- or not a strategy asked for them.
+-- **`account_id` is written once and never updated.** Nothing in the data layer offers
+-- a way to change it, deliberately: every `ledger_transaction`, `position`, `profit` row
+-- and `order_fill_progress` counter an order produces is keyed by the account it was
+-- booked to, so moving the order alone strands all of them and makes the next cumulative
+-- report book the whole fill again under the new account. A mis-booked order is
+-- corrected by transferring the *position*, not by relabelling the order.
 --
--- **`account_id` and `attribution` are written once and never updated.** Nothing in the
--- data layer offers a way to change them, deliberately: every `ledger_transaction`,
--- `position`, `profit` row and `order_fill_progress` counter an order produces is keyed
--- by the account it was booked to, so moving the order alone strands all of them and
--- makes the next cumulative report book the whole fill again under the new account.
--- A mis-booked order is corrected by transferring the *position*, not by relabelling
--- the order.
+-- How the account was decided is deliberately **not** stored. An order Fleece placed
+-- says so itself in the `client_order_id` held verbatim in `broker_order_record`; a leg
+-- inherits its parent's, which `parent_broker_order_id` already records; and an order
+-- nobody claimed is one booked to a configured catch-all account, found by
+-- `account_id` on the index below. An `attribution` column carried all three and was
+-- read by nothing.
 --
 -- `status` has no CHECK. A status this system has not caught up with must be recorded,
 -- not rejected: a rejected row is a fill that never lands. The columns that do carry a
@@ -251,7 +251,6 @@ CREATE TABLE IF NOT EXISTS broker_order (
   account_id             TEXT           NOT NULL REFERENCES account (account_id) ON DELETE CASCADE,
   broker                 TEXT           NOT NULL CHECK (broker IN ('alpaca', 'traderq')),
   broker_account_id      TEXT           NOT NULL,
-  attribution            TEXT           NOT NULL CHECK (attribution IN ('correlation', 'parent', 'tracking', 'internal', 'default')),
 
   symbol                 TEXT,
   asset_class            TEXT           NOT NULL CHECK (asset_class IN ('equity', 'option', 'crypto')),
@@ -291,7 +290,6 @@ CREATE TABLE IF NOT EXISTS broker_order (
 -- on that endpoint exists to enforce: every permitted query is an index range scan,
 -- and every rejected one would be a table scan.
 CREATE INDEX IF NOT EXISTS broker_order_parent_idx ON broker_order (parent_broker_order_id) WHERE parent_broker_order_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS broker_order_orphan_idx ON broker_order (created_at) WHERE attribution = 'default';
 CREATE INDEX IF NOT EXISTS broker_order_symbol_created_idx ON broker_order (symbol, created_at);
 CREATE INDEX IF NOT EXISTS broker_order_account_created_idx ON broker_order (account_id, created_at);
 CREATE INDEX IF NOT EXISTS broker_order_broker_account_created_idx ON broker_order (broker_account_id, created_at);

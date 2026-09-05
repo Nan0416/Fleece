@@ -490,12 +490,11 @@ describeIntegration('PgLedgerDao', () => {
 
     it('writes a matched pair of synthetic orders and their records', async () => {
       await transfer(4, 120);
-      const orders = await pool.query('SELECT broker_order_id, account_id, broker, attribution FROM broker_order ORDER BY broker_order_id');
+      const orders = await pool.query('SELECT broker_order_id, account_id, broker FROM broker_order ORDER BY broker_order_id');
       expect(orders.rows).toHaveLength(2);
+      // `traderq` is not a venue — it is the counterparty stamped on the synthetic pair
+      // a transfer writes, one on each side, and it is what marks them as ours.
       expect(orders.rows.every((row) => row.broker === 'traderq')).toBe(true);
-      // The ledger wrote these itself; their accounts are named by construction rather
-      // than inferred, which is what `internal` records.
-      expect(orders.rows.every((row) => row.attribution === 'internal')).toBe(true);
 
       const records = await pool.query('SELECT broker_order_id FROM broker_order_record ORDER BY broker_order_id');
       expect(records.rows.map((row) => row.broker_order_id)).toEqual(['transfer-in', 'transfer-out']);

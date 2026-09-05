@@ -16,6 +16,10 @@ export interface GetBrokerOrderResponse {
  * Not taste: each property has an index paired with `created_at`, so one property plus a
  * window is a range scan and anything else is a table scan. The error message names the
  * properties to pick from.
+ *
+ * This is also how you find the orders nobody claimed: they are the ones booked to a
+ * configured catch-all account, so `accountId` is the search property, and "orphan" is a
+ * fact about that account rather than a column on every order pointing at it.
  */
 export interface ListBrokerOrdersRequest extends TimeWindowPage {
   readonly accountId?: string;
@@ -42,20 +46,6 @@ export interface ListBrokerOrderLegsRequest {
 }
 
 export interface ListBrokerOrderLegsResponse {
-  readonly brokerOrders: ReadonlyArray<BrokerOrder>;
-}
-
-/**
- * Orders nobody claimed — `attribution` is `default`.
- *
- * Placed outside the system, typically by hand on the broker's own website, or a leg
- * whose parent could not be resolved before the injector gave up waiting. Worth
- * reviewing, because each one was booked against a catch-all virtual account rather
- * than the strategy that caused it.
- */
-export interface ListOrphanBrokerOrdersRequest {}
-
-export interface ListOrphanBrokerOrdersResponse {
   readonly brokerOrders: ReadonlyArray<BrokerOrder>;
 }
 

@@ -3,7 +3,6 @@ import {
   AccountType,
   AssetClass,
   Broker,
-  BrokerOrderAttribution,
   BrokerOrderClass,
   BrokerOrderSide,
   BrokerOrderTimeInForce,
@@ -13,7 +12,6 @@ import {
   DividendStatus,
   InternalServiceError,
   isAssetClass,
-  isBrokerOrderAttribution,
 } from '@fleece/shared';
 
 /**
@@ -51,13 +49,6 @@ export function toAssetClass(value: string, context: string): AssetClass {
     return value;
   }
   throw new InternalServiceError(`${context} has unrecognised asset class "${value}".`);
-}
-
-export function toBrokerOrderAttribution(value: string, brokerOrderId: string): BrokerOrderAttribution {
-  if (isBrokerOrderAttribution(value)) {
-    return value;
-  }
-  throw new InternalServiceError(`Broker order ${brokerOrderId} has unrecognised attribution "${value}".`);
 }
 
 export function toBrokerOrderClass(value: string, brokerOrderId: string): BrokerOrderClass {

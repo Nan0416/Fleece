@@ -98,7 +98,6 @@ describe('OrderTrackingFacade', () => {
       await facade.drain();
 
       expect(brokerOrders.orders.get('order-1')?.accountId).toBe('REVERSION1');
-      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('tracking');
     });
   });
 
@@ -132,8 +131,9 @@ describe('OrderTrackingFacade', () => {
 
       expect(ledger.fills).toHaveLength(1);
       expect(ledger.fills[0].accountId).toBe('DEFAULTPAPR');
-      // Which is what "orphan" now means, and what `broker-order orphans` lists.
-      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('default');
+      // An order nobody claimed is simply one sitting in the catch-all account, which is
+      // how they are found: by account, not by a column marking them.
+      expect(brokerOrders.orders.get('order-1')?.accountId).toBe('DEFAULTPAPR');
     });
 
     it("sends a live account's orphans to the live default, never the paper one", async () => {
@@ -362,13 +362,12 @@ describe('OrderTrackingFacade', () => {
       // report would find no progress for the new one and book the whole fill again.
       facade.enqueue(job({ accountId: undefined, status: 'partially_filled', filledQty: 4, filledAvgPrice: 100 }, { defaultAccountId: 'DEFAULTPAPR' }));
       await facade.drain();
-      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('default');
+      expect(brokerOrders.orders.get('order-1')?.accountId).toBe('DEFAULTPAPR');
 
       facade.enqueue(job({ accountId: 'MOMENTUM01', status: 'filled', filledQty: 10, filledAvgPrice: 106 }));
       await facade.drain();
 
       expect(brokerOrders.orders.get('order-1')?.accountId).toBe('DEFAULTPAPR');
-      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('default');
       // And every fill stayed with it, so nothing was counted twice.
       expect(ledger.fills.every((fill) => fill.accountId === 'DEFAULTPAPR')).toBe(true);
       expect(ledger.netSize('DEFAULTPAPR', 'AAPL').toString()).toBe('10');
@@ -395,17 +394,6 @@ describe('OrderTrackingFacade', () => {
       await facade.drain();
 
       expect(brokerOrders.orders.get('order-1')?.accountId).toBe('MOMENTUM01');
-      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('correlation');
-    });
-
-    it('attributes a leg to its parent rather than to a correlation of its own', async () => {
-      // Alpaca gives legs client order ids of its own, so an account on a leg can only
-      // have come from the composite it belongs to. Recording which it was is the
-      // difference between a fact and an assumption.
-      facade.enqueue(job({ accountId: 'MOMENTUM01', id: 'leg-1', parentBrokerOrderId: 'parent-1' }));
-      await facade.drain();
-
-      expect(brokerOrders.orders.get('leg-1')?.attribution).toBe('parent');
     });
 
     it('keeps every raw broker event, so an execution can be replayed', async () => {

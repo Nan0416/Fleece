@@ -28,7 +28,6 @@ describeIntegration('PgBrokerOrderDao', () => {
     accountId: 'ACCOUNT001',
     broker: 'alpaca',
     brokerAccountId: 'PA-0001',
-    attribution: 'correlation',
     symbol: 'AAPL',
     assetClass: 'equity',
     multiplier: Decimal.ONE,
@@ -56,14 +55,13 @@ describeIntegration('PgBrokerOrderDao', () => {
     });
 
     it('never overwrites what an order is, however the broker reports it later', async () => {
-      // An order's account does not change, and neither does how that was decided. A
-      // later report that disagrees is a bug upstream, not a correction to apply — and
-      // applying it would move a fill onto the wrong strategy.
+      // An order's account does not change. A later report that disagrees is a bug
+      // upstream, not a correction to apply — and applying it would move a fill onto the
+      // wrong strategy.
       await dao.upsertBrokerOrder(order());
-      const { brokerOrder } = await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT002', attribution: 'default', symbol: 'TSLA', qty: Decimal.of(999) }));
+      const { brokerOrder } = await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT002', symbol: 'TSLA', qty: Decimal.of(999) }));
 
       expect(brokerOrder.accountId).toBe('ACCOUNT001');
-      expect(brokerOrder.attribution).toBe('correlation');
       expect(brokerOrder.symbol).toBe('AAPL');
       expect(brokerOrder.qty.toString()).toBe('10');
     });
@@ -90,7 +88,6 @@ describeIntegration('PgBrokerOrderDao', () => {
         assetClass: 'option',
         multiplier: Decimal.of(100),
         orderClass: 'mleg',
-        attribution: 'parent',
         ratioQty: Decimal.ONE,
         limitPrice: undefined,
         ...overrides,
@@ -161,35 +158,24 @@ describeIntegration('PgBrokerOrderDao', () => {
       // `reconcileOrderFillProgress`, which would find both accounts internally
       // consistent. The legacy refused to move one for the same reason.
       const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(dao));
-      expect(methods).not.toContain('claimBrokerOrder');
       expect(methods.filter((name) => /claim|reattribute|setAccount|moveAccount/i.test(name))).toEqual([]);
     });
 
     it('survives a later report that disagrees about it', async () => {
-      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT001', attribution: 'default' }));
-      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT002', attribution: 'correlation' }));
+      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT001' }));
+      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT002' }));
 
-      const { brokerOrder } = await dao.getBrokerOrder({ brokerOrderId: 'order-1' });
-      expect(brokerOrder?.accountId).toBe('ACCOUNT001');
-      expect(brokerOrder?.attribution).toBe('default');
+      expect((await dao.getBrokerOrder({ brokerOrderId: 'order-1' })).brokerOrder?.accountId).toBe('ACCOUNT001');
     });
 
-    it('leaves a mis-booked order visible as an orphan rather than quietly correcting it', async () => {
-      // An order in the wrong account stays findable, which is the point: correcting it
-      // means moving the *position* with a transfer, which is double-entry and leaves an
-      // audit trail on both sides.
-      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT002', attribution: 'default' }));
-      const { brokerOrders } = await dao.listOrphanBrokerOrders({});
-      expect(brokerOrders.map((entry) => entry.brokerOrderId)).toEqual(['order-1']);
-    });
-  });
+    it('is how an order nobody claimed is found', async () => {
+      // "Orphan" is not a column. An unclaimed order is one the injector booked to a
+      // configured catch-all account, so the account is the search property — and it has
+      // an index paired with created_at like every other one.
+      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT001' }));
+      await dao.upsertBrokerOrder(order({ brokerOrderId: 'order-2', accountId: 'ACCOUNT002' }));
 
-  describe('listing orphans', () => {
-    it('returns the orders nobody claimed, and only those', async () => {
-      await dao.upsertBrokerOrder(order());
-      await dao.upsertBrokerOrder(order({ brokerOrderId: 'order-2', attribution: 'default' }));
-
-      const { brokerOrders } = await dao.listOrphanBrokerOrders({});
+      const { brokerOrders } = await dao.listBrokerOrders({ from: 0, limit: 10, sort: 'asc', accountId: 'ACCOUNT002' });
       expect(brokerOrders.map((entry) => entry.brokerOrderId)).toEqual(['order-2']);
     });
   });
@@ -252,12 +238,12 @@ describeIntegration('PgBrokerOrderDao', () => {
   });
 
   describe('the vocabulary the database enforces', () => {
-    it('refuses an attribution outside the four the ledger knows', async () => {
-      // The CHECK is what makes `toBrokerOrderAttribution` a backstop rather than a
-      // validator: a row can only fail to narrow if the schema and the code have
-      // diverged, which is a deployment problem no caller can cause or fix.
+    it('refuses an order class the converter never produces', async () => {
+      // The CHECK is what makes the row parsers a backstop rather than a validator: a
+      // row can only fail to narrow if the schema and the code have diverged, which is a
+      // deployment problem no caller can cause or fix.
       await dao.upsertBrokerOrder(order());
-      await expect(pool.query('UPDATE broker_order SET attribution = $1 WHERE broker_order_id = $2', ['guessed', 'order-1'])).rejects.toThrow(/attribution/);
+      await expect(pool.query('UPDATE broker_order SET order_class = $1 WHERE broker_order_id = $2', ['spread', 'order-1'])).rejects.toThrow(/order_class/);
     });
 
     it('accepts a status it has never seen, because a rejected row is a lost fill', async () => {

@@ -14,15 +14,12 @@ import {
   ListBrokerOrderRecordsOutput,
   ListBrokerOrdersInput,
   ListBrokerOrdersOutput,
-  ListOrphanBrokerOrdersInput,
-  ListOrphanBrokerOrdersOutput,
   UpsertBrokerOrderInput,
   UpsertBrokerOrderOutput,
 } from './broker-order-dao';
 import {
   toAssetClass,
   toBroker,
-  toBrokerOrderAttribution,
   toBrokerOrderClass,
   toBrokerOrderSide,
   toBrokerOrderTimeInForce,
@@ -38,7 +35,6 @@ interface BrokerOrderRow {
   readonly account_id: string;
   readonly broker: string;
   readonly broker_account_id: string;
-  readonly attribution: string;
   readonly symbol: string | null;
   readonly asset_class: string;
   readonly multiplier: string;
@@ -69,7 +65,6 @@ function toBrokerOrder(row: BrokerOrderRow): BrokerOrder {
     accountId: row.account_id,
     broker: toBroker(row.broker, id),
     brokerAccountId: row.broker_account_id,
-    attribution: toBrokerOrderAttribution(row.attribution, id),
     symbol: row.symbol === null ? undefined : row.symbol,
     assetClass: toAssetClass(row.asset_class, `Broker order ${id}`),
     multiplier: toDecimal(row.multiplier, `Broker order ${id} multiplier`),
@@ -97,7 +92,7 @@ function optionalDecimal(value: Decimal | undefined): string | null {
   return value === undefined ? null : value.toString();
 }
 
-const SELECT_COLUMNS = `broker_order_id, parent_broker_order_id, account_id, broker, broker_account_id, attribution, symbol, asset_class, multiplier,
+const SELECT_COLUMNS = `broker_order_id, parent_broker_order_id, account_id, broker, broker_account_id, symbol, asset_class, multiplier,
   status, order_class, order_type, side, position_intent, time_in_force, extended_hours,
   qty, ratio_qty, limit_price, stop_price, filled_qty, filled_avg_price, submitted_at, filled_at, created_at, updated_at`;
 
@@ -122,12 +117,12 @@ export class PgBrokerOrderDao implements BrokerOrderDao {
   async upsertBrokerOrder(input: UpsertBrokerOrderInput): Promise<UpsertBrokerOrderOutput> {
     const result = await this.pool.query<BrokerOrderRow & { inserted: boolean }>(
       `INSERT INTO broker_order
-         (broker_order_id, parent_broker_order_id, account_id, broker, broker_account_id, attribution, symbol, asset_class, multiplier,
+         (broker_order_id, parent_broker_order_id, account_id, broker, broker_account_id, symbol, asset_class, multiplier,
           status, order_class, order_type, side, position_intent, time_in_force, extended_hours,
           qty, ratio_qty, limit_price, stop_price, filled_qty, filled_avg_price, submitted_at, filled_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-               CASE WHEN $23::BIGINT IS NULL THEN NULL ELSE to_timestamp($23::BIGINT / 1000.0) END,
-               CASE WHEN $24::BIGINT IS NULL THEN NULL ELSE to_timestamp($24::BIGINT / 1000.0) END)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+               CASE WHEN $22::BIGINT IS NULL THEN NULL ELSE to_timestamp($22::BIGINT / 1000.0) END,
+               CASE WHEN $23::BIGINT IS NULL THEN NULL ELSE to_timestamp($23::BIGINT / 1000.0) END)
        ON CONFLICT (broker_order_id) DO UPDATE
          SET status = EXCLUDED.status,
              filled_qty = EXCLUDED.filled_qty,
@@ -141,7 +136,6 @@ export class PgBrokerOrderDao implements BrokerOrderDao {
         input.accountId,
         input.broker,
         input.brokerAccountId,
-        input.attribution,
         input.symbol ?? null,
         input.assetClass,
         input.multiplier.toString(),
@@ -216,11 +210,6 @@ export class PgBrokerOrderDao implements BrokerOrderDao {
     const result = await this.pool.query<BrokerOrderRow>(`SELECT ${SELECT_COLUMNS} FROM broker_order WHERE parent_broker_order_id = ANY($1) ORDER BY created_at, broker_order_id`, [
       [...input.parentBrokerOrderIds],
     ]);
-    return { brokerOrders: result.rows.map(toBrokerOrder) };
-  }
-
-  async listOrphanBrokerOrders(_input: ListOrphanBrokerOrdersInput): Promise<ListOrphanBrokerOrdersOutput> {
-    const result = await this.pool.query<BrokerOrderRow>(`SELECT ${SELECT_COLUMNS} FROM broker_order WHERE attribution = 'default' ORDER BY created_at, broker_order_id`);
     return { brokerOrders: result.rows.map(toBrokerOrder) };
   }
 

@@ -405,9 +405,9 @@ export class PgLedgerDao implements LedgerDao {
       const applySide = async (side: TransferSide, signedSize: Decimal, signedTotalCost: Decimal): Promise<Transaction> => {
         await client.query(
           `INSERT INTO broker_order
-             (broker_order_id, account_id, broker, broker_account_id, attribution, symbol, asset_class, multiplier,
+             (broker_order_id, account_id, broker, broker_account_id, symbol, asset_class, multiplier,
               status, order_class, order_type, side, time_in_force, qty, filled_qty, filled_avg_price, filled_at)
-           VALUES ($1, $2, 'traderq', $3, 'internal', $4, $5, $6, 'filled', 'regular', 'market', $7, 'day', $8, $8, $9, to_timestamp($10 / 1000.0))`,
+           VALUES ($1, $2, 'traderq', $3, $4, $5, $6, 'filled', 'regular', 'market', $7, 'day', $8, $8, $9, to_timestamp($10 / 1000.0))`,
           [
             side.orderId,
             side.accountId,
