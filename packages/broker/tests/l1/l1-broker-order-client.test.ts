@@ -14,7 +14,7 @@ describe('L1BrokerOrderClient', () => {
     // the only place an order can say whose it is that survives a restart.
     const { placer, rest } = harness();
 
-    const placed = await placer.placeLimitOrder({ symbol: 'AAPL', size: 10, side: 'buy', limitPrice: 100, accountId: 'MOMENTUM01' });
+    const placed = await placer.createLimitOrder({ symbol: 'AAPL', size: 10, side: 'buy', limitPrice: 100, accountId: 'MOMENTUM01' });
 
     expect(decodeAlpacaOrderCorrelation(placed.clientOrderId)).toEqual({ virtualAccountId: 'MOMENTUM01', reservationId: undefined });
     expect(rest.createdSingle[0].clientOrderId).toBe(placed.clientOrderId);
@@ -25,8 +25,8 @@ describe('L1BrokerOrderClient', () => {
     // without one is a supported case rather than a degraded one.
     const { placer } = harness();
 
-    const withHold = await placer.placeMarketOrder({ symbol: 'AAPL', size: 10, side: 'buy', accountId: 'MOMENTUM01', reservationId: 'res-1' });
-    const without = await placer.placeMarketOrder({ symbol: 'AAPL', size: 10, side: 'buy', accountId: 'MOMENTUM01' });
+    const withHold = await placer.createMarketOrder({ symbol: 'AAPL', size: 10, side: 'buy', accountId: 'MOMENTUM01', reservationId: 'res-1' });
+    const without = await placer.createMarketOrder({ symbol: 'AAPL', size: 10, side: 'buy', accountId: 'MOMENTUM01' });
 
     expect(decodeAlpacaOrderCorrelation(withHold.clientOrderId).reservationId).toBe('res-1');
     expect(decodeAlpacaOrderCorrelation(without.clientOrderId).reservationId).toBeUndefined();
@@ -38,7 +38,7 @@ describe('L1BrokerOrderClient', () => {
     // being wrong.
     const { placer, rest } = harness();
 
-    await expect(placer.placeMarketOrder({ symbol: 'AAPL', size: 10, side: 'buy', accountId: '' })).rejects.toThrow(InvalidRequestError);
+    await expect(placer.createMarketOrder({ symbol: 'AAPL', size: 10, side: 'buy', accountId: '' })).rejects.toThrow(InvalidRequestError);
     expect(rest.created).toHaveLength(0);
   });
 
@@ -47,7 +47,7 @@ describe('L1BrokerOrderClient', () => {
     // adds is the identity.
     const { placer, rest } = harness();
 
-    await placer.placeOtoOrder({
+    await placer.createOtoOrder({
       symbol: 'AAPL',
       size: 10,
       side: 'buy',
@@ -68,8 +68,8 @@ describe('L1BrokerOrderClient', () => {
       { symbol: 'AMZN261016C00285000', ratioQty: 1, side: 'buy' as const, positionIntent: 'buy_to_open' as const },
     ];
 
-    await placer.placeMultiLegOrder({ size: 1, legs, netLimitPrice: -0.85, accountId: 'MOMENTUM01' });
-    await placer.placeMultiLegOrder({ size: 1, legs, accountId: 'MOMENTUM01' });
+    await placer.createMultiLegOrder({ size: 1, legs, netLimitPrice: -0.85, accountId: 'MOMENTUM01' });
+    await placer.createMultiLegOrder({ size: 1, legs, accountId: 'MOMENTUM01' });
 
     expect(rest.created[0]).toMatchObject({ type: 'limit', netLimitPrice: -0.85 });
     expect(rest.created[1]).toMatchObject({ type: 'market' });

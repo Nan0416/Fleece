@@ -20,7 +20,7 @@ describe('L2BrokerOrderClient', () => {
   it('claims the order for the account that placed it', async () => {
     const { placer, tracking } = harness();
 
-    await placer.placeMarketOrder(marketOrder);
+    await placer.createMarketOrder(marketOrder);
 
     expect(tracking.requests).toEqual([{ brokerOrderIds: ['alpaca-order-1'], accountId: 'MOMENTUM01' }]);
   });
@@ -32,7 +32,7 @@ describe('L2BrokerOrderClient', () => {
     const { placer, rest, tracking } = harness();
     rest.nextOrder = alpacaOrder({ id: 'entry-1', legs: [alpacaOrder({ id: 'exit-1' })] });
 
-    await placer.placeOtoOrder({ ...marketOrder, limitPrice: 100, takeProfitLimitPrice: 120 });
+    await placer.createOtoOrder({ ...marketOrder, limitPrice: 100, takeProfitLimitPrice: 120 });
 
     expect(tracking.requests[0].brokerOrderIds).toEqual(['entry-1', 'exit-1']);
   });
@@ -44,7 +44,7 @@ describe('L2BrokerOrderClient', () => {
     const { placer, tracking } = harness();
     tracking.failNext = new Error('tracking service unreachable');
 
-    const placed = await placer.placeMarketOrder(marketOrder);
+    const placed = await placer.createMarketOrder(marketOrder);
 
     expect(placed.order.id).toBe('alpaca-order-1');
   });
@@ -53,7 +53,7 @@ describe('L2BrokerOrderClient', () => {
     const { placer, rest, tracking } = harness();
     rest.failNextCreate = new Error('connection reset');
 
-    await expect(placer.placeMarketOrder(marketOrder)).rejects.toThrow('connection reset');
+    await expect(placer.createMarketOrder(marketOrder)).rejects.toThrow('connection reset');
     expect(tracking.requests).toHaveLength(0);
   });
 

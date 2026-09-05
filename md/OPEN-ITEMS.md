@@ -69,8 +69,8 @@ inside its parent.
 What this is: a decision that a leg belongs to whoever placed its parent. For a spread
 that is a fact — the legs are the spread and cannot be traded apart from it. For a
 bracket or an OTO it is an assumption, and a correct one for every order
-`@fleece/broker` places, since `placeOto` announces entry and exit under the same
-account. It would be wrong only if something upstream placed a composite order whose
+`@fleece/broker` places, since an OTO placement announces entry and exit under the
+same account. It would be wrong only if something upstream placed a composite order whose
 legs belong to different virtual accounts, which nothing does.
 
 **What is still open.** `OrderTrackingFacade.track` remains implemented and uncallable —

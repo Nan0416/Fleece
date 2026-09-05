@@ -3,7 +3,7 @@ import { BrokerOrderEvent, Decimal, InvalidRequestError, LoggerFactory } from '@
 import { Asset, Broker } from './broker';
 import { BrokerUnavailableError } from '../errors';
 import { MultiLegOrderObj, OtoOrderObj, SingleOrderObj } from './order-obj';
-import { BrokerOrderClient, PlacedOrder } from '../l1/broker-order-client';
+import { BrokerOrderClient, CreatedOrder } from '../l1/broker-order-client';
 import { LimitOrderRequest, MarketOrderRequest, MultiLegOrderRequest, OrderRequest, OtoRequest, SingleOrderEventHandler } from './requests';
 import { BrokerTracker, ReservationRequest } from '../reservations/trackers';
 import { AccountReservations } from '../reservations/account-reservations';
@@ -137,7 +137,7 @@ export class L3BrokerOrderClient implements Broker {
     validate(request);
 
     const reservationId = this.hold(request);
-    let placed: PlacedOrder;
+    let placed: CreatedOrder;
     try {
       placed = await this.send(request, reservationId);
     } catch (err) {
@@ -185,12 +185,12 @@ export class L3BrokerOrderClient implements Broker {
     return this.props.reservations.hold(reservation);
   }
 
-  private async send(request: OrderRequest, reservationId: string | undefined): Promise<PlacedOrder> {
+  private async send(request: OrderRequest, reservationId: string | undefined): Promise<CreatedOrder> {
     const identity = { accountId: request.accountId, reservationId };
 
     switch (request.type) {
       case 'market':
-        return await this.props.placer.placeMarketOrder({
+        return await this.props.placer.createMarketOrder({
           ...identity,
           symbol: request.symbol,
           size: toWireSize(request.size),
@@ -198,7 +198,7 @@ export class L3BrokerOrderClient implements Broker {
           positionIntent: request.positionIntent,
         });
       case 'limit':
-        return await this.props.placer.placeLimitOrder({
+        return await this.props.placer.createLimitOrder({
           ...identity,
           symbol: request.symbol,
           size: toWireSize(request.size),
@@ -207,7 +207,7 @@ export class L3BrokerOrderClient implements Broker {
           positionIntent: request.positionIntent,
         });
       case 'oto':
-        return await this.props.placer.placeOtoOrder({
+        return await this.props.placer.createOtoOrder({
           ...identity,
           symbol: request.symbol,
           size: toWireSize(request.size),
@@ -217,7 +217,7 @@ export class L3BrokerOrderClient implements Broker {
           positionIntent: request.positionIntent,
         });
       case 'mleg':
-        return await this.props.placer.placeMultiLegOrder({
+        return await this.props.placer.createMultiLegOrder({
           ...identity,
           size: toWireSize(request.size),
           netLimitPrice: request.netLimitPrice?.toNumber(),

@@ -2,11 +2,11 @@ import { AlpacaRestClient, encodeAlpacaOrderCorrelation } from '@fleece/alpaca';
 import { InvalidRequestError, LoggerFactory } from '@fleece/shared';
 import {
   BrokerOrderClient,
-  PlaceLimitOrderInput,
-  PlaceMarketOrderInput,
-  PlaceMultiLegOrderInput,
-  PlaceOtoOrderInput,
-  PlacedOrder,
+  CreateLimitOrderInput,
+  CreateMarketOrderInput,
+  CreateMultiLegOrderInput,
+  CreateOtoOrderInput,
+  CreatedOrder,
   CorrelatedOrderInput,
 } from './broker-order-client';
 
@@ -32,7 +32,7 @@ export interface L1BrokerOrderClientProps {
 export class L1BrokerOrderClient implements BrokerOrderClient {
   constructor(private readonly props: L1BrokerOrderClientProps) {}
 
-  async placeMarketOrder(input: PlaceMarketOrderInput): Promise<PlacedOrder> {
+  async createMarketOrder(input: CreateMarketOrderInput): Promise<CreatedOrder> {
     const clientOrderId = correlate(input);
     const { order } = await this.props.restClient.createMarketOrder({
       symbol: input.symbol,
@@ -45,7 +45,7 @@ export class L1BrokerOrderClient implements BrokerOrderClient {
     return { order, clientOrderId };
   }
 
-  async placeLimitOrder(input: PlaceLimitOrderInput): Promise<PlacedOrder> {
+  async createLimitOrder(input: CreateLimitOrderInput): Promise<CreatedOrder> {
     const clientOrderId = correlate(input);
     const { order } = await this.props.restClient.createLimitOrder({
       symbol: input.symbol,
@@ -59,7 +59,7 @@ export class L1BrokerOrderClient implements BrokerOrderClient {
     return { order, clientOrderId };
   }
 
-  async placeOtoOrder(input: PlaceOtoOrderInput): Promise<PlacedOrder> {
+  async createOtoOrder(input: CreateOtoOrderInput): Promise<CreatedOrder> {
     const clientOrderId = correlate(input);
     const { order } = await this.props.restClient.createOtoOrder({
       symbol: input.symbol,
@@ -80,7 +80,7 @@ export class L1BrokerOrderClient implements BrokerOrderClient {
    * mleg's arrive nested inside the parent on every event, so the converter passes the
    * parent's correlation down to them and every contract is attributed from it.
    */
-  async placeMultiLegOrder(input: PlaceMultiLegOrderInput): Promise<PlacedOrder> {
+  async createMultiLegOrder(input: CreateMultiLegOrderInput): Promise<CreatedOrder> {
     const clientOrderId = correlate(input);
     const { order } = await this.props.restClient.createMultiLegOrder(
       input.netLimitPrice === undefined

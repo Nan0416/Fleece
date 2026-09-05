@@ -1,6 +1,6 @@
 import { AlpacaOrder } from '@fleece/alpaca';
 import { LoggerFactory } from '@fleece/shared';
-import { BrokerOrderClient, PlaceLimitOrderInput, PlaceMarketOrderInput, PlaceMultiLegOrderInput, PlaceOtoOrderInput, PlacedOrder } from '../l1/broker-order-client';
+import { BrokerOrderClient, CreateLimitOrderInput, CreateMarketOrderInput, CreateMultiLegOrderInput, CreateOtoOrderInput, CreatedOrder } from '../l1/broker-order-client';
 import { OrderTrackingClient } from './order-tracking-client';
 
 const logger = LoggerFactory.getLogger('L2BrokerOrderClient');
@@ -43,20 +43,20 @@ export interface L2BrokerOrderClientProps {
 export class L2BrokerOrderClient implements BrokerOrderClient {
   constructor(private readonly props: L2BrokerOrderClientProps) {}
 
-  async placeMarketOrder(input: PlaceMarketOrderInput): Promise<PlacedOrder> {
-    return await this.announce(input.accountId, await this.props.placer.placeMarketOrder(input));
+  async createMarketOrder(input: CreateMarketOrderInput): Promise<CreatedOrder> {
+    return await this.announce(input.accountId, await this.props.placer.createMarketOrder(input));
   }
 
-  async placeLimitOrder(input: PlaceLimitOrderInput): Promise<PlacedOrder> {
-    return await this.announce(input.accountId, await this.props.placer.placeLimitOrder(input));
+  async createLimitOrder(input: CreateLimitOrderInput): Promise<CreatedOrder> {
+    return await this.announce(input.accountId, await this.props.placer.createLimitOrder(input));
   }
 
-  async placeOtoOrder(input: PlaceOtoOrderInput): Promise<PlacedOrder> {
-    return await this.announce(input.accountId, await this.props.placer.placeOtoOrder(input));
+  async createOtoOrder(input: CreateOtoOrderInput): Promise<CreatedOrder> {
+    return await this.announce(input.accountId, await this.props.placer.createOtoOrder(input));
   }
 
-  async placeMultiLegOrder(input: PlaceMultiLegOrderInput): Promise<PlacedOrder> {
-    return await this.announce(input.accountId, await this.props.placer.placeMultiLegOrder(input));
+  async createMultiLegOrder(input: CreateMultiLegOrderInput): Promise<CreatedOrder> {
+    return await this.announce(input.accountId, await this.props.placer.createMultiLegOrder(input));
   }
 
   async cancelOrder(brokerOrderId: string): Promise<void> {
@@ -73,7 +73,7 @@ export class L2BrokerOrderClient implements BrokerOrderClient {
    * covers the case the correlation does not: a leg that reaches the tracking service
    * on its own.
    */
-  private async announce(accountId: string, placed: PlacedOrder): Promise<PlacedOrder> {
+  private async announce(accountId: string, placed: CreatedOrder): Promise<CreatedOrder> {
     const brokerOrderIds = [placed.order.id, ...legIds(placed.order)];
     try {
       await this.props.trackingClient.trackBrokerOrders({ brokerOrderIds, accountId });

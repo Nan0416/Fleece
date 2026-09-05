@@ -22,15 +22,21 @@ import { AlpacaOrder, AlpacaPositionIntent, CreateMultiLegOrderLeg } from '@flee
  * placed for an instrument whose requirement nothing here can price. See
  * `md/OPEN-ITEMS.md` item 2b.
  *
+ * **The names mirror L0's on purpose.** `createLimitOrder` here takes the same fields as
+ * `AlpacaRestClient.createLimitOrder`, minus `clientOrderId` and plus `accountId`, so the
+ * one-to-one-ness is visible at the call site rather than asserted in a comment. The
+ * input types share their names too: within this package `CreateLimitOrderInput` is this
+ * one, and the broker's own is reached through `@fleece/alpaca`.
+ *
  * `L2BrokerOrderClient` (L2) implements this same interface, which is what makes
  * telling the tracking service a layer you can leave out rather than a step inside one.
  */
 export interface BrokerOrderClient {
-  placeMarketOrder(input: PlaceMarketOrderInput): Promise<PlacedOrder>;
-  placeLimitOrder(input: PlaceLimitOrderInput): Promise<PlacedOrder>;
-  placeOtoOrder(input: PlaceOtoOrderInput): Promise<PlacedOrder>;
+  createMarketOrder(input: CreateMarketOrderInput): Promise<CreatedOrder>;
+  createLimitOrder(input: CreateLimitOrderInput): Promise<CreatedOrder>;
+  createOtoOrder(input: CreateOtoOrderInput): Promise<CreatedOrder>;
   /** A spread, placed as one order so that its legs fill together or not at all. */
-  placeMultiLegOrder(input: PlaceMultiLegOrderInput): Promise<PlacedOrder>;
+  createMultiLegOrder(input: CreateMultiLegOrderInput): Promise<CreatedOrder>;
   /** Takes the **broker's** id. A leg of a spread cannot be cancelled alone. */
   cancelOrder(brokerOrderId: string): Promise<void>;
 }
@@ -49,7 +55,7 @@ export interface CorrelatedOrderInput {
   readonly reservationId?: string;
 }
 
-interface BasePlaceOrderInput extends CorrelatedOrderInput {
+interface BaseCreateOrderInput extends CorrelatedOrderInput {
   readonly symbol: string;
   /** Always positive; the direction is `side`, which is Alpaca's own convention. */
   readonly size: number;
@@ -59,18 +65,18 @@ interface BasePlaceOrderInput extends CorrelatedOrderInput {
   readonly timeInForce?: 'day' | 'gtc';
 }
 
-export interface PlaceMarketOrderInput extends BasePlaceOrderInput {}
+export interface CreateMarketOrderInput extends BaseCreateOrderInput {}
 
-export interface PlaceLimitOrderInput extends BasePlaceOrderInput {
+export interface CreateLimitOrderInput extends BaseCreateOrderInput {
   readonly limitPrice: number;
 }
 
-export interface PlaceOtoOrderInput extends BasePlaceOrderInput {
+export interface CreateOtoOrderInput extends BaseCreateOrderInput {
   readonly limitPrice: number;
   readonly takeProfitLimitPrice: number;
 }
 
-export interface PlaceMultiLegOrderInput extends CorrelatedOrderInput {
+export interface CreateMultiLegOrderInput extends CorrelatedOrderInput {
   /** How many spreads. Always positive: direction lives on each leg. */
   readonly size: number;
   /** Two to four contracts. */
@@ -85,7 +91,7 @@ export interface PlaceMultiLegOrderInput extends CorrelatedOrderInput {
 }
 
 /** What a placement produced, and the identity it went out carrying. */
-export interface PlacedOrder {
+export interface CreatedOrder {
   /** Alpaca's own response, unchanged. A composite order carries its legs nested in it. */
   readonly order: AlpacaOrder;
   /** The encoded correlation, returned so a caller can prove what went out. */
