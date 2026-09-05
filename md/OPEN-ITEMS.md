@@ -260,30 +260,27 @@ would close them properly, and is worth more than patching either in isolation.
 
 ## 7. Nothing runs the tests
 
-**Severity: medium — cheap to fix.**
+**Resolved — `.github/workflows/ci.yml` runs on every pull request and every push to
+`main`.**
 
-There is no `.github/` directory, so PR #1 merged with **zero checks**. 266 tests exist
-and nothing runs them but you, by hand.
+It runs `npm run build`, `npm run lint`, `npm run format:lint` and `npm run test:ci`
+against a PostgreSQL service container, in that order. Three details are the point of it
+rather than incidental:
 
-**Recommendation: add a workflow** running `npm run build`, `npm run lint`,
-`npm run format:lint` and `npm test`, with a PostgreSQL service container and
-`FLEECE_TEST_DATABASE_URL` set so the integration suites actually run — they are the ones
-covering the locking and idempotency, and they are exactly the tests that skip silently
-when nobody configures them.
-
-**`npm test` can report a pass that is not one, and it is worth knowing exactly how.**
-ts-jest *does* type-check the sources a test imports — an error in an imported file fails
-the suite. What it does not do is invalidate its cache when a **dependency's types**
-change: the cache key is a file's own content, so editing `@fleece/shared` leaves every
-already-compiled importer cached, and suites go green against types that no longer exist.
-This is not hypothetical — `packages/alpaca/tests/order-converter.test.ts` reported 34
-passing tests against a converter that could not compile, and `--no-cache` immediately
-showed the failure.
-
-The consequence: **after a change to a shared package, `npm test` is not evidence.**
-`npm run build` is the authority on whether the code compiles, and CI should either run
-the build first or pass `--no-cache`. A workflow that runs only `npm test` will report a
-green suite for a repository that does not build.
+- **The build runs first, and is the authority on whether the code compiles.** `npm test`
+  is not: ts-jest keys its cache on a file's own content, so a change to a shared package
+  leaves every importer cached and suites go green against types that no longer exist.
+  `test:ci` also passes `--no-cache`, so neither hazard survives.
+- **A skipped suite fails the run.** The integration suites skip themselves without
+  `FLEECE_TEST_DATABASE_URL`, and jest reports that as `success: true`. A run that tested
+  none of the locking, idempotency or client round-trip behaviour would otherwise be
+  indistinguishable from a green one. `scripts/assert-suites-ran.js` reads the JSON jest
+  already writes and fails when any suite ran nothing.
+- **`@fleece/broker` has a job of its own, allowed to fail.** It does not compile against
+  the redesign and must not be ported by translating its arithmetic (item 2b), so the
+  main job excludes it — from the build, from `npm test`, and from lint's blast radius —
+  while the second job keeps the gap visible on every run. A permanently red required
+  check is one people learn to ignore. Fold it back into `check` when it goes green.
 
 ---
 

@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A second push to a branch makes the first run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: build, lint, test
+    runs-on: ubuntu-latest
+
+    # The integration suites need a real PostgreSQL. Without one they skip themselves
+    # and the run is green having tested none of the locking, idempotency or client
+    # round-trip behaviour — which is the failure this whole job exists to notice.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Every integration suite takes its own schema in this one database, so they run
+      # in parallel workers without truncating each other's rows.
+      FLEECE_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # First, and not only because it is fast to fail. `npm test` is not evidence that
+      # the code compiles: ts-jest keys its cache on a file's own content, so a change
+      # to a shared package leaves every importer cached and suites go green against
+      # types that no longer exist. The build is the authority.
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format
+        run: npm run format:lint
+
+      - name: Test
+        run: npm run test:ci
+
+      # Jest reports a skipped suite as `success: true`. This is what turns "the
+      # database was not reachable" from a green run into a red one.
+      - name: Every suite ran something
+        if: always()
+        run: node scripts/assert-suites-ran.js jest-results.json
+
+  # `@fleece/broker` does not compile against the ledger redesign, and must not be
+  # ported by translating its arithmetic — its option reservations are wrong by a factor
+  # of 100, so converting them first would produce a package that looks correct while
+  # still being wrong. See `md/OPEN-ITEMS.md` items 0 and 2b.
+  #
+  # It is a job of its own, allowed to fail, so the gap stays visible on every run
+  # without a permanently red check that people learn to ignore. When it goes green,
+  # fold it back into `build`.
+  broker:
+    name: broker (not ported — allowed to fail)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Type-check every package, broker included
+        run: npm run build:all
+      - name: Run broker's tests
+        run: npx jest --config jest.config.js --ci --no-cache --testPathIgnorePatterns '/node_modules/' packages/broker
