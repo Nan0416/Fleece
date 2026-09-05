@@ -2,7 +2,6 @@ import {
   AssetClass,
   Broker,
   BrokerOrder,
-  BrokerOrderAttribution,
   BrokerOrderClass,
   BrokerOrderRecord,
   BrokerOrderSide,
@@ -21,8 +20,6 @@ import {
   ListBrokerOrderRecordsResponse,
   ListBrokerOrdersRequest,
   ListBrokerOrdersResponse,
-  ListOrphanBrokerOrdersRequest,
-  ListOrphanBrokerOrdersResponse,
   LoggerFactory,
   NotFoundError,
 } from '@fleece/shared';
@@ -56,8 +53,6 @@ export interface RecordBrokerOrderRequest {
   readonly accountId: string;
   readonly broker: Broker;
   readonly brokerAccountId: string;
-  /** How `accountId` was decided. `default` means nobody claimed the order. */
-  readonly attribution: BrokerOrderAttribution;
 
   readonly symbol?: string;
   readonly assetClass: AssetClass;
@@ -124,7 +119,7 @@ export class BrokerOrderService {
     const result = await this.brokerOrderDao.upsertBrokerOrder(request);
     if (result.created) {
       logger.info(
-        `Recording ${request.broker} order ${request.brokerOrderId} (${request.status}) for account ${request.accountId} by ${request.attribution}${request.parentBrokerOrderId === undefined ? '' : `, a leg of ${request.parentBrokerOrderId}`}.`,
+        `Recording ${request.broker} order ${request.brokerOrderId} (${request.status}) for account ${request.accountId}${request.parentBrokerOrderId === undefined ? '' : `, a leg of ${request.parentBrokerOrderId}`}.`,
       );
     }
     return result;
@@ -161,10 +156,6 @@ export class BrokerOrderService {
    */
   async listBrokerOrderLegs(request: ListBrokerOrderLegsRequest): Promise<ListBrokerOrderLegsResponse> {
     return await this.brokerOrderDao.listBrokerOrderLegs({ parentBrokerOrderIds: [request.parentBrokerOrderId] });
-  }
-
-  async listOrphanBrokerOrders(_request: ListOrphanBrokerOrdersRequest = {}): Promise<ListOrphanBrokerOrdersResponse> {
-    return await this.brokerOrderDao.listOrphanBrokerOrders({});
   }
 
   /**

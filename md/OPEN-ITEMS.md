@@ -49,7 +49,7 @@ judgement rather than a gap.**
 composite order: one Alpaca payload becomes one event per order it describes, each leg
 naming its parent in `parentBrokerOrderId`, and **every leg inherits the parent's
 correlation** — the virtual account and the reservation. A leg therefore arrives already
-attributed, gets its own `broker_order` row at `attribution: 'parent'`, and never reaches
+attributed, gets its own `broker_order` row naming that parent, and never reaches
 the holding pen.
 
 A composite parent is converted too, ahead of its legs, so a spread produces a row for

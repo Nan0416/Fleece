@@ -1,15 +1,4 @@
-import {
-  AsyncQueue,
-  Broker,
-  BrokerOrder,
-  BrokerOrderAttribution,
-  BrokerOrderEvent,
-  BrokerOrderRecord,
-  Decimal,
-  defaultContractMultiplier,
-  isTerminalStatus,
-  LoggerFactory,
-} from '@fleece/shared';
+import { AsyncQueue, Broker, BrokerOrder, BrokerOrderEvent, BrokerOrderRecord, Decimal, defaultContractMultiplier, isTerminalStatus, LoggerFactory } from '@fleece/shared';
 import { BrokerOrderService, LedgerService, RecordBrokerOrderRequest } from '@fleece/core';
 
 const logger = LoggerFactory.getLogger('OrderTrackingFacade');
@@ -60,12 +49,6 @@ interface HeldEvents {
   readonly jobs: BrokerOrderEventJob[];
 }
 
-/** Which account an event belongs to, and how that was decided. */
-interface Attribution {
-  readonly accountId: string;
-  readonly attribution: BrokerOrderAttribution;
-}
-
 type Work = { readonly type: 'event'; readonly job: BrokerOrderEventJob } | { readonly type: 'tracking'; readonly request: TrackBrokerOrdersRequest };
 
 /**
@@ -75,9 +58,8 @@ type Work = { readonly type: 'event'; readonly job: BrokerOrderEventJob } | { re
  * fill an event is. An order's virtual account can come from four places, in
  * descending order of trust: the correlation the broker echoes back, the broker order
  * already recorded, a tracking request from the execution service, and finally a
- * default account for orders that belong to nobody. Which one answered is recorded on
- * the row as `attribution`, so a number can be traced back to how much it should be
- * trusted rather than only to what it says.
+ * default account for orders that belong to nobody. Whichever answers first is what the
+ * order keeps — see `resolve`.
  *
  * Everything runs through one queue. Two events for the same order processed
  * concurrently would each decide independently what to record, and while the write is
@@ -123,9 +105,9 @@ export class OrderTrackingFacade {
    * **What it is not.** It is a fallback, not an override: it sits last in the
    * resolution order, behind the broker's own echo and behind whatever the broker order
    * already records. It cannot move an order that is already recorded, whatever it
-   * claims — a disagreement is logged and the existing attribution stands. Ordering does
-   * not matter either way; a request arriving before the events is remembered, and one
-   * arriving after releases what is held.
+   * claims — a disagreement is logged and the account already recorded stands. Ordering
+   * does not matter either way; a request arriving before the events is remembered, and
+   * one arriving after releases what is held.
    *
    * **Nothing calls this yet.** Its transport is unported; see `md/OPEN-ITEMS.md` item 1.
    */
@@ -158,17 +140,18 @@ export class OrderTrackingFacade {
       return;
     }
 
-    if (existing !== null && existing.accountId !== resolved.accountId) {
+    if (existing !== null && existing.accountId !== resolved) {
       // Reported, not applied. An order's account is decided once — see `resolve` — and
       // this says what was ignored rather than warning about something that then happens.
-      logger.error(
-        `Broker order ${event.id} is booked to account ${existing.accountId} by ${existing.attribution} but was just reported as belonging to ${resolved.accountId}. Leaving it where it is.`,
-      );
+      logger.error(`Broker order ${event.id} is booked to account ${existing.accountId} but was just reported as belonging to ${resolved}. Leaving it where it is.`);
     }
 
-    await this.props.brokerOrderService.recordBrokerOrder(this.toRecordRequest(job, existing?.accountId ?? resolved.accountId, existing?.attribution ?? resolved.attribution));
+    // Whatever answered first stands, which is why the existing account wins here.
+    const accountId = existing?.accountId ?? resolved;
+
+    await this.props.brokerOrderService.recordBrokerOrder(this.toRecordRequest(job, accountId));
     await this.props.brokerOrderService.insertRecord({ record: job.originalEvent });
-    await this.applyFill(event, existing?.accountId ?? resolved.accountId);
+    await this.applyFill(event, accountId);
 
     if (isTerminalStatus(event.status)) {
       // Nothing more will arrive for this order, so stop holding what was learned
@@ -178,7 +161,8 @@ export class OrderTrackingFacade {
   }
 
   /**
-   * Which account this event belongs to, and how that was decided.
+   * Which account this event belongs to. Undefined means nothing knows yet, and the
+   * event is held.
    *
    * **Decided once, and never revisited.** Whatever answers first is what the order
    * keeps: `recordBrokerOrder` does not overwrite an account, and nothing anywhere can
@@ -191,36 +175,27 @@ export class OrderTrackingFacade {
    * wrong account is corrected by transferring the *position*, which moves the cost
    * basis and leaves both sides an audit trail.
    *
-   * The order of the branches *is* the order of trust, and each one names a different
-   * kind of claim:
+   * The order of the branches is the order of trust, and each answers a different way:
    *
-   * - a leg carrying its parent's correlation is attributed `parent`, because that is
-   *   what it is — Alpaca gives legs client order ids of its own, so an account on a leg
-   *   can only have come from the composite it belongs to;
-   * - anything else carrying a correlation said so itself;
+   * - the broker echoed back a correlation we set, which is the order's own statement
+   *   about itself — and on a leg, its parent's, since Alpaca gives legs client order
+   *   ids of its own and the converter passes the composite's correlation down;
    * - a broker order already recorded keeps whatever decided it the first time;
    * - a tracking request is somebody else's word for it;
    * - and a default account means nobody claimed it at all.
+   *
+   * Which of those answered is not recorded. It is recoverable where it matters — the
+   * `client_order_id` is kept verbatim in `broker_order_record`, a leg's parent is on
+   * its own row, and an unclaimed order is one sitting in a configured catch-all
+   * account — so a column repeating it on every order would only be a second place for
+   * the same fact to be wrong.
    */
-  private resolve(job: BrokerOrderEventJob, existing: BrokerOrder | null): Attribution | undefined {
+  private resolve(job: BrokerOrderEventJob, existing: BrokerOrder | null): string | undefined {
     const { event } = job;
-    if (event.accountId !== undefined) {
-      return { accountId: event.accountId, attribution: event.parentBrokerOrderId === undefined ? 'correlation' : 'parent' };
-    }
-    if (existing !== null) {
-      return { accountId: existing.accountId, attribution: existing.attribution };
-    }
-    const association = this.associations.get(event.id);
-    if (association !== undefined) {
-      return { accountId: association, attribution: 'tracking' };
-    }
-    if (job.defaultAccountId !== undefined) {
-      return { accountId: job.defaultAccountId, attribution: 'default' };
-    }
-    return undefined;
+    return event.accountId ?? existing?.accountId ?? this.associations.get(event.id) ?? job.defaultAccountId;
   }
 
-  private toRecordRequest(job: BrokerOrderEventJob, accountId: string, attribution: BrokerOrderAttribution): RecordBrokerOrderRequest {
+  private toRecordRequest(job: BrokerOrderEventJob, accountId: string): RecordBrokerOrderRequest {
     const { event } = job;
     return {
       brokerOrderId: event.id,
@@ -228,7 +203,6 @@ export class OrderTrackingFacade {
       accountId,
       broker: job.broker,
       brokerAccountId: job.brokerAccountId,
-      attribution,
       // NULL on a composite parent, which trades no instrument of its own. The
       // converter has already turned Alpaca's empty string into `undefined`.
       symbol: event.symbol,
@@ -328,7 +302,7 @@ export class OrderTrackingFacade {
       // order alone, and so does this. See `resolve` for why moving it would be worse
       // than leaving it wrong.
       logger.error(
-        `Broker order ${brokerOrderId} is booked to account ${existing.accountId} by ${existing.attribution} but was just claimed by ${request.accountId}. Leaving it where it is. If it really belongs to ${request.accountId}, move the position with a transfer rather than the order.`,
+        `Broker order ${brokerOrderId} is booked to account ${existing.accountId} but was just claimed by ${request.accountId}. Leaving it where it is. If it really belongs to ${request.accountId}, move the position with a transfer rather than the order.`,
       );
     }
 
@@ -379,8 +353,9 @@ export class OrderTrackingFacade {
    * than dropped, because the shares moved whether or not a strategy asked for them,
    * and a ledger that omits them will not reconcile against the brokerage statement.
    *
-   * It is recorded as `attribution: 'default'`, which is what "orphan" now means and
-   * what `broker-order orphans` lists.
+   * That is all "orphan" means: an order sitting in a configured catch-all account.
+   * Finding them is a search by account, which `listBrokerOrders` already indexes —
+   * there is no column marking each one, because the fact belongs to the account.
    */
   private releaseToDefaultAccount(brokerOrderId: string): void {
     const entry = this.held.get(brokerOrderId);

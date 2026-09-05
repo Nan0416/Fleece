@@ -111,15 +111,15 @@ describeIntegration('the write path', () => {
       expect(held.asset_class).toBe('equity');
     });
 
-    it('records the order it came from, and how the account was decided', async () => {
+    it("records the order it came from, in the broker's own units", async () => {
       inject(alpacaOrder());
       await facade.drain();
 
-      const order = await pool.query<{ attribution: string; filled_qty: string; filled_avg_price: string }>(
-        'SELECT attribution, filled_qty, filled_avg_price FROM broker_order WHERE broker_order_id = $1',
+      const order = await pool.query<{ account_id: string; filled_qty: string; filled_avg_price: string }>(
+        'SELECT account_id, filled_qty, filled_avg_price FROM broker_order WHERE broker_order_id = $1',
         ['order-1'],
       );
-      expect(order.rows[0].attribution).toBe('correlation');
+      expect(order.rows[0].account_id).toBe('MOMENTUM01');
       // What the broker said, in the broker's units, alongside what the ledger booked.
       expect(order.rows[0].filled_qty).toBe('10.000000000');
       expect(order.rows[0].filled_avg_price).toBe('150.000000000');
@@ -179,13 +179,14 @@ describeIntegration('the write path', () => {
       inject(mlegOrder());
       await facade.drain();
 
-      const legs = await pool.query<{ broker_order_id: string; parent_broker_order_id: string | null; attribution: string }>(
-        'SELECT broker_order_id, parent_broker_order_id, attribution FROM broker_order WHERE symbol IS NOT NULL ORDER BY broker_order_id',
+      const legs = await pool.query<{ broker_order_id: string; parent_broker_order_id: string | null; account_id: string }>(
+        'SELECT broker_order_id, parent_broker_order_id, account_id FROM broker_order WHERE symbol IS NOT NULL ORDER BY broker_order_id',
       );
       expect(legs.rows.map((row) => row.broker_order_id)).toEqual(['mleg-leg-long', 'mleg-leg-short']);
       expect(legs.rows.every((row) => row.parent_broker_order_id === 'mleg-parent-1')).toBe(true);
-      // The account came from the parent's correlation, which is what `parent` records.
-      expect(legs.rows.every((row) => row.attribution === 'parent')).toBe(true);
+      // Alpaca gives legs client order ids of its own, so their account can only have
+      // come from the parent's correlation — which `parent_broker_order_id` records.
+      expect(legs.rows.every((row) => row.account_id === 'MOMENTUM01')).toBe(true);
     });
   });
 
@@ -237,9 +238,10 @@ describeIntegration('the write path', () => {
       const held = await position('DEFAULTPAPR', 'AAPL');
       expect(held.size).toBe('10.000000000');
 
-      const order = await pool.query<{ attribution: string }>('SELECT attribution FROM broker_order WHERE broker_order_id = $1', ['placed-by-hand']);
-      // Which is what "orphan" now means, and what `broker-order orphans` lists.
-      expect(order.rows[0].attribution).toBe('default');
+      // Which is all "orphan" means: an order sitting in a configured catch-all account.
+      // Finding them is a search by account, not a column marking each one.
+      const orphans = await pool.query('SELECT broker_order_id FROM broker_order WHERE account_id = $1', ['DEFAULTPAPR']);
+      expect(orphans.rows.map((row) => row.broker_order_id)).toEqual(['placed-by-hand']);
     });
   });
 

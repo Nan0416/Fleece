@@ -50,9 +50,9 @@ and most of what follows exists because of that.
    came free while the figure was summed on every read, and that has to be asked for now
    that it is stored.
 8. **Guards belong in the SQL, not around it.** Where a write must not happen twice,
-   the condition goes in the statement — `INSERT ... ON CONFLICT DO UPDATE` for
-   recording a broker order, `WHERE attribution = 'default'` shapes generally. A
-   read-then-write loses that race.
+   the condition goes in the statement — `INSERT ... ON CONFLICT DO UPDATE` records a
+   broker order idempotently, so two events for it cannot each decide the row was
+   missing. A read-then-write loses that race.
 8a. **An order's virtual account is written once.** Nothing offers a way to change it.
    Every `ledger_transaction`, `position`, `profit` row and `order_fill_progress`
    counter it produces is keyed by that account, so moving the order alone strands all
@@ -61,6 +61,13 @@ and most of what follows exists because of that.
    consistent. The legacy raised a fatal-error metric on a mismatch rather than fixing
    it up. A mis-booked order is corrected by transferring the **position**, which is
    double-entry and leaves both sides an audit trail.
+8b. **Do not store what a stored column already determines.** An order's account was
+   briefly accompanied by an `attribution` recording *how* it was decided. Nothing
+   branched on it: a leg's account comes from its parent, which `parent_broker_order_id`
+   already says; an order Fleece placed says so in the `client_order_id` kept verbatim
+   in `broker_order_record`; and an order nobody claimed is one in a configured catch-all
+   account, which is a fact about that account. A column repeating any of those is a
+   second place for the same fact to be wrong.
 9. **Take locks in a fixed order.** A transfer locks both positions sorted by account
    id, so two transfers running in opposite directions between the same pair cannot
    deadlock. Postgres would detect the cycle and abort a victim rather than hang, but

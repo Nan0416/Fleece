@@ -67,9 +67,9 @@ export async function createAccount(pool: Pool, accountId: string, accountType: 
 export async function createBrokerOrder(pool: Pool, brokerOrderId: string, accountId: string): Promise<void> {
   await pool.query(
     `INSERT INTO broker_order
-       (broker_order_id, account_id, broker, broker_account_id, attribution, symbol, asset_class,
+       (broker_order_id, account_id, broker, broker_account_id, symbol, asset_class,
         status, order_class, order_type, side, time_in_force, qty)
-     VALUES ($1, $2, 'alpaca', 'TEST-BROKER', 'correlation', 'AAPL', 'equity', 'new', 'regular', 'limit', 'buy', 'day', 1)`,
+     VALUES ($1, $2, 'alpaca', 'TEST-BROKER', 'AAPL', 'equity', 'new', 'regular', 'limit', 'buy', 'day', 1)`,
     [brokerOrderId, accountId],
   );
 }

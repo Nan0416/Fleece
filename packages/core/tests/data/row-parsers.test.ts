@@ -1,5 +1,5 @@
 import { InternalServiceError } from '@fleece/shared';
-import { toAccountStatus, toAccountType, toAssetClass, toBroker, toBrokerOrderAttribution, toDecimal, toDividendStatus, toOptionalDecimal } from '../../src/data/row-parsers';
+import { toAccountStatus, toAccountType, toAssetClass, toBroker, toBrokerOrderClass, toDecimal, toDividendStatus, toOptionalDecimal } from '../../src/data/row-parsers';
 
 describe('row parsers', () => {
   describe('narrowing a value a CHECK constraint already guarantees', () => {
@@ -8,7 +8,7 @@ describe('row parsers', () => {
       expect(toAccountType('paper', 'ACCOUNT001')).toBe('paper');
       expect(toBroker('alpaca', 'order-1')).toBe('alpaca');
       expect(toAssetClass('option', 'Position ACCOUNT001/AAPL')).toBe('option');
-      expect(toBrokerOrderAttribution('default', 'order-1')).toBe('default');
+      expect(toBrokerOrderClass('mleg', 'order-1')).toBe('mleg');
     });
 
     it('treats anything else as the schema and the code having diverged, not as a bad request', () => {
@@ -16,7 +16,7 @@ describe('row parsers', () => {
       // InvalidRequestError.
       expect(() => toAccountStatus('archived', 'ACCOUNT001')).toThrow(InternalServiceError);
       expect(() => toAssetClass('futures', 'Position ACCOUNT001/AAPL')).toThrow(InternalServiceError);
-      expect(() => toBrokerOrderAttribution('guessed', 'order-1')).toThrow(InternalServiceError);
+      expect(() => toBrokerOrderClass('spread', 'order-1')).toThrow(InternalServiceError);
     });
 
     it('names the row it could not read, so the bad row can be found', () => {

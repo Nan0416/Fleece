@@ -2,7 +2,6 @@ import {
   AssetClass,
   Broker,
   BrokerOrder,
-  BrokerOrderAttribution,
   BrokerOrderClass,
   BrokerOrderRecord,
   BrokerOrderSide,
@@ -29,8 +28,8 @@ import {
  * for the same order arriving at once would otherwise each decide independently whether
  * the row existed, and one of the two inserts would fail on the primary key.
  *
- * **What an existing row keeps.** `accountId`, `attribution`, `symbol` and everything
- * else describing what the order *is* are written once and never overwritten. Only what
+ * **What an existing row keeps.** `accountId`, `symbol` and everything else describing
+ * what the order *is* are written once and never overwritten. Only what
  * a broker legitimately revises — the status, the filled quantity and price, the fill
  * time — is updated.
  *
@@ -49,7 +48,6 @@ export interface UpsertBrokerOrderInput {
   readonly accountId: string;
   readonly broker: Broker;
   readonly brokerAccountId: string;
-  readonly attribution: BrokerOrderAttribution;
 
   /** Absent only for a composite parent, which trades no instrument of its own. */
   readonly symbol?: string;
@@ -114,13 +112,6 @@ export interface ListBrokerOrderLegsOutput {
   readonly brokerOrders: ReadonlyArray<BrokerOrder>;
 }
 
-/** Orders nobody claimed: `attribution` is `default`, so they were booked to a catch-all account. */
-export interface ListOrphanBrokerOrdersInput {}
-
-export interface ListOrphanBrokerOrdersOutput {
-  readonly brokerOrders: ReadonlyArray<BrokerOrder>;
-}
-
 export interface DeleteBrokerOrderInput {
   readonly brokerOrderId: string;
 }
@@ -149,7 +140,6 @@ export interface BrokerOrderDao {
   getBrokerOrder(input: GetBrokerOrderInput): Promise<GetBrokerOrderOutput>;
   listBrokerOrders(input: ListBrokerOrdersInput): Promise<ListBrokerOrdersOutput>;
   listBrokerOrderLegs(input: ListBrokerOrderLegsInput): Promise<ListBrokerOrderLegsOutput>;
-  listOrphanBrokerOrders(input: ListOrphanBrokerOrdersInput): Promise<ListOrphanBrokerOrdersOutput>;
   /** Records go with it, by foreign key cascade. Legs do not: they are orders in their own right. */
   deleteBrokerOrder(input: DeleteBrokerOrderInput): Promise<DeleteBrokerOrderOutput>;
   insertRecord(input: InsertBrokerOrderRecordInput): Promise<InsertBrokerOrderRecordOutput>;

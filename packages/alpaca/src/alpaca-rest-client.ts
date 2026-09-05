@@ -117,7 +117,7 @@ interface BaseCreateMultiLegOrderInput {
   /**
    * Only the parent gets one. Alpaca assigns each leg a client order id of its own, so
    * a leg cannot carry a correlation — but unlike a bracket's legs, an mleg's arrive
-   * nested inside the parent on every event, and so inherit its attribution.
+   * nested inside the parent on every event, and so inherit its correlation.
    */
   readonly clientOrderId?: string;
 }
