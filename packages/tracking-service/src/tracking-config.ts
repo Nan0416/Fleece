@@ -1,15 +1,20 @@
-import { getenv, getenvBoolean, LoggerFactory } from '@fleece/shared';
+import { getenv, getenvBoolean, getenvInteger, LoggerFactory } from '@fleece/shared';
 import { AlpacaAccountIdentifier, AlpacaCredentials } from '@fleece/alpaca';
 
-const logger = LoggerFactory.getLogger('InjectorConfig');
+const logger = LoggerFactory.getLogger('TrackingConfig');
 
 export interface BrokerAccountConfig {
   readonly account: AlpacaAccountIdentifier;
   readonly credentials: AlpacaCredentials;
 }
 
-export interface InjectorConfig {
+export interface TrackingConfig {
   readonly databaseUrl: string;
+  /** The port `PUT /track` listens on. Distinct from the API's, which is 3100. */
+  readonly port: number;
+  readonly host: string;
+  /** Bearer token callers must present. Unset disables authentication. */
+  readonly authToken?: string;
   readonly brokerAccounts: ReadonlyArray<BrokerAccountConfig>;
   /**
    * Where a fill lands when no strategy claims it — an order placed by hand on the
@@ -52,7 +57,7 @@ function readBrokerAccount(index: number): BrokerAccountConfig | undefined {
 }
 
 /** The single place this package reads `process.env`. */
-export function loadInjectorConfig(): InjectorConfig {
+export function loadTrackingConfig(): TrackingConfig {
   const stage = getenv('FLEECE_STAGE', 'beta');
 
   const brokerAccounts: BrokerAccountConfig[] = [];
@@ -75,6 +80,11 @@ export function loadInjectorConfig(): InjectorConfig {
 
   return {
     databaseUrl: getenv('FLEECE_DATABASE_URL', `postgres://localhost:5432/fleece_${stage}`),
+    port: getenvInteger('FLEECE_TRACKING_PORT', 3101),
+    // Loopback by default, like the API: a claim decides which account an order's fills
+    // are booked to, so exposing the port needs to be a deliberate act.
+    host: getenv('FLEECE_TRACKING_HOST', '127.0.0.1'),
+    authToken: process.env['FLEECE_TRACKING_TOKEN'],
     brokerAccounts,
     defaultLiveAccountId: getenv('FLEECE_DEFAULT_LIVE_ACCOUNT_ID', '0000000002'),
     defaultPaperAccountId: getenv('FLEECE_DEFAULT_PAPER_ACCOUNT_ID', '0000000001'),

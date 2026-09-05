@@ -17,12 +17,12 @@ An npm-workspaces monorepo, nine packages under `packages/`:
 | `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
 | `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price |
 | `marketdata` | Polygon client for splits and dividends |
-| `injector` | Turns broker order events into ledger entries |
+| `tracking-service` | Turns broker order events into ledger entries, and takes claims about whose an order is |
 | `corporate-actions` | Records the dividends each account is owed |
 
-Dependencies point one way: `service`/`injector`/`corporate-actions` → `core` →
-`shared`; `injector` → `alpaca`; `broker` → `alpaca`; `corporate-actions` → `marketdata`;
-`client` → `shared`.
+Dependencies point one way: `service`/`tracking-service`/`corporate-actions` → `core` →
+`shared`; `tracking-service` → `alpaca`; `broker` → `alpaca` and `client`;
+`corporate-actions` → `marketdata`; `client` → `shared`.
 
 There is no CLI. Each runnable package has a `src/main.ts` that reads its configuration
 from the environment and starts; nothing parses arguments.
@@ -42,8 +42,8 @@ Never edit one that has shipped; add the next number.
 
 ## Three processes, one database
 
-`serve`, `injector start` and `corporate-actions run` are separate processes writing to
-the same database concurrently, which is the topology the legacy system ran. They do
+The API, the tracking service and the dividend job are separate processes writing to the
+same database concurrently, which is the topology the legacy system ran. They do
 not coordinate with each other — the ledger's write path takes a row lock on the
 position being written, and applying a broker's fill report is idempotent. **Do not add
 coordination between the processes; add it to the SQL.**
@@ -52,13 +52,14 @@ coordination between the processes; add it to the SQL.**
 
 ```bash
 npm start                     # the API on :3100 (builds + migrates first)
-npm run start:injector        # the injector, in another terminal
+npm run start:tracking-service # the tracking service on :3101, in another terminal
 npm run corporate-actions     # the dividend job, once
 ```
 
-Each of those builds first and then runs a `dist/main.js`. Node 22 also runs TypeScript
-directly, so `node packages/service/src/main.ts` skips the build — which is the quickest
-way to try a change, and how to run an experiment with values hardcoded in a script.
+Each of those builds first and then runs a `dist/main.js`, and that is the only way to
+run one. Node 22 strips TypeScript types but resolves relative imports as ESM specifiers,
+so `node packages/service/src/main.ts` fails on the first `./server` it meets — the
+packages compile to CommonJS, which is what makes `dist/main.js` work.
 
 Everything is configured from the environment; see `dev.md`. There are no command-line
 flags to learn. `npm run build:all` additionally type-checks `packages/playground`, which

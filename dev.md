@@ -17,7 +17,7 @@ npm start               # migrates on the way up
 | Command | What it does |
 | --- | --- |
 | `npm start` | Build, migrate, then serve the API on :3100 |
-| `npm run start:injector` | Build, then run the injector |
+| `npm run start:tracking-service` | Build, then run the tracking service on :3101 |
 | `npm run corporate-actions` | Build, then run the dividend job once |
 | `npm run build:all` | Type-check every package, `broker` included |
 | `npm test` | Unit tests; integration suites skip without a database |
@@ -30,14 +30,12 @@ There are no command-line flags. Every process reads its configuration from the
 environment, so `FLEECE_PORT=4000 npm start` is how you change a port — one place a
 setting can come from, rather than two with a precedence rule between them.
 
-Node 22 runs TypeScript directly, so the build is skippable:
+The build is not skippable. Node 22 strips TypeScript types, but it resolves relative
+imports as ESM specifiers, so `node packages/service/src/main.ts` fails on the first
+`./server` it meets — the packages compile to CommonJS, and that is what makes
+`dist/main.js` work. `npm start` and its siblings build first for this reason.
 
-```bash
-node packages/service/src/main.ts           # the API, no build
-node packages/injector/src/main.ts          # the injector, no build
-```
-
-That is also how to run something one-off: write a script with the values in it and run
+To run something one-off: write a script with the values in it and run
 it with `node`. `packages/playground/` exists for exactly that and is kept out of the
 build so a half-finished experiment cannot break it.
 
@@ -66,7 +64,7 @@ Two things there are worth knowing before you trust a green run locally:
 
 ```bash
 npm start                     # terminal 1: the API
-npm run start:injector        # terminal 2: the injector
+npm run start:tracking-service # terminal 2: the tracking service
 npm run corporate-actions     # terminal 3: the dividend job, once
 ```
 
@@ -95,14 +93,14 @@ importing a package never throws for missing configuration.
 | `FLEECE_TOKEN` | *(unset)* | Bearer token callers must present. Unset disables authentication, and says so on every start |
 | `FLEECE_CORS_ORIGINS` | `*` | Comma-separated origins. Setting it *replaces* the default rather than adding to it |
 
-### The injector (`packages/injector/src/main.ts`)
+### The tracking service (`packages/tracking-service/src/main.ts`)
 
 The first broker account uses unsuffixed names; further accounts are numbered from 2,
 so the usual single-account setup needs no numbering.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `FLEECE_ALPACA_ACCOUNT_ID` | *(unset)* | Alpaca account number. Without it the injector runs and does nothing, and warns |
+| `FLEECE_ALPACA_ACCOUNT_ID` | *(unset)* | Alpaca account number. Without it the feed runs and does nothing, and warns |
 | `FLEECE_ALPACA_KEY` | **required** | Alpaca API key id |
 | `FLEECE_ALPACA_SECRET` | **required** | Alpaca API secret |
 | `FLEECE_ALPACA_LIVE` | `false` | `true` connects to the live endpoints. Logged as a warning on start |
@@ -110,9 +108,12 @@ so the usual single-account setup needs no numbering.
 | `FLEECE_DEFAULT_PAPER_ACCOUNT_ID` | `0000000001` | Virtual account for unclaimed paper orders |
 | `FLEECE_DEFAULT_LIVE_ACCOUNT_ID` | `0000000002` | Virtual account for unclaimed live orders |
 | `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` | `60000` | How long to wait for a strategy to claim an order before booking it to the default account |
-| `FLEECE_INJECTOR_MIGRATE` | `false` | Apply migrations from the injector. Normally left to the API, which starts first |
+| `FLEECE_TRACKING_MIGRATE` | `false` | Apply migrations here. Normally left to the API, which starts first |
+| `FLEECE_TRACKING_PORT` | `3101` | Port `PUT /track` listens on |
+| `FLEECE_TRACKING_HOST` | `127.0.0.1` | Loopback by default: a claim decides where fills are booked |
+| `FLEECE_TRACKING_TOKEN` | *(unset)* | Bearer token for `/track`. Unset disables authentication, and says so on every start |
 
-Both default accounts must exist before the injector can book anything to them, and
+Both default accounts must exist before the tracking service can book anything to them, and
 nothing creates them — see `md/OPEN-ITEMS.md` item 8. With the API running:
 
 ```bash

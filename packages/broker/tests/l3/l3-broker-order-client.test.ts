@@ -8,7 +8,7 @@ import { L2BrokerOrderClient } from '../../src/l2/l2-broker-order-client';
 import { L1BrokerOrderClient } from '../../src/l1/l1-broker-order-client';
 import { AccountReservations } from '../../src/reservations/account-reservations';
 import { d, shows } from '../decimals';
-import { alpacaOrder, FakeAlpacaRestClient, FakeAlpacaWsClient, filledMultiLegOrder, LONG_LEG_SYMBOL, RecordingOrderTrackingClient, SHORT_LEG_SYMBOL } from '../fake-alpaca';
+import { alpacaOrder, FakeAlpacaRestClient, FakeAlpacaWsClient, filledMultiLegOrder, LONG_LEG_SYMBOL, RecordingTrackingClient, SHORT_LEG_SYMBOL } from '../fake-alpaca';
 
 const account = { accountId: 'PAPER001', live: false };
 const noEvents = async (): Promise<void> => {};
@@ -20,7 +20,7 @@ interface Harness {
   readonly broker: L3BrokerOrderClient;
   readonly rest: FakeAlpacaRestClient;
   readonly ws: FakeAlpacaWsClient;
-  readonly tracking: RecordingOrderTrackingClient;
+  readonly tracking: RecordingTrackingClient;
   readonly reservations?: AccountReservations;
 }
 
@@ -35,7 +35,7 @@ const built: L3BrokerOrderClient[] = [];
 function harness(options: { readonly withReservations?: boolean } = {}): Harness {
   const rest = new FakeAlpacaRestClient();
   const ws = new FakeAlpacaWsClient();
-  const tracking = new RecordingOrderTrackingClient();
+  const tracking = new RecordingTrackingClient();
   const activeSync = new AlpacaActiveSynchronization({ account, restClient: rest, tickMs: 60_000 });
   const placer = new L2BrokerOrderClient({ placer: new L1BrokerOrderClient({ restClient: rest }), trackingClient: tracking });
   const reservations = options.withReservations === false ? undefined : new AccountReservations({ account, reader: rest, now: () => 1_000 });
@@ -499,7 +499,7 @@ describe('L3BrokerOrderClient', () => {
     it('assembles a stack that holds, correlates and announces', async () => {
       const rest = new FakeAlpacaRestClient();
       const ws = new FakeAlpacaWsClient();
-      const tracking = new RecordingOrderTrackingClient();
+      const tracking = new RecordingTrackingClient();
       const activeSync = new AlpacaActiveSynchronization({ account, restClient: rest, tickMs: 60_000 });
 
       const broker = createAlpacaBrokerOrderClient({ account, restClient: rest, wsClient: ws, activeSync, trackingClient: tracking, now: () => 1_000 });

@@ -33,8 +33,9 @@ Three processes, one PostgreSQL database:
 
 ```
                     ┌──────────────────┐
-   Alpaca stream ──▶│     injector     │──┐
-   Alpaca REST   ──▶│                  │  │
+   Alpaca stream ──▶│                  │──┐
+   Alpaca REST   ──▶│ tracking-service │  │
+   claims        ──▶│      :3101       │  │
                     └──────────────────┘  │
                                           ▼
    Polygon       ──▶┌──────────────────┐ ┌────────────┐
@@ -42,7 +43,7 @@ Three processes, one PostgreSQL database:
                     └──────────────────┘ └────────────┘
                                           ▲
                     ┌──────────────────┐  │
-   HTTP callers  ──▶│     service      │──┘
+   HTTP callers  ──▶│  service :3100   │──┘
                     └──────────────────┘
 ```
 
@@ -51,9 +52,13 @@ There is no CLI and nothing parses arguments.
 
 - **`service`** answers questions about the ledger and handles account management and
   transfers.
-- **`injector`** holds a websocket per broker account and records what the broker
+- **`tracking-service`** holds a websocket per broker account and records what the broker
   reports. It also polls REST for events the stream dropped, because a missing fill is
-  not a gap in a log — it is a position that is silently wrong from then on.
+  not a gap in a log — it is a position that is silently wrong from then on. And it
+  serves `PUT /track`, the one thing it is *told* rather than discovers: which virtual
+  account some orders belong to, for the orders the broker's own stream cannot attribute.
+  Both go through one queue, so an order's events and a claim about that order are never
+  decided at the same time.
 - **`corporate-actions`** is a daily job that records dividends.
 
 They write concurrently and do not coordinate. Two things make that safe, and both live
@@ -83,13 +88,13 @@ against — a caller that compiles is one that will not get a runtime 400. Note 
 and sizes cross the wire as **strings**, not JSON numbers: a JSON number is a double, and
 sending one would discard the precision this ledger exists to keep.
 
-To record real fills, point the injector at an Alpaca account:
+To record real fills, point the tracking service at an Alpaca account:
 
 ```bash
 export FLEECE_ALPACA_ACCOUNT_ID=PA3...
 export FLEECE_ALPACA_KEY=...
 export FLEECE_ALPACA_SECRET=...
-npm run start:injector
+npm run start:tracking-service
 ```
 
 See [dev.md](./dev.md) for every environment variable and the full command list.

@@ -22,7 +22,8 @@ import {
   ListPositionsOutput,
   OrderEventHandler,
 } from '@fleece/alpaca';
-import { OrderTrackingClient, TrackBrokerOrdersRequest } from '../src/l2/order-tracking-client';
+import { TrackingClient } from '@fleece/client';
+import { TrackBrokerOrdersRequest, TrackBrokerOrdersResponse } from '@fleece/shared';
 
 export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   return {
@@ -251,17 +252,30 @@ export class FakeAlpacaWsClient implements AlpacaWsClient {
   }
 }
 
-export class RecordingOrderTrackingClient implements OrderTrackingClient {
+/**
+ * A `TrackingClient` that records instead of sending.
+ *
+ * A subclass rather than an object of the same shape, because `TrackingClient` holds a
+ * private `HttpClient` and TypeScript compares a class with private members nominally —
+ * so nothing but a subclass is assignable. The base URL is never resolved: the one
+ * method that would use it is overridden.
+ */
+export class RecordingTrackingClient extends TrackingClient {
   readonly requests: TrackBrokerOrdersRequest[] = [];
   failNext?: Error;
 
-  async trackBrokerOrders(request: TrackBrokerOrdersRequest): Promise<void> {
+  constructor() {
+    super({ baseUrl: 'http://tracking.invalid' });
+  }
+
+  override async trackBrokerOrders(request: TrackBrokerOrdersRequest): Promise<TrackBrokerOrdersResponse> {
     if (this.failNext !== undefined) {
       const err = this.failNext;
       this.failNext = undefined;
       throw err;
     }
     this.requests.push(request);
+    return {};
   }
 }
 

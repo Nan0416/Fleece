@@ -205,25 +205,26 @@ rather than a branch inside a method everything else goes through.
 Summarised here; the ones needing a decision are argued out in
 [OPEN-ITEMS.md](./OPEN-ITEMS.md).
 
-**Tracking requests have no way in.** `OrderTrackingFacade.track` is implemented and
-tested but has no production caller: the legacy transport was a `lite-server` listening
-on the `OrderTracking.{STAGE}` message-stream topic, and that layer is not ported. It is
-how the legs of a bracket, OTO or OCO order get attributed — Alpaca creates legs itself
-with their own client order ids, so the correlation trick cannot reach them. Until a
-transport exists, a leg falls through the holding pen and is booked to the default
-account after `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS`. Nothing is broken today, because the
-only client that would send one is `order-execution-service`, which is also unported.
+**The message stream became a port.** The legacy ran a `lite-server` listening on the
+`OrderTracking.{STAGE}` topic, with a `TrackingProcessor` bound to `PUT /track`. That
+platform is not ported; the shape is. `@fleece/tracking-service` — the package the
+injector became — serves `PUT /track` over Express, parses the claim and enqueues it onto
+the same queue the broker's events use.
 
-The options considered were an HTTP listener on the injector process, a `PUT /track` on
-the API that pre-creates the `broker_order` row at `pending_new` (which would also make
-the association survive an injector restart, as the current in-memory map does not), or
-adopting a pub/sub hub. Deferred until the execution service lands and can pick.
+One queue for both is the reason the two live in one process. A claim about an order and
+that order's own events must not be decided concurrently: the facade reads what the
+broker order already records before deciding an account, and two deciders would each read
+a row the other was about to write. Nothing locks, because nothing runs at the same time.
 
-The *sending* half now exists as a layer of its own: `L2BrokerOrderClient` wraps the
-placer that encodes the correlation and claims every id a placement produced.
-`NoopOrderTrackingClient` is what it is given by default, and warns on every call rather
-than staying quiet — a fill attributed to the wrong account is invisible where it happens
-and only shows up later as a strategy's P&L being wrong.
+The verb and the status code are both statements. `PUT`, because a claim is an assertion
+and sending it twice is the same as sending it once. `202`, because the claim is queued
+rather than applied — an order whose events have not arrived is not booked anywhere yet.
+
+The sending half is a layer of its own: `L2BrokerOrderClient` wraps the placer that
+encodes the correlation and claims every id a placement produced. A process with no
+tracking service leaves that layer out and warns once at startup — a fill attributed to
+the wrong account is invisible where it happens and only shows up later as a strategy's
+P&L being wrong, so the absence is said out loud rather than only written down.
 
 **The order router is not ported.** `broker-clients/order-router-impl.ts` and its
 selectors choose which broker account an order goes to. Only relevant with more than one

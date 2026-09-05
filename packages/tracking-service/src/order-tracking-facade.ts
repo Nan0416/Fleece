@@ -1,4 +1,15 @@
-import { AsyncQueue, Broker, BrokerOrder, BrokerOrderEvent, BrokerOrderRecord, Decimal, eventContractMultiplier, isTerminalStatus, LoggerFactory } from '@fleece/shared';
+import {
+  AsyncQueue,
+  Broker,
+  BrokerOrder,
+  BrokerOrderEvent,
+  BrokerOrderRecord,
+  Decimal,
+  eventContractMultiplier,
+  isTerminalStatus,
+  LoggerFactory,
+  TrackBrokerOrdersRequest,
+} from '@fleece/shared';
 import { BrokerOrderService, LedgerService, RecordBrokerOrderRequest } from '@fleece/core';
 
 const logger = LoggerFactory.getLogger('OrderTrackingFacade');
@@ -24,15 +35,6 @@ export interface BrokerOrderEventJob {
   readonly live: boolean;
   /** Set only on a redrive, once waiting for an account has been given up on. */
   readonly defaultAccountId?: string;
-}
-
-/**
- * An upstream service naming the virtual account for orders it has just placed, for
- * the orders it could not stamp that onto itself.
- */
-export interface TrackBrokerOrdersRequest {
-  readonly brokerOrderIds: ReadonlyArray<string>;
-  readonly accountId: string;
 }
 
 export type DefaultAccountIdProvider = (broker: Broker, brokerAccountId: string, live: boolean) => string;
@@ -109,7 +111,9 @@ export class OrderTrackingFacade {
    * does not matter either way; a request arriving before the events is remembered, and
    * one arriving after releases what is held.
    *
-   * **Nothing calls this yet.** Its transport is unported; see `md/OPEN-ITEMS.md` item 1.
+   * **`PUT /track` is what calls this.** The endpoint parses the claim and enqueues it
+   * here; the queue is shared with the broker's events, so an order's events and a claim
+   * about that order are never decided concurrently.
    */
   track(request: TrackBrokerOrdersRequest): void {
     this.queue.enqueue({ type: 'tracking', request });

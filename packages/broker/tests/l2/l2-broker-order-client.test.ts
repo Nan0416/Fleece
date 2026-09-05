@@ -1,16 +1,16 @@
 import { L2BrokerOrderClient } from '../../src/l2/l2-broker-order-client';
 import { L1BrokerOrderClient } from '../../src/l1/l1-broker-order-client';
-import { alpacaOrder, FakeAlpacaRestClient, RecordingOrderTrackingClient } from '../fake-alpaca';
+import { alpacaOrder, FakeAlpacaRestClient, RecordingTrackingClient } from '../fake-alpaca';
 
 interface Harness {
   readonly placer: L2BrokerOrderClient;
   readonly rest: FakeAlpacaRestClient;
-  readonly tracking: RecordingOrderTrackingClient;
+  readonly tracking: RecordingTrackingClient;
 }
 
 function harness(): Harness {
   const rest = new FakeAlpacaRestClient();
-  const tracking = new RecordingOrderTrackingClient();
+  const tracking = new RecordingTrackingClient();
   return { placer: new L2BrokerOrderClient({ placer: new L1BrokerOrderClient({ restClient: rest }), trackingClient: tracking }), rest, tracking };
 }
 

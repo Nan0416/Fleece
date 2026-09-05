@@ -5,5 +5,5 @@
     "outDir": "./dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../shared" }, { "path": "../alpaca" }]
+  "references": [{ "path": "../shared" }, { "path": "../client" }, { "path": "../alpaca" }]
 }
