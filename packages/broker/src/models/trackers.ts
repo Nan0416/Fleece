@@ -109,6 +109,8 @@ export interface PositionTracker {
   test(request: ReservationRequest): TestResult | undefined;
   /** Takes the hold and returns its id. Throws `NotReservableError` if it cannot. */
   reserve(request: ReservationRequest): string;
+  /** Notes an order placed without a hold, so its fills are still applied. */
+  expectOrder(brokerOrderId: string): void;
   /** Releases a hold whose order never reached the broker. */
   cancel(reservationId: string): void;
   /** Applies a broker event, consuming the reservation it belongs to. */
@@ -130,6 +132,8 @@ export interface BrokerTracker {
 
   test(request: ReservationRequest): TestResult | undefined;
   reserve(request: ReservationRequest): string;
+  /** Notes an order placed without a hold — a spread — so its fills are still applied. */
+  expectOrder(symbol: string, brokerOrderId: string): void;
   cancel(reservationId: string): void;
   track(event: BrokerOrderEvent): void;
 }

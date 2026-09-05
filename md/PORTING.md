@@ -190,6 +190,14 @@ reconciliation job cannot trade.
 only caller was the order-placement path, which was out of scope. `AlpacaBroker` is that
 caller, so it returned, this time with tests.
 
+**`@fleece/broker` is layered, where the legacy `AlpacaBroker` was one class.** The legacy
+did the reservation, the correlation, the send, the poller registration, the tracking
+request and the event dispatch in one method per order type. Those are now four layers
+over `@fleece/alpaca` — see [packages/broker/README.md](../packages/broker/README.md).
+The gain is not tidiness: it is that the two pieces nobody can finish today, the
+announcement transport and a margin model for options, are each a component you install
+rather than a branch inside a method everything else goes through.
+
 ## Known gaps
 
 Summarised here; the ones needing a decision are argued out in
@@ -209,10 +217,11 @@ the API that pre-creates the `broker_order` row at `pending_new` (which would al
 the association survive an injector restart, as the current in-memory map does not), or
 adopting a pub/sub hub. Deferred until the execution service lands and can pick.
 
-The *sending* half now exists: `@fleece/broker` calls `OrderTrackingClient` after every
-placement. `NoopOrderTrackingClient` is wired in, and warns on every call rather than
-staying quiet — a fill attributed to the wrong account is invisible where it happens and
-only shows up later as a strategy's P&L being wrong.
+The *sending* half now exists as a layer of its own: `AnnouncingOrderPlacer` wraps the
+placer that encodes the correlation and claims every id a placement produced.
+`NoopOrderTrackingClient` is what it is given by default, and warns on every call rather
+than staying quiet — a fill attributed to the wrong account is invisible where it happens
+and only shows up later as a strategy's P&L being wrong.
 
 **The order router is not ported.** `broker-clients/order-router-impl.ts` and its
 selectors choose which broker account an order goes to. Only relevant with more than one

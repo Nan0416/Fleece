@@ -15,7 +15,7 @@ An npm-workspaces monorepo, nine packages under `packages/`:
 | `service` | The HTTP API over the ledger |
 | `client` | Typed client for that API |
 | `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
-| `broker` | Places orders, reserving buying power and shares before they go out. Equity and long-option reservations; short options are refused |
+| `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price |
 | `marketdata` | Polygon client for splits and dividends |
 | `injector` | Turns broker order events into ledger entries |
 | `corporate-actions` | Records the dividends each account is owed |
@@ -29,7 +29,10 @@ from the environment and starts; nothing parses arguments.
 
 `broker` has no consumer inside Fleece yet. It is groundwork for porting the execution
 service, and the reason it exists now is that its reservation accounting is the piece
-the legacy got most carefully right.
+the legacy got most carefully right. It is built in layers over `@fleece/alpaca` — the
+virtual account, then the tracking claim, then the handles — each one addable and
+omittable on its own; [packages/broker/README.md](./packages/broker/README.md) has the
+table and the reasoning.
 
 Inside `core`: `services` answer requests and hold the rules → `data` talks to
 Postgres. Inside `service`: `routes` parse and delegate to a `core` service.

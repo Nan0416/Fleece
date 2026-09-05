@@ -1,10 +1,10 @@
 import { Decimal } from '@fleece/shared';
-import { AccountBrokerTracker } from '../src/account-broker-tracker';
-import { NotReservableError } from '../src/models/errors';
-import { PendingOrder } from '../src/models/trackers';
-import { SymbolPositionTracker } from '../src/symbol-position-tracker';
-import { brokerEvent, optionEvent } from './broker-events';
-import { d, shows } from './decimals';
+import { AccountBrokerTracker } from '../../src/reservations/account-broker-tracker';
+import { NotReservableError } from '../../src/models/errors';
+import { PendingOrder } from '../../src/models/trackers';
+import { SymbolPositionTracker } from '../../src/reservations/symbol-position-tracker';
+import { brokerEvent, optionEvent } from '../broker-events';
+import { d, shows } from '../decimals';
 
 /**
  * Driven through the account tracker rather than in isolation, because buying power is

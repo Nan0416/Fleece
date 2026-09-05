@@ -11,9 +11,9 @@ import {
 } from '@fleece/shared';
 import { nanoid } from 'nanoid';
 import { BuyingPowerLedger } from './buying-power';
-import { NotReservableError } from './models/errors';
-import { PendingOrder, PositionTracker, RealisedProfit, ReservationRequest, TestResult } from './models/trackers';
-import { allSameSign, hasDifferentSign, nearerZero } from './utils';
+import { NotReservableError } from '../models/errors';
+import { PendingOrder, PositionTracker, RealisedProfit, ReservationRequest, TestResult } from '../models/trackers';
+import { allSameSign, hasDifferentSign, nearerZero } from '../utils';
 
 const logger = LoggerFactory.getLogger('SymbolPositionTracker');
 
@@ -212,6 +212,35 @@ export class SymbolPositionTracker implements PositionTracker {
     }
 
     return reservationId;
+  }
+
+  /**
+   * Registers an order this process placed but took no hold for, so its fills are still
+   * applied.
+   *
+   * Without it a spread — the one thing placed unheld today — is invisible to the
+   * account. `track` refuses to adopt an order whose *first* event is terminal, because
+   * the usual cause is a very late duplicate of something the REST backfill already
+   * applied and adopting it would count the fill twice. A marketable spread fills the
+   * instant it is placed, so its first event is exactly that shape, and the account
+   * would never learn what it spent.
+   *
+   * Saying so at placement closes the hole without weakening the rule: the order is
+   * known before any event arrives, so the event finds it rather than resurrecting it.
+   * Nothing is held — the sizes are zero — and the session starts at zero, so every
+   * contract the order fills is counted once.
+   */
+  expectOrder(brokerOrderId: string): void {
+    if (this.reservations.has(brokerOrderId)) {
+      return;
+    }
+    this.adoptPendingOrder({
+      brokerOrderId,
+      unfilledSize: Decimal.ZERO,
+      partialFilledSize: Decimal.ZERO,
+      partialTotalCost: Decimal.ZERO,
+      multiplier: Decimal.ONE,
+    });
   }
 
   cancel(reservationId: string): void {

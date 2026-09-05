@@ -1,6 +1,6 @@
 import { BrokerOrderEvent, Decimal, eventToString, LoggerFactory } from '@fleece/shared';
 import { BuyingPowerLedger } from './buying-power';
-import { BrokerPosition, BrokerTracker, ReservationRequest, TestResult } from './models/trackers';
+import { BrokerPosition, BrokerTracker, ReservationRequest, TestResult } from '../models/trackers';
 import { SymbolPositionTracker } from './symbol-position-tracker';
 
 const logger = LoggerFactory.getLogger('AccountBrokerTracker');
@@ -58,6 +58,10 @@ export class AccountBrokerTracker implements BrokerTracker, BuyingPowerLedger {
     // reservation id and nothing else.
     this.reservationOwners.set(reservationId, tracker);
     return reservationId;
+  }
+
+  expectOrder(symbol: string, brokerOrderId: string): void {
+    this.trackerFor(symbol).expectOrder(brokerOrderId);
   }
 
   cancel(reservationId: string): void {

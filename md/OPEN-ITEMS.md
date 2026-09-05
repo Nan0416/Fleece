@@ -80,8 +80,12 @@ port leaves behind. It still matters for an order Fleece never placed and that A
 reports standalone, which lands in the holding pen for
 `FLEECE_UNRESOLVED_ORDER_TIMEOUT_MS` and is then booked to the catch-all account.
 
-The sending half exists: `@fleece/broker` calls `OrderTrackingClient` after every
-placement, and `NoopOrderTrackingClient` warns on every call rather than staying quiet.
+The sending half exists and is now a layer of its own: `AnnouncingOrderPlacer` wraps the
+correlating placer and claims every id a placement produced, parent and legs. Run without
+it and orders are still placed and still attributed — the announcement is a second answer
+to a question the correlation already answers for anything Fleece places. What it buys is
+a transport for callers holding their own broker client, which is exactly the case this
+item is about.
 
 | Option | Trade-off |
 | --- | --- |
@@ -155,15 +159,26 @@ instrument, and treating its empty symbol as a value opens a position keyed on n
   same reason. Its legs arrive as events of their own and carry the real dollars; the
   parent's price is the package's signed net and belongs to no position.
 
+**`Broker.order` now places a spread.** It returns one handle for the placement carrying
+a read-only view of each contract — the same shape `broker_order` stores, and the only
+shape the broker supports, since a leg of a spread cannot be cancelled on its own.
+Nothing is held against it: `AccountReservations.hold` returns no reservation for a
+spread and says so, and the contracts are named to the tracker at placement so their
+fills are still applied. A spread's requirement is the width rather than the sum of its
+legs, and no model here computes that.
+
 | What is left | Where it stands |
 | --- | --- |
-| Short options and spreads cannot be reserved | Refused at `reserve`, with a message naming this item |
-| `Broker.order` has no multi-leg request | `@fleece/alpaca` can place one; the ledger books one; the handle shape is the open piece |
+| A short option cannot be reserved | Refused at `reserve`, with a message naming this item |
+| A spread is placed with nothing held | Warned at the placement; the account can be oversubscribed by one |
 | Adjusted contracts still default to 100 | `ReservationRequest.multiplier` overrides it, and nothing looks one up per fill |
 
-**Recommendation: leave short options refused until something needs to write one**, and
-add a margin model then, against a caller that can exercise it. Guessing at margin rules
-with nothing exercising them is how the wrong rule ships unnoticed.
+**Recommendation: leave short options refused and spreads unheld until something places
+them in anger**, then add a margin model against a caller that can exercise it. Guessing
+at margin rules with nothing exercising them is how the wrong rule ships unnoticed. The
+layering is what makes that a later addition rather than a rewrite: reservations are a
+collaborator of `AlpacaBroker`, not a step inside it, so a model that can price a spread
+is a new implementation rather than a change to the placement path.
 
 ---
 
