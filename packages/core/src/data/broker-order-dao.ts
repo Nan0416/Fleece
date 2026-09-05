@@ -16,10 +16,9 @@ import {
 /**
  * One order at one broker, and the raw events behind it.
  *
- * A leg is a row here like any other order, naming its parent in
- * `parentBrokerOrderId` — which groups but does not resolve, because the converter
- * discards a multi-leg parent and a spread's legs therefore name an id this table holds
- * nothing for.
+ * A leg is a row here like any other order, naming its parent in `parentBrokerOrderId`
+ * — a grouping column with no foreign key, so a leg lands whether or not its parent has
+ * been recorded yet.
  */
 
 /**

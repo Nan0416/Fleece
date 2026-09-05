@@ -236,7 +236,7 @@ describe('OrderTrackingFacade', () => {
       id: 'mleg-parent-1',
       accountId: 'MOMENTUM01',
       orderClass: 'mleg',
-      symbol: '',
+      symbol: undefined,
       assetClass: 'option',
       side: undefined,
       status: 'filled',
@@ -288,8 +288,8 @@ describe('OrderTrackingFacade', () => {
         ['mleg-leg-long', 'AMZN261016C00285000', '1', '295'],
       ]);
       // The parent's -0.9 is the spread's net credit, not a price any contract traded
-      // at, and '' is not an instrument. Booking either is the bug this guards.
-      expect(ledger.fills.some((fill) => fill.symbol === '')).toBe(false);
+      // at, and it has no instrument at all. Booking it is the bug this guards.
+      expect(ledger.fills.map((fill) => fill.referenceId)).not.toContain('mleg-parent-1');
     });
 
     it('records a broker order for every leg, so a fill reference resolves to an order', async () => {
@@ -300,10 +300,12 @@ describe('OrderTrackingFacade', () => {
 
       expect(brokerOrders.orders.get('mleg-leg-short')?.symbol).toBe('AMZN261016C00280000');
       expect(brokerOrders.orders.get('mleg-leg-long')?.symbol).toBe('AMZN261016C00285000');
-      // The parent is still recorded — it is the id a cancel or a tracking request names
+      // The parent is recorded too — it is the id a cancel or a tracking request names
       // — but with no symbol at all rather than an empty string, which is what the
       // column allows and what stops the old sentinel coming back.
       expect(brokerOrders.orders.get('mleg-parent-1')?.symbol).toBeUndefined();
+      // And it keeps the package's signed net, which the legs cannot supply.
+      expect(brokerOrders.orders.get('mleg-parent-1')?.filledAvgPrice?.toString()).toBe('-0.9');
     });
 
     it('gives each leg its own reference id, so a redelivered spread stays idempotent', async () => {

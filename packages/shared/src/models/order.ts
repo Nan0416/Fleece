@@ -90,11 +90,11 @@ export function isBrokerOrderAttribution(value: string): value is BrokerOrderAtt
  * OTO is a real order at the broker with its own id, instrument, status and fills, so it
  * gets its own row and names its parent in `parentBrokerOrderId`.
  *
- * `parentBrokerOrderId` groups; it does not resolve. It has an index but no foreign key,
- * because `convertAlpacaOrderToBrokerOrderEvents` discards a multi-leg parent — a spread
- * produces rows for its contracts and none for itself — so a leg routinely names an id
- * this table holds nothing for. A foreign key would reject every spread leg, and a
- * rejected leg is a fill that never lands.
+ * `parentBrokerOrderId` has an index and **no foreign key**. The converter emits a
+ * composite parent before its legs, so the row it names normally exists — but a leg
+ * reaching us without its parent, for any reason at all, must still land. A foreign key
+ * turns "the parent row is missing" into "the leg is rejected", and a rejected leg is a
+ * fill the ledger never learns about.
  *
  * `symbol` is absent only on a composite parent that trades no instrument of its own.
  * No such row is written today, for the reason above; the column allows it so that
@@ -111,7 +111,13 @@ export interface BrokerOrder {
   /** How `accountId` was decided. `default` means orphan. */
   readonly attribution: BrokerOrderAttribution;
 
-  /** Absent only on a composite parent, which trades no instrument of its own. */
+  /**
+   * Absent only on a composite parent, which trades no instrument of its own.
+   *
+   * Its absence is what marks a row whose quantities and prices mean something
+   * different from every other row's — see `qty`, `limitPrice` and `filledAvgPrice`
+   * below. `orderClass === 'mleg' && symbol === undefined` is the condition.
+   */
   readonly symbol?: string;
   readonly assetClass: AssetClass;
   /** Units of the underlying per contract, as used when booking this order's fills. */
@@ -127,10 +133,23 @@ export interface BrokerOrder {
   readonly timeInForce: BrokerOrderTimeInForce;
   readonly extendedHours: boolean;
 
-  /** Signed: negative for a sell. Counts contracts for an option. */
+  /**
+   * Signed: negative for a sell. Counts contracts for an option — and **spreads** on a
+   * composite parent, which is one of the two places a parent row's numbers mean
+   * something other than what the same column means everywhere else.
+   */
   readonly qty: Decimal;
   /** A leg's share of its parent's quantity. Multi-leg legs only. */
   readonly ratioQty?: Decimal;
+  /**
+   * On a composite parent this is the **signed net** price of the package — negative
+   * for a credit received, positive for a debit paid — where on every other row a price
+   * is unsigned. It is the number the spread was actually traded at, and it exists
+   * nowhere else: the legs price themselves at nothing.
+   *
+   * Nothing accounts from it. A parent books no fill, and its legs carry the real
+   * instruments at real prices.
+   */
   readonly limitPrice?: Decimal;
   readonly stopPrice?: Decimal;
 
@@ -141,6 +160,8 @@ export interface BrokerOrder {
    * Not what the ledger has booked. That is `OrderFillProgress`, in ledger units, and
    * the two are deliberately different numbers with different names so that nothing
    * accounts from this one.
+   *
+   * `filledAvgPrice` on a composite parent is a signed net, exactly as `limitPrice` is.
    */
   readonly filledQty: Decimal;
   readonly filledAvgPrice?: Decimal;

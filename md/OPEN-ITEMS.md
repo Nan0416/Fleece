@@ -52,9 +52,11 @@ correlation** — the virtual account and the reservation. A leg therefore arriv
 attributed, gets its own `broker_order` row at `attribution: 'parent'`, and never reaches
 the holding pen.
 
-A multi-leg parent is dropped rather than converted, so a spread produces rows for its
-contracts and none for itself. `parentBrokerOrderId` on those legs therefore names an id
-the ledger holds no row for — it groups the legs, it does not resolve.
+A composite parent is converted too, ahead of its legs, so a spread produces a row for
+itself and one per contract. The parent books no fill — it trades no instrument and its
+price is the package's signed net — but it is the id a placement returns, a cancel names
+and a tracking request claims, and it carries the net price the spread was actually
+traded at, which exists nowhere else.
 
 That covers bracket, OTO and OCO legs too, not just spreads, because legs reach us
 nested in practice: the websocket sends no separate event for an OTO's exit leg at all,
@@ -109,9 +111,8 @@ The schema redesign removed the `order_group` table, the cascade from it to
 `broker_order`, and the correlation columns it carried. There is no longer a row whose
 absence can reject a fill. What the group used to answer — which orders belong together
 — is `parent_broker_order_id`, which is indexed and deliberately carries **no foreign
-key** for exactly this reason: the converter discards a multi-leg parent, so a spread leg
-routinely names an id the table holds nothing for, and a foreign key there would
-reintroduce this bug in a new place.
+key** for exactly this reason: a leg reaching us without its parent must land, and a
+foreign key would turn that into a rejected row, reintroducing this bug in a new place.
 
 ---
 

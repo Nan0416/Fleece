@@ -46,7 +46,15 @@ interface BaseBrokerOrderEvent {
   readonly replaces?: string;
   readonly status: string;
 
-  readonly symbol: string;
+  /**
+   * Absent on a composite parent, which trades no instrument of its own.
+   *
+   * `undefined` rather than the empty string Alpaca sends. The sentinel is converted
+   * away at this boundary and nowhere else, because a position keyed on `''` is a wrong
+   * number that looks like a right one — and an optional field makes the compiler raise
+   * the parent case at every reader instead of each of them having to remember it.
+   */
+  readonly symbol?: string;
   readonly assetClass: AssetClass;
   /**
    * Units of the underlying per contract, when the broker has told us.
@@ -131,6 +139,9 @@ export interface StopLimitBrokerOrderEvent extends BaseBrokerOrderEvent {
 export type BrokerOrderEvent = MarketBrokerOrderEvent | LimitBrokerOrderEvent | StopBrokerOrderEvent | StopLimitBrokerOrderEvent;
 
 export function eventToString(event: BrokerOrderEvent): string {
+  // A composite parent trades no instrument, and printing nothing leaves a log line
+  // that reads as though the symbol went missing.
+  const instrument = event.symbol ?? 'spread';
   const parent = event.parentBrokerOrderId === undefined ? '' : ` (leg of ${event.parentBrokerOrderId})`;
-  return `${event.status} ${event.orderType} order ${event.id} ${event.filledQty.toString()}/${event.qty.toString()} ${event.symbol}${parent}`;
+  return `${event.status} ${event.orderType} order ${event.id} ${event.filledQty.toString()}/${event.qty.toString()} ${instrument}${parent}`;
 }

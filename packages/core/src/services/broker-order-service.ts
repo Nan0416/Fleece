@@ -126,9 +126,9 @@ export class BrokerOrderService {
    *
    * The account is checked on the way in because booking an order to an account that
    * does not exist is how a fill goes missing — but note what is *not* checked: a
-   * `parentBrokerOrderId` naming no row is normal, not an error. A spread's parent is
-   * discarded by the converter, so its legs routinely name an id this table holds
-   * nothing for, and refusing those would drop every option fill.
+   * `parentBrokerOrderId` naming no row is tolerated, not an error. Refusing it would
+   * mean dropping a leg whose parent had not landed, and a dropped leg is a fill the
+   * ledger never learns about.
    */
   async recordBrokerOrder(request: RecordBrokerOrderRequest): Promise<RecordBrokerOrderResponse> {
     await this.requireAccount(request.accountId);
@@ -168,9 +168,7 @@ export class BrokerOrderService {
   /**
    * The legs of one composite order.
    *
-   * Takes the parent's id without requiring a row for it, for the reason above: a
-   * spread's parent is never recorded, so this is the only way back to the contracts it
-   * traded.
+   * Takes the parent's id without requiring a row for it, for the reason above.
    */
   async listBrokerOrderLegs(request: ListBrokerOrderLegsRequest): Promise<ListBrokerOrderLegsResponse> {
     return await this.brokerOrderDao.listBrokerOrderLegs({ parentBrokerOrderIds: [request.parentBrokerOrderId] });

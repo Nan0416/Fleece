@@ -137,14 +137,38 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
   });
 
   describe('multi-leg option orders', () => {
-    it('discards the parent and returns only the contracts, which are what trade', () => {
+    it('returns the parent and its contracts, parent first', () => {
       const events = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
       expect(events.map((event) => [event.id, event.symbol, event.parentBrokerOrderId])).toEqual([
+        ['mleg-parent-1', undefined, undefined],
         ['mleg-leg-short', 'AMZN261016C00280000', 'mleg-parent-1'],
         ['mleg-leg-long', 'AMZN261016C00285000', 'mleg-parent-1'],
       ]);
-      // Nothing keyed on the empty string reaches the ledger.
+      // Parent first, so its row exists before the legs that name it.
+      expect(events[0].id).toBe('mleg-parent-1');
+    });
+
+    it("turns Alpaca's empty symbol into no symbol, so nothing downstream can key on it", () => {
+      // A position keyed on '' is a wrong number that looks like a right one. This is
+      // the last place that empty string is read as a value.
+      const events = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
       expect(events.some((event) => event.symbol === '')).toBe(false);
+      expect(events[0].symbol).toBeUndefined();
+    });
+
+    it("keeps the spread's signed net price, which lives nowhere else", () => {
+      // -0.9 is a credit received for the package. It is not a price any contract
+      // traded at, and it cannot be read off the legs: they price themselves at nothing.
+      const [parent] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
+      expect(parent.filledAvgPrice?.toString()).toBe('-0.9');
+      expect(parent.limitPrice?.toString()).toBe('-0.85');
+      // And the parent's quantity counts spreads, not contracts.
+      expect(parent.qty.toString()).toBe('1');
+    });
+
+    it('gives the parent no side, because a spread has no direction of its own', () => {
+      const [parent] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
+      expect(parent.side).toBeUndefined();
     });
 
     it('refuses a spread whose legs are missing rather than reporting that nothing happened', () => {
@@ -156,7 +180,7 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
     });
 
     it('signs each leg from its own side, which is where the direction actually lives', () => {
-      const [short, long] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
+      const [, short, long] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
       expect(short).toMatchObject({ symbol: 'AMZN261016C00280000', side: 'sell' });
       expect([short.qty.toString(), short.filledQty.toString(), short.filledAvgPrice?.toString()]).toEqual(['-1', '-1', '3.85']);
       expect(long).toMatchObject({ symbol: 'AMZN261016C00285000', side: 'buy' });
@@ -164,25 +188,25 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
     });
 
     it('accepts a leg that carries no price, because the spread was priced as a package', () => {
-      const [short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
+      const [, short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
       expect(short.orderType).toBe('limit');
       expect(short.limitPrice).toBeUndefined();
     });
 
     it('marks the legs as options so the ledger can scale them by the contract multiplier', () => {
-      const [short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
+      const [, short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
       expect(short.assetClass).toBe('option');
       expect(short.orderClass).toBe('mleg');
     });
 
     it('carries the position intent and ratio each leg reports', () => {
-      const [short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
+      const [, short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder(), account);
       expect(short.positionIntent).toBe('sell_to_open');
       expect(short.ratioQty?.toString()).toBe('1');
     });
 
     it('gives the legs the parent correlation, which is the only place a spread carries one', () => {
-      const [short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder({ client_order_id: '_c@a:MOMENTUM01;r:res-1' }), account);
+      const [, short] = convertAlpacaOrderToBrokerOrderEvents(mlegAlpacaOrder({ client_order_id: '_c@a:MOMENTUM01;r:res-1' }), account);
       expect(short.accountId).toBe('MOMENTUM01');
       expect(short.reservationId).toBe('res-1');
     });

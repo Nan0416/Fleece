@@ -145,29 +145,47 @@ describeIntegration('the write path', () => {
       inject(mlegOrder());
       await facade.drain();
 
-      // The parent's -0.9 is the package's net credit. A position keyed on the empty
-      // string at that price is a wrong number that looks like a right one.
+      // The parent's -0.9 is the package's net credit. There is no instrument to open a
+      // position in and no price anything traded at.
       const rows = await pool.query("SELECT symbol FROM position WHERE symbol = '' OR symbol IS NULL");
       expect(rows.rows).toHaveLength(0);
+
+      const transactions = await pool.query('SELECT 1 FROM ledger_transaction WHERE reference_id = $1', ['mleg-parent-1']);
+      expect(transactions.rows).toHaveLength(0);
     });
 
-    it('records each leg as an order naming a parent this table holds nothing for', async () => {
+    it('records the parent, with no instrument and the package net it was traded at', async () => {
+      inject(mlegOrder());
+      await facade.drain();
+
+      const parent = await pool.query<{ symbol: string | null; qty: string; limit_price: string; filled_avg_price: string; order_class: string }>(
+        'SELECT symbol, qty, limit_price, filled_avg_price, order_class FROM broker_order WHERE broker_order_id = $1',
+        ['mleg-parent-1'],
+      );
+      const row = parent.rows[0];
+      // NULL rather than '': the only rows the CHECK permits without a symbol are mleg.
+      expect(row.symbol).toBeNull();
+      expect(row.order_class).toBe('mleg');
+      // Signed net — a credit received — where every other row's price is unsigned. It
+      // is what the spread was actually traded at, and the legs price themselves at
+      // nothing, so it exists nowhere else.
+      expect(row.filled_avg_price).toBe('-0.900000000');
+      expect(row.limit_price).toBe('-0.850000000');
+      // And its quantity counts spreads, not contracts.
+      expect(row.qty).toBe('1.000000000');
+    });
+
+    it('records each leg naming that parent, without a foreign key insisting on it', async () => {
       inject(mlegOrder());
       await facade.drain();
 
       const legs = await pool.query<{ broker_order_id: string; parent_broker_order_id: string | null; attribution: string }>(
-        'SELECT broker_order_id, parent_broker_order_id, attribution FROM broker_order ORDER BY broker_order_id',
+        'SELECT broker_order_id, parent_broker_order_id, attribution FROM broker_order WHERE symbol IS NOT NULL ORDER BY broker_order_id',
       );
       expect(legs.rows.map((row) => row.broker_order_id)).toEqual(['mleg-leg-long', 'mleg-leg-short']);
       expect(legs.rows.every((row) => row.parent_broker_order_id === 'mleg-parent-1')).toBe(true);
       // The account came from the parent's correlation, which is what `parent` records.
       expect(legs.rows.every((row) => row.attribution === 'parent')).toBe(true);
-
-      // And that parent is not here: the converter discards it. This is exactly why
-      // `parent_broker_order_id` carries an index and no foreign key — one would reject
-      // every spread leg, and a rejected leg is a fill that never lands.
-      const parent = await pool.query('SELECT 1 FROM broker_order WHERE broker_order_id = $1', ['mleg-parent-1']);
-      expect(parent.rows).toHaveLength(0);
     });
   });
 
@@ -199,6 +217,11 @@ describeIntegration('the write path', () => {
 
       const transactions = await pool.query('SELECT 1 FROM ledger_transaction');
       expect(transactions.rows).toHaveLength(3);
+
+      // Four orders now: the equity order, the spread's parent and its two legs. The
+      // parent produced none of those transactions.
+      const orders = await pool.query('SELECT 1 FROM broker_order');
+      expect(orders.rows).toHaveLength(4);
     });
   });
 

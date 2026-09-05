@@ -32,9 +32,10 @@ export interface ListBrokerOrdersResponse {
 /**
  * The legs of one composite order.
  *
- * Takes the parent's broker order id even though this table may hold no row for it: a
- * multi-leg parent is discarded by the converter, so for a spread this is the only way
- * back to the contracts it traded.
+ * Takes the parent's broker order id without requiring a row for it. A parent is
+ * normally recorded — it is the id a placement returns and a cancel names — but this
+ * resolves the legs whether or not it is, because `parent_broker_order_id` is a grouping
+ * column rather than a foreign key.
  */
 export interface ListBrokerOrderLegsRequest {
   readonly parentBrokerOrderId: string;

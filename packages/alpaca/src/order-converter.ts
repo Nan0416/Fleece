@@ -29,11 +29,15 @@ import { AlpacaAccountIdentifier, AlpacaOrder } from './models';
  * no `broker_order` row — so an option fill wrote a `ledger_transaction.reference_id`
  * pointing at an order the ledger held nothing for.
  *
- * **A multi-leg parent is dropped**; a bracket or OTO parent is kept. The difference is
- * that a spread's parent trades no instrument — empty symbol, no side, a price that is
- * the package's net rather than anything a contract traded at — so the only row it could
- * produce is a container. A bracket's parent is itself a real order in a real symbol.
- * The cost of dropping it is the spread's net limit price, which lives nowhere else.
+ * **Every order in the payload becomes an event, the parent included.** A spread's
+ * parent trades no instrument — no symbol, no side, and a price that is the package's
+ * signed net rather than anything a contract traded at — so it is a container that books
+ * no fill. It is still converted, because it is the id everything upstream holds: what
+ * a placement returns, what a cancel names, what a tracking request claims. Discarding
+ * it left those pointing at a row that did not exist, and left the spread's net price —
+ * the number it was actually traded at — recorded nowhere.
+ *
+ * The parent comes first, so its row exists before the legs that name it.
  *
  * **Every leg inherits the parent's correlation**, so a leg is booked to the account
  * and reservation encoded in the parent's client order id. Alpaca assigns legs
@@ -60,10 +64,7 @@ export function convertAlpacaOrderToBrokerOrderEvents(order: AlpacaOrder, accoun
         `Alpaca reported multi-leg order ${order.id} as ${order.status} with no legs, so there is nothing to book. Check that the request asked for nested=true.`,
       );
     }
-    // The parent is discarded: it trades no instrument, and everything it reports is
-    // either on the legs already or derivable from them. What is lost with it is the
-    // spread's net limit price — see `md/OPEN-ITEMS.md` item 2b.
-    return legs.map((leg) => convert(leg, account, correlation, order.id));
+    return [convert(order, account, correlation), ...legs.map((leg) => convert(leg, account, correlation, order.id))];
   }
 
   return [convert(order, account, correlation), ...legs.map((leg) => convert(leg, account, correlation, order.id))];
@@ -74,9 +75,8 @@ export function convertAlpacaOrderToBrokerOrderEvents(order: AlpacaOrder, accoun
  *
  * The parent and its legs both carry `order_class: 'mleg'`, so the class alone cannot
  * separate them. The empty symbol can: Alpaca leaves the parent's blank because the
- * spread trades no instrument of its own, and that empty symbol is exactly what must
- * never reach `applyCumulativeFill` — a position keyed on `''` is a wrong number that
- * looks like a right one.
+ * spread trades no instrument of its own. This is the last place that empty string is
+ * read as a value — every event this converter emits carries `undefined` instead.
  */
 function isMultiLegParent(order: AlpacaOrder): boolean {
   return order.order_class === 'mleg' && order.symbol === '';
@@ -124,7 +124,10 @@ function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, cor
     replaces: order.replaces === null ? undefined : order.replaces,
     status: order.status,
 
-    symbol: order.symbol,
+    // Alpaca leaves a spread parent's symbol empty. The sentinel is converted away
+    // here and nowhere else: downstream a missing instrument is `undefined`, which the
+    // compiler makes every reader account for.
+    symbol: isMultiLegParent(order) ? undefined : order.symbol,
     assetClass: toAssetClass(order),
 
     timeInForce: order.time_in_force,

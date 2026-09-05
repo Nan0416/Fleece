@@ -199,16 +199,27 @@ CREATE INDEX IF NOT EXISTS dividend_account_symbol_idx ON dividend (account_id, 
 -- a real order at the broker with its own id, instrument, status and fills, so it gets
 -- its own row and names its parent in `parent_broker_order_id`.
 --
--- That column has an index but **no foreign key**, and that is the important part:
--- `convertAlpacaOrderToBrokerOrderEvents` discards a multi-leg parent — a spread
--- produces rows for its contracts and none for itself — so a leg routinely names an id
--- this table holds nothing for. It groups; it does not resolve. A foreign key would
--- reject every spread leg, and a rejected leg is a fill that never lands.
+-- That column has an index but **no foreign key**, and that is the important part. The
+-- converter emits a composite parent before its legs, so the row it names normally
+-- exists — but a leg reaching us without its parent, for any reason at all, must still
+-- land. A foreign key turns "the parent row is missing" into "the leg is rejected", and
+-- a rejected leg is a fill the ledger never learns about.
 --
--- `symbol` is nullable only for a composite parent that trades no instrument of its
--- own. No such row is written today, for the reason above; the column allows it so that
--- recording one later is a decision rather than a migration, and so the empty-string
--- sentinel the legacy used has nowhere to come back to.
+-- `symbol` is NULL only for a composite parent that trades no instrument of its own,
+-- and that absence is load-bearing: it is what marks a row whose numbers mean something
+-- different from every other row's. On a parent (`order_class = 'mleg' AND symbol IS
+-- NULL`):
+--
+--   * `qty` counts **spreads**, not contracts;
+--   * `limit_price` and `filled_avg_price` are the package's **signed net** — negative
+--     for a credit received, positive for a debit paid — where everywhere else a price
+--     is unsigned.
+--
+-- The parent is recorded rather than discarded because it is the id everything upstream
+-- holds: what a placement returns, what a cancel names, what a tracking request claims.
+-- It books no fill; its legs carry the real instruments at real prices. The net price is
+-- kept here because it is what the spread was actually traded at and it exists nowhere
+-- else — the legs price themselves at nothing.
 --
 -- `attribution` records **how** the account was decided, and replaces the previous
 -- definition of an orphan — an order with no group — which disappeared with order

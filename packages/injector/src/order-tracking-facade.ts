@@ -226,10 +226,9 @@ export class OrderTrackingFacade {
       broker: job.broker,
       brokerAccountId: job.brokerAccountId,
       attribution,
-      // A composite parent trades no instrument of its own, and the column is NULL
-      // rather than an empty string for it. The converter discards spread parents, so
-      // nothing writes one today.
-      symbol: isMultiLegParent(event) ? undefined : event.symbol,
+      // NULL on a composite parent, which trades no instrument of its own. The
+      // converter has already turned Alpaca's empty string into `undefined`.
+      symbol: event.symbol,
       assetClass: event.assetClass,
       multiplier: multiplierFor(event),
       status: event.status,
@@ -251,12 +250,16 @@ export class OrderTrackingFacade {
   }
 
   private async applyFill(event: BrokerOrderEvent, accountId: string): Promise<void> {
-    // A spread's parent trades no instrument: its symbol is empty and its filled price
-    // is the package's net debit or credit — `-0.9` for one that sold a contract at 3.85
-    // and bought another at 2.95. Booking it would open a position keyed on the empty
-    // string at a price nothing traded at. The legs carry the real instruments and
-    // arrive as events of their own.
-    if (isMultiLegParent(event)) {
+    // A spread's parent trades no instrument, and its filled price is the package's
+    // signed net — `-0.9` for one that sold a contract at 3.85 and bought another at
+    // 2.95. There is nothing to open a position in and no price anything traded at. The
+    // legs carry the real instruments and arrive as events of their own.
+    //
+    // Checked here rather than through a helper so the compiler narrows `symbol` for
+    // everything below: a missing instrument must be unable to reach the ledger, and
+    // that is a stronger guarantee than remembering to call the right predicate.
+    const { symbol } = event;
+    if (symbol === undefined) {
       return;
     }
 
@@ -283,7 +286,7 @@ export class OrderTrackingFacade {
 
     if (!multiplier.eq(Decimal.ONE)) {
       logger.info(
-        `Broker order ${event.id} filled ${event.filledQty.toString()} ${event.symbol} contracts at ${event.filledAvgPrice.toString()}, booked as ${cumulativeFilledTotalCost.toString()} at a multiplier of ${multiplier.toString()}.`,
+        `Broker order ${event.id} filled ${event.filledQty.toString()} ${symbol} contracts at ${event.filledAvgPrice.toString()}, booked as ${cumulativeFilledTotalCost.toString()} at a multiplier of ${multiplier.toString()}.`,
       );
     }
 
@@ -293,7 +296,7 @@ export class OrderTrackingFacade {
     await this.props.ledgerService.applyCumulativeFill({
       referenceId: event.id,
       accountId,
-      symbol: event.symbol,
+      symbol,
       assetClass: event.assetClass,
       multiplier,
       cumulativeFilledSize: event.filledQty,
@@ -417,16 +420,4 @@ export class OrderTrackingFacade {
  */
 function multiplierFor(event: BrokerOrderEvent): Decimal {
   return event.multiplier ?? defaultContractMultiplier(event.assetClass);
-}
-
-/**
- * The container of a spread, as opposed to one of its contracts.
- *
- * Both carry `orderClass: 'mleg'`, and only the parent has no symbol. The converter
- * discards spread parents, so nothing here sees one today; the check stays because the
- * cost of being wrong is a position keyed on the empty string, which is a wrong number
- * that looks like a right one.
- */
-function isMultiLegParent(event: BrokerOrderEvent): boolean {
-  return event.orderClass === 'mleg' && event.symbol === '';
 }
