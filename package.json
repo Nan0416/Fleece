@@ -20,7 +20,8 @@
     "lint": "eslint \"packages/*/{src,tests}/**/*.ts\"",
     "lint:fix": "eslint --fix \"packages/*/{src,tests}/**/*.ts\"",
     "corporate-actions": "npm run build && node packages/corporate-actions/dist/main.js",
-    "build:all": "tsc -b"
+    "build:all": "tsc -b",
+    "test:ci": "jest --config jest.config.js --ci --no-cache --json --outputFile=jest-results.json"
   },
   "repository": {
     "type": "git",

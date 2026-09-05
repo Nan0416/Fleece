@@ -117,3 +117,6 @@ reports
 backup_metrics
 
 .claude
+
+# Written by `npm run test:ci` so the workflow can check what actually ran.
+jest-results.json

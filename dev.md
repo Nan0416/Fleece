@@ -21,6 +21,7 @@ npm start               # migrates on the way up
 | `npm run corporate-actions` | Build, then run the dividend job once |
 | `npm run build:all` | Type-check every package, `broker` included |
 | `npm test` | Unit tests; integration suites skip without a database |
+| `npm run test:ci` | What CI runs: no cache, and writes `jest-results.json` |
 | `npm run lint` / `lint:fix` | ESLint |
 | `npm run format:lint` / `format:fix` | Prettier |
 | `npm run clean` | Remove `dist/` and build info |
@@ -42,7 +43,23 @@ build so a half-finished experiment cannot break it.
 
 `npm run build` deliberately leaves out `broker`, which does not compile against the
 ledger redesign yet — see `md/OPEN-ITEMS.md` item 0. `npm run build:all` includes it, so
-the gap is visible rather than forgotten.
+the gap is visible rather than forgotten. `npm test` excludes it for the same reason.
+
+## What CI checks
+
+`.github/workflows/ci.yml`, on every pull request and every push to `main`: build, lint,
+format, then tests against a PostgreSQL service container.
+
+Two things there are worth knowing before you trust a green run locally:
+
+- **`npm test` is not evidence that the code compiles.** ts-jest keys its cache on a
+  file's own content, so after editing `@fleece/shared` every importer stays cached and
+  suites pass against types that no longer exist. Run `npm run build` first, or
+  `npm run test:ci`, which passes `--no-cache`.
+- **The integration suites skip themselves when `FLEECE_TEST_DATABASE_URL` is unset**,
+  and jest calls that a pass. CI runs `scripts/assert-suites-ran.js` afterwards, which
+  fails when any suite ran nothing. Locally, set the variable — those are the suites
+  covering the position lock, fill idempotency and the client round trip.
 
 ## Running all three processes
 
