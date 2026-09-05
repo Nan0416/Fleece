@@ -10,31 +10,36 @@ legacy; this records what is still open.
 
 ---
 
-## 0. `@fleece/broker` is not ported
+## 0. `@fleece/broker` is ported
 
-**Severity: none to the numbers — everything with a consumer is done and covered.
-`npm run build` is green; `npm run build:all` is not.**
+**Resolved — `npm run build`, `npm test` and `npm run build:all` are all green, and
+`broker` is in every one of them.**
 
 The schema redesign — exact decimals, total-cost accounting, asset classes, legs, stored
-fill progress, no order groups — has landed everywhere except `broker`. The write path
-(`shared`, `core`, `alpaca`, `injector`, `corporate-actions`) and the read path
-(`service`, `client`) all compile and are covered end to end.
+fill progress, no order groups — has now landed in `broker` too. Its reservations
+account in `Decimal` and in **total cost**, so the one division the legacy did on every
+event (dividing a fill's cost back out into a unit price to feed the next one) is gone;
+`unitCost` is derived on read and never fed back in.
+
+It was not ported by translating the arithmetic, which item 2b warned against. What
+changed instead is where the line falls between what a reservation can price and what it
+cannot — see item 2b, which is now about the half that remains.
 
 The CLI was deleted rather than ported. Each runnable package now has a `src/main.ts`
 that reads its configuration from the environment; Node 22 runs TypeScript directly, so
 an ad-hoc run is a script with the values in it. Nothing was lost but argument parsing.
-
-**`broker` is left deliberately, and must not be ported by translating its arithmetic.**
-Its reservations are wrong for options by a factor of 100 (item 2b), so converting them
-to `Decimal` first would produce a package that looks converted while still being wrong.
-It is excluded from `npm run build` for that reason and included in `npm run build:all`,
-so the gap is visible rather than forgotten.
 
 **The wire format** was the one decision rather than a translation, and it is settled:
 decimals cross as **strings** in both directions. The service refuses a JSON number where
 a decimal is expected and says to send a string; the client revives responses field by
 field with `packages/shared/src/api/wire.ts`, which retired the sanctioned `as` that
 guideline 18 used to allow at that boundary.
+
+One boundary still goes through a `number`: `@fleece/alpaca`'s placement inputs take
+`size` and `limitPrice` as numbers and write them back out with `toString()`. That
+round-trips exactly for any value with fifteen significant digits or fewer, which no
+share count or price approaches — but the honest fix is for those inputs to take strings,
+and it belongs in that package.
 
 ---
 
@@ -116,61 +121,49 @@ foreign key would turn that into a rejected row, reintroducing this bug in a new
 
 ---
 
-## 2b. Options reach the ledger, but not `@fleece/broker`
+## 2b. Options are priced by `@fleece/broker`, except where they cannot be
 
-**Severity: high if anything places an option through `@fleece/broker` — it would
-oversubscribe the account by a factor of 100.**
+**Severity: low — was high. The 100x error is gone, and what is left is refused at the
+call rather than approximated.**
 
-**The ledger half of this is now done.** Positions count contracts and carry their
-dollars in `total_cost`, so a listing reads `2` for two contracts and `size * price` is
-no longer load-bearing. Everything below is about `@fleece/broker`, which the schema
-redesign did not touch and which does not compile against the new models yet.
+**The ledger half was already done**; the reservation half now is too, and the split
+between them turned out to be the useful distinction:
 
-Numbered `2b` so the existing items keep their numbers; by cost it belongs here.
+- **What a fill cost is knowable, always.** A contract quoted at 3.85 moved $385, and
+  `eventContractMultiplier` in `@fleece/shared` is the single place that figure comes
+  from — the ledger's fill path and the tracker's both call it. Two copies of that rule
+  would be two places for the account's view of itself to diverge from the ledger's.
+- **What an order will *require* is knowable only sometimes.** Buying is priced: it costs
+  premium times multiplier times contracts. Reducing is priced: it hands units back.
+  Writing a short option is not — its requirement is margin against a loss that is
+  unbounded for a naked call, and a spread's is the width rather than the sum of its
+  legs.
 
-`@fleece/alpaca` now models option and multi-leg orders, `HttpAlpacaRestClient` can
-place a spread, and the injector books each leg with the size scaled by
-`OPTION_CONTRACT_MULTIPLIER`. What is *not* done:
+So `SymbolPositionTracker.reserve` holds `|size| x unitPrice x multiplier`, and
+**refuses** an order that opens or extends a short position in anything but an equity,
+in `test` as well as in `reserve` so nothing is told an order is possible that reserving
+would reject. Refusing rather than holding the premium is the point: a premium-shaped
+hold on a short call is a number that looks like an answer.
 
-- **Reservations are share-shaped.** `SymbolPositionTracker.reserve` holds
-  `|size| * unitPrice`, so one contract at 3.85 holds $3.85 against a purchase that
-  costs $385. Nothing in Fleece places options through `@fleece/broker` yet, and this is
-  the reason not to start. A short option is worse than 100x wrong, not merely 100x: its
-  requirement is margin, not premium, and a spread's is the width of the spread rather
-  than the sum of its legs.
-- **`Broker.order` has no multi-leg request.** `@fleece/alpaca` can place one; the
-  reservation model above is what has to exist first.
-- **Leg events now reach the tracker.** `AlpacaBroker.consume` dispatches and tracks
-  every event the converter returns, legs included, so `SymbolPositionTracker` will start
-  keeping entries for option symbols at contract scale — one contract at 3.85, not 100
-  units at 3.85. Deliberate: special-casing legs away here would make the class look
-  option-aware while its reservations still are not.
-- **Startup seeding does not know about spreads.** `AlpacaBroker.init` seeds the tracker
-  from `listOrders({ status: 'open' })` and calls `toPendingOrder` on every result. An
-  open multi-leg parent has an empty symbol and no side, so it seeds an entry keyed on
-  `''` with a negative size — the same shape of bug the injector's `applySpreadFill`
-  exists to prevent, in the package that has no consumer yet. Fixing it in isolation
-  would make `@fleece/broker` look option-safe while its reservations still are not,
-  which is why it is written down rather than patched.
-- **Adjusted contracts still default to 100.** A split or a merger can leave a contract
-  delivering something other than 100 shares. Alpaca reports the real figure on the
-  option contract, and `getOptionContract` will fetch it — but nothing does so per fill,
-  because that means a lookup on the write path and a cache with an invalidation story.
-  What changed is that the figure actually used is now **recorded** on every `position`,
-  `ledger_transaction` and `broker_order` row, so a contract booked under the wrong
-  assumption is findable and its true premium recoverable, rather than silently wrong
-  with nothing saying so.
+Also fixed here, both of them the same shape of bug — a composite parent has no
+instrument, and treating its empty symbol as a value opens a position keyed on nothing:
 
-| Option | Trade-off |
+- **Startup seeding.** `AlpacaBroker.init` now expands open orders through their legs and
+  drops composite parents, so an open spread seeds its two contracts rather than one
+  position keyed on `''` whose size is signed from a side that means nothing.
+- **Event tracking.** `AccountBrokerTracker.track` drops an event with no symbol for the
+  same reason. Its legs arrive as events of their own and carry the real dollars; the
+  parent's price is the package's signed net and belongs to no position.
+
+| What is left | Where it stands |
 | --- | --- |
-| Leave `@fleece/broker` equity-only, and say so | Free; the gap stays until the execution service lands |
-| Teach the tracker an asset class and a multiplier | Fixes long options; short options still need real margin rules |
-| Reserve options against a margin model | Correct, and the largest piece of work here |
+| Short options and spreads cannot be reserved | Refused at `reserve`, with a message naming this item |
+| `Broker.order` has no multi-leg request | `@fleece/alpaca` can place one; the ledger books one; the handle shape is the open piece |
+| Adjusted contracts still default to 100 | `ReservationRequest.multiplier` overrides it, and nothing looks one up per fill |
 
-**Recommendation: the first, until something actually places an option order.** The
-ledger side is what the recorded payloads proved out; the reservation side has no caller
-to prove anything against, and guessing at margin rules with nothing exercising them is
-how the wrong rule ships unnoticed.
+**Recommendation: leave short options refused until something needs to write one**, and
+add a margin model then, against a caller that can exercise it. Guessing at margin rules
+with nothing exercising them is how the wrong rule ships unnoticed.
 
 ---
 
@@ -184,8 +177,9 @@ in either direction. Positions and transactions store **total cost** rather than
 price, which removes division from every path but one and makes the conservation
 invariant exact; `roundPrice` and its magnitude-driven precision are gone.
 
-The reservation side of `@fleece/broker` has not been converted and still computes in
-doubles — see item 2b.
+`@fleece/broker`'s reservations are converted too: they account in `Decimal` and in
+total cost, so the account's view of a position and the ledger's are computed by the same
+function from the same numbers.
 
 Dates remain ISO `TEXT` rather than `DATE`, for the unchanged reason: they are market
 calendar dates, and a `DATE` column comes back through node-postgres as a JS `Date` at
@@ -198,7 +192,9 @@ local midnight, which is the previous day for anyone west of UTC.
 **Severity: medium — inherited from the legacy, preserved deliberately.**
 
 `MarketOrderRequest.unitPrice` is optional, and when it is absent the reservation holds
-zero buying power. Two concurrent market buys can then both pass `test()` and the
+zero buying power — for an option too, which is the one place this now bites harder than
+it did: a short option is refused outright, but an unpriced option *buy* still holds
+nothing. Two concurrent market buys can then both pass `test()` and the
 account is oversubscribed — which surfaces as the broker rejecting the second, or worse,
 accepting both.
 
@@ -276,11 +272,12 @@ rather than incidental:
   none of the locking, idempotency or client round-trip behaviour would otherwise be
   indistinguishable from a green one. `scripts/assert-suites-ran.js` reads the JSON jest
   already writes and fails when any suite ran nothing.
-- **`@fleece/broker` has a job of its own, allowed to fail.** It does not compile against
-  the redesign and must not be ported by translating its arithmetic (item 2b), so the
-  main job excludes it — from the build, from `npm test`, and from lint's blast radius —
-  while the second job keeps the gap visible on every run. A permanently red required
-  check is one people learn to ignore. Fold it back into `check` when it goes green.
+- **`build:all` runs after the tests.** `npm run build` covers every package with a
+  consumer; this covers the ones with none, so a package cannot rot unnoticed for want of
+  an importer. `@fleece/broker` used to have a job of its own, allowed to fail, because it
+  did not compile against the redesign. It compiles now and is folded back into `check` —
+  a permanently red check is one people learn to ignore, and a green one that runs
+  nothing is worse.
 
 ---
 

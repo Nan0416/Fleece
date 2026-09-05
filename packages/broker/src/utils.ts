@@ -1,20 +1,22 @@
-export function hasDifferentSign(first: number, second: number): boolean {
-  return (first > 0 && second < 0) || (first < 0 && second > 0);
+import { Decimal } from '@fleece/shared';
+
+export function hasDifferentSign(first: Decimal, second: Decimal): boolean {
+  return first.signum() * second.signum() < 0;
 }
 
 /** Whichever of the two is nearer zero, keeping its own sign. */
-export function nearerZero(first: number, second: number): number {
-  return Math.abs(first) < Math.abs(second) ? first : second;
+export function nearerZero(first: Decimal, second: Decimal): Decimal {
+  return first.abs().lt(second.abs()) ? first : second;
 }
 
 /** True when no two non-zero entries disagree in sign. An empty list agrees. */
-export function allSameSign(numbers: ReadonlyArray<number>): boolean {
-  let sign: 'positive' | 'negative' | undefined;
-  for (const value of numbers) {
-    if (value === 0) {
+export function allSameSign(sizes: ReadonlyArray<Decimal>): boolean {
+  let sign: -1 | 1 | undefined;
+  for (const value of sizes) {
+    const current = value.signum();
+    if (current === 0) {
       continue;
     }
-    const current = value > 0 ? 'positive' : 'negative';
     if (sign === undefined) {
       sign = current;
     } else if (sign !== current) {

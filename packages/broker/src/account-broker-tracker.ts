@@ -1,4 +1,4 @@
-import { BrokerOrderEvent, LoggerFactory, roundPrice } from '@fleece/shared';
+import { BrokerOrderEvent, Decimal, eventToString, LoggerFactory } from '@fleece/shared';
 import { BuyingPowerLedger } from './buying-power';
 import { BrokerPosition, BrokerTracker, ReservationRequest, TestResult } from './models/trackers';
 import { SymbolPositionTracker } from './symbol-position-tracker';
@@ -15,21 +15,21 @@ export interface AccountBrokerTrackerProps {
  *
  * Buying power lives here rather than being summed from the symbol trackers because it
  * is genuinely shared — a buy in AAPL reduces what is available for MSFT. The symbol
- * trackers hold shares, which are not.
+ * trackers hold units, which are not.
  */
 export class AccountBrokerTracker implements BrokerTracker, BuyingPowerLedger {
   private readonly trackers = new Map<string, SymbolPositionTracker>();
   private readonly reservationOwners = new Map<string, SymbolPositionTracker>();
-  private _availableBuyingPower = 0;
+  private _availableBuyingPower = Decimal.ZERO;
   private initialised = false;
 
   constructor(private readonly props: AccountBrokerTrackerProps) {}
 
-  get availableBuyingPower(): number {
+  get availableBuyingPower(): Decimal {
     return this._availableBuyingPower;
   }
 
-  setup(buyingPower: number, positions: ReadonlyArray<BrokerPosition>): void {
+  setup(buyingPower: Decimal, positions: ReadonlyArray<BrokerPosition>): void {
     if (this.initialised) {
       throw new Error(`The tracker for broker account ${this.props.brokerAccountId} is already set up.`);
     }
@@ -41,10 +41,10 @@ export class AccountBrokerTracker implements BrokerTracker, BuyingPowerLedger {
         throw new Error(`The broker reported ${position.symbol} twice for account ${this.props.brokerAccountId}.`);
       }
       const tracker = this.trackerFor(position.symbol);
-      tracker.setup(position.positionSize, position.unitCost, position.pendingOrders);
+      tracker.setup(position.positionSize, position.totalCost, position.pendingOrders);
     }
 
-    logger.info(`Broker account ${this.props.brokerAccountId}: ${buyingPower} buying power, ${positions.length} position(s).`);
+    logger.info(`Broker account ${this.props.brokerAccountId}: ${buyingPower.toString()} buying power, ${positions.length} position(s).`);
   }
 
   test(request: ReservationRequest): TestResult | undefined {
@@ -65,20 +65,31 @@ export class AccountBrokerTracker implements BrokerTracker, BuyingPowerLedger {
   }
 
   track(event: BrokerOrderEvent): void {
+    // A composite order's parent trades no instrument of its own: its size counts
+    // spreads rather than contracts, and its price is the package's signed net. There
+    // is no position for it to move. Booking it would open one keyed on nothing, at a
+    // price no contract traded at — and its legs arrive as events of their own, each
+    // naming a real instrument, so nothing is lost by ignoring it.
+    const { symbol } = event;
+    if (symbol === undefined) {
+      logger.debug(`Ignoring ${eventToString(event)} on account ${this.props.brokerAccountId}: a composite parent holds no position, and its legs carry the fills.`);
+      return;
+    }
+
     // No setup required: an event for a symbol never seen is not an error, it is an
     // externally placed order, and dropping it would leave the account's own view of
     // itself wrong.
     this.initialised = true;
-    this.trackerFor(event.symbol).track(event);
+    this.trackerFor(symbol).track(event);
   }
 
-  onAvailableBuyingPowerChange(delta: number): void {
-    this._availableBuyingPower = roundPrice(this._availableBuyingPower + delta);
-    if (this._availableBuyingPower < 0) {
+  onAvailableBuyingPowerChange(delta: Decimal): void {
+    this._availableBuyingPower = this._availableBuyingPower.add(delta);
+    if (this._availableBuyingPower.isNegative()) {
       // Reachable when a market order fills above the price it reserved against, or
       // when it reserved nothing because no estimate was given. Worth saying: the next
       // order will be refused, and the reason is here rather than at that call site.
-      logger.warn(`Broker account ${this.props.brokerAccountId} buying power is ${this._availableBuyingPower}: a fill cost more than was reserved for it.`);
+      logger.warn(`Broker account ${this.props.brokerAccountId} buying power is ${this._availableBuyingPower.toString()}: a fill cost more than was reserved for it.`);
     }
   }
 

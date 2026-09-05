@@ -11,7 +11,6 @@ export interface OrderObj {
   readonly symbol: string;
   readonly brokerOrderId: string;
   readonly accountId: string;
-  readonly groupId?: string;
 
   /** Every event received for this order, oldest first. */
   readonly events: ReadonlyArray<BrokerOrderEvent>;

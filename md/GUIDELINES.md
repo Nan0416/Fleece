@@ -125,6 +125,17 @@ and most of what follows exists because of that.
 12e. **Released holds must be given back on any terminal status, not just on a fill.**
     A cancelled sell that keeps its shares locked makes the account progressively
     untradable, and nothing reports it.
+12h. **A hold is in dollars, so a contract holds its premium times the multiplier.** One
+    contract quoted at 3.85 costs $385, and holding $3.85 lets an account place a hundred
+    times what it can afford. `eventContractMultiplier` in `@fleece/shared` is the one
+    place that figure comes from, shared with the ledger's fill path — a tracker that
+    disagreed with the ledger about what a fill cost would drift from it on every trade.
+12i. **What cannot be priced is refused, not approximated.** A short option's requirement
+    is margin against an unbounded loss and a spread's is the width rather than the sum
+    of its legs, so `reserve` refuses an order that opens or extends a short position in
+    anything but an equity — in `test` as well, so nothing is told an order is possible
+    that reserving would reject. A premium-shaped hold on a short call is a number that
+    looks like an answer.
 
 ## Configuration
 

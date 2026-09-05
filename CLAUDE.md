@@ -15,7 +15,7 @@ An npm-workspaces monorepo, nine packages under `packages/`:
 | `service` | The HTTP API over the ledger |
 | `client` | Typed client for that API |
 | `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
-| `broker` | Places orders, reserving buying power and shares before they go out. Equities only |
+| `broker` | Places orders, reserving buying power and shares before they go out. Equity and long-option reservations; short options are refused |
 | `marketdata` | Polygon client for splits and dividends |
 | `injector` | Turns broker order events into ledger entries |
 | `corporate-actions` | Records the dividends each account is owed |
@@ -58,8 +58,9 @@ directly, so `node packages/service/src/main.ts` skips the build — which is th
 way to try a change, and how to run an experiment with values hardcoded in a script.
 
 Everything is configured from the environment; see `dev.md`. There are no command-line
-flags to learn, and `npm run build:all` type-checks every package including `broker`,
-which the default build leaves out because it does not compile yet.
+flags to learn. `npm run build:all` type-checks every package, `playground`'s experiment
+scripts included, which the default build leaves out so a half-finished experiment cannot
+break it.
 
 ## Tests
 

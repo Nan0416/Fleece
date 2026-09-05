@@ -1,4 +1,14 @@
-import { BrokerOrderEvent, isTerminalStatus, LoggerFactory, reconcilePosition, roundPrice } from '@fleece/shared';
+import {
+  BrokerOrderEvent,
+  Decimal,
+  defaultContractMultiplier,
+  deriveUnitCost,
+  eventContractMultiplier,
+  isTerminalStatus,
+  LoggerFactory,
+  reconcilePosition,
+  sumDecimals,
+} from '@fleece/shared';
 import { nanoid } from 'nanoid';
 import { BuyingPowerLedger } from './buying-power';
 import { NotReservableError } from './models/errors';
@@ -11,28 +21,28 @@ const logger = LoggerFactory.getLogger('SymbolPositionTracker');
  * A hold taken before an order is sent, released when it fills or is cancelled.
  *
  * Exactly one of `lockedSize` and `reservedBuyingPower` is non-zero, decided by
- * direction: reducing a position holds shares, increasing one holds cash.
+ * direction: reducing a position holds units, increasing one holds cash.
  */
 interface Reservation {
   readonly reservationId: string;
   /**
-   * Shares committed to an unfilled order that reduces the position, signed the same
+   * Units committed to an unfilled order that reduces the position, signed the same
    * way as the order. Long 20 with an open sell of 5 gives `lockedSize` of -5, and a
    * free size of 15 — those 5 cannot be sold twice.
    */
-  lockedSize: number;
+  lockedSize: Decimal;
   /** Still to fill. Falls towards zero as fills arrive. */
-  pendingSize: number;
+  pendingSize: Decimal;
   /** Cash held for an unfilled order that increases the position. Always positive. */
-  reservedBuyingPower: number;
+  reservedBuyingPower: Decimal;
 }
 
 /** What has already been applied for one broker order, so a repeat applies nothing. */
 interface Session {
   readonly brokerOrderId: string;
   readonly reservationId: string;
-  filledSize: number;
-  filledTotalCost: number;
+  filledSize: Decimal;
+  filledTotalCost: Decimal;
 }
 
 export interface SymbolPositionTrackerProps {
@@ -48,6 +58,18 @@ export interface SymbolPositionTrackerProps {
  * `positionSize` is everything held; `freeSize` is what is not already promised to an
  * unfilled order. Keeping them apart is the whole point — it is what stops two
  * strategies selling the same shares, or two buys spending the same cash.
+ *
+ * **It accounts in total cost, exactly as the ledger does.** A position is a signed size
+ * and the signed dollars behind it, and a fill is the same, so applying one is addition
+ * and subtraction. The legacy carried a unit price here and divided a fill's cost back
+ * out on every event to feed the next one, which is how a cost basis drifts. The one
+ * division left is `unitCost`, which is derived on read and never fed back in.
+ *
+ * **What it holds and what it cannot.** A reservation is `|size| x unitPrice x
+ * multiplier` — right for an equity either way, and right for an option being bought,
+ * because a contract quoted at 3.85 costs $385. It is refused outright for an order that
+ * opens or extends a **short** option position: that requirement is margin, and a naked
+ * call's is unbounded. See `md/OPEN-ITEMS.md` item 2b.
  *
  * **Where reservations come from.** Only the first route is the happy path:
  *
@@ -75,9 +97,9 @@ export class SymbolPositionTracker implements PositionTracker {
   private readonly reservations = new Map<string, Reservation>();
   private readonly now: () => number;
 
-  private _positionSize = 0;
-  private _freeSize = 0;
-  private _unitCost = 0;
+  private _positionSize = Decimal.ZERO;
+  private _freeSize = Decimal.ZERO;
+  private _totalCost = Decimal.ZERO;
   private initialised = false;
 
   constructor(private readonly props: SymbolPositionTrackerProps) {
@@ -85,16 +107,21 @@ export class SymbolPositionTracker implements PositionTracker {
     this.now = props.now ?? Date.now;
   }
 
-  get positionSize(): number {
+  get positionSize(): Decimal {
     return this._positionSize;
   }
 
-  get freeSize(): number {
+  get freeSize(): Decimal {
     return this._freeSize;
   }
 
-  get unitCost(): number {
-    return this._unitCost;
+  get totalCost(): Decimal {
+    return this._totalCost;
+  }
+
+  /** Derived, never stored: the one division in this class, and it is read-only. */
+  get unitCost(): Decimal {
+    return deriveUnitCost(this._totalCost, this._positionSize);
   }
 
   get profits(): ReadonlyArray<RealisedProfit> {
@@ -117,11 +144,14 @@ export class SymbolPositionTracker implements PositionTracker {
    * shares free to sell, without waiting for the rest.
    */
   test(request: ReservationRequest): TestResult | undefined {
-    const result: TestResult = { originalSize: this._positionSize, newSize: this._positionSize + request.size };
-    const requiredBuyingPower = typeof request.unitPrice === 'number' ? Math.abs(request.size) * request.unitPrice : 0;
-    const affordable = requiredBuyingPower <= this.props.buyingPower.availableBuyingPower;
+    if (this.unreservable(request) !== undefined) {
+      return undefined;
+    }
 
-    if (this._positionSize === 0) {
+    const result: TestResult = { originalSize: this._positionSize, newSize: this._positionSize.add(request.size) };
+    const affordable = this.requiredBuyingPower(request).lte(this.props.buyingPower.availableBuyingPower);
+
+    if (this._positionSize.isZero()) {
       const unfilled = [...this.reservations.values()].map((reservation) => reservation.pendingSize);
       if (!allSameSign(unfilled)) {
         // Provably impossible: while the position is non-zero the largest opposing
@@ -129,29 +159,33 @@ export class SymbolPositionTracker implements PositionTracker {
         // one direction can be outstanding.
         logger.error(`${this.symbol} has unfilled orders in both directions while flat.`);
       }
-      const totalUnfilled = unfilled.reduce((sum, size) => sum + size, 0);
-      const agrees = totalUnfilled === 0 || (totalUnfilled > 0 && request.size > 0) || (totalUnfilled < 0 && request.size < 0);
+      const totalUnfilled = sumDecimals(unfilled);
+      const agrees = totalUnfilled.isZero() || totalUnfilled.signum() === request.size.signum();
       return agrees && affordable ? result : undefined;
     }
 
-    if (this._positionSize > 0) {
-      if (request.size > 0) {
+    if (this._positionSize.isPositive()) {
+      if (request.size.isPositive()) {
         return affordable ? result : undefined;
       }
       // Reducing: bounded by what is free, not by what is held.
-      return request.size + this._freeSize >= 0 ? result : undefined;
+      return request.size.add(this._freeSize).gte(Decimal.ZERO) ? result : undefined;
     }
 
-    if (request.size < 0) {
+    if (request.size.isNegative()) {
       return affordable ? result : undefined;
     }
-    return request.size + this._freeSize <= 0 ? result : undefined;
+    return request.size.add(this._freeSize).lte(Decimal.ZERO) ? result : undefined;
   }
 
   reserve(request: ReservationRequest): string {
+    const unreservable = this.unreservable(request);
+    if (unreservable !== undefined) {
+      throw new NotReservableError(unreservable);
+    }
     if (this.test(request) === undefined) {
       throw new NotReservableError(
-        `Cannot reserve ${request.size} ${this.symbol}: the account has ${this._freeSize} free shares and ${this.props.buyingPower.availableBuyingPower} buying power.`,
+        `Cannot reserve ${request.size.toString()} ${this.symbol}: the account has ${this._freeSize.toString()} free and ${this.props.buyingPower.availableBuyingPower.toString()} buying power.`,
       );
     }
 
@@ -161,20 +195,20 @@ export class SymbolPositionTracker implements PositionTracker {
     const reducing = hasDifferentSign(request.size, this._positionSize);
 
     if (reducing) {
-      this._freeSize += request.size;
-      this.reservations.set(reservationId, { reservationId, lockedSize: request.size, pendingSize: request.size, reservedBuyingPower: 0 });
-      logger.info(`Reserved ${Math.abs(request.size)} ${this.symbol} shares (${reservationId}); ${this._freeSize} now free.`);
+      this._freeSize = this._freeSize.add(request.size);
+      this.reservations.set(reservationId, { reservationId, lockedSize: request.size, pendingSize: request.size, reservedBuyingPower: Decimal.ZERO });
+      logger.info(`Reserved ${request.size.abs().toString()} ${this.symbol} (${reservationId}); ${this._freeSize.toString()} now free.`);
     } else {
       // No unit price means no hold. That is a real gap rather than a decision — a
       // market buy with no estimate can oversubscribe the account — so the caller is
       // told rather than left to find out from the broker.
-      const reserved = typeof request.unitPrice === 'number' ? roundPrice(Math.abs(request.size) * request.unitPrice) : 0;
-      if (reserved === 0) {
-        logger.warn(`Reserving no buying power for ${request.size} ${this.symbol}: no unit price was supplied, so nothing is held against a concurrent order.`);
+      const reserved = this.requiredBuyingPower(request);
+      if (reserved.isZero()) {
+        logger.warn(`Reserving no buying power for ${request.size.toString()} ${this.symbol}: no unit price was supplied, so nothing is held against a concurrent order.`);
       }
-      this.props.buyingPower.onAvailableBuyingPowerChange(-reserved);
-      this.reservations.set(reservationId, { reservationId, lockedSize: 0, pendingSize: request.size, reservedBuyingPower: reserved });
-      logger.info(`Reserved ${reserved} buying power for ${request.size} ${this.symbol} (${reservationId}).`);
+      this.props.buyingPower.onAvailableBuyingPowerChange(reserved.neg());
+      this.reservations.set(reservationId, { reservationId, lockedSize: Decimal.ZERO, pendingSize: request.size, reservedBuyingPower: reserved });
+      logger.info(`Reserved ${reserved.toString()} buying power for ${request.size.toString()} ${this.symbol} (${reservationId}).`);
     }
 
     return reservationId;
@@ -190,14 +224,14 @@ export class SymbolPositionTracker implements PositionTracker {
   }
 
   /** Seeds from the broker's own view. Once only. */
-  setup(positionSize: number, unitCost: number, pendingOrders: ReadonlyArray<PendingOrder> = []): void {
+  setup(positionSize: Decimal, totalCost: Decimal, pendingOrders: ReadonlyArray<PendingOrder> = []): void {
     if (this.initialised) {
       throw new Error(`The ${this.symbol} position tracker is already set up.`);
     }
     this.initialised = true;
 
     this._positionSize = positionSize;
-    this._unitCost = unitCost;
+    this._totalCost = totalCost;
     // Everything starts free, then each open order takes back what it has committed.
     this._freeSize = positionSize;
 
@@ -205,7 +239,9 @@ export class SymbolPositionTracker implements PositionTracker {
       this.adoptPendingOrder(pendingOrder);
     }
 
-    logger.info(`${this.symbol}: ${this._positionSize} held, ${this._freeSize} free, cost basis ${this._unitCost}, ${pendingOrders.length} order(s) already open.`);
+    logger.info(
+      `${this.symbol}: ${this._positionSize.toString()} held, ${this._freeSize.toString()} free, basis ${this._totalCost.toString()}, ${pendingOrders.length} order(s) already open.`,
+    );
   }
 
   track(event: BrokerOrderEvent): void {
@@ -221,12 +257,14 @@ export class SymbolPositionTracker implements PositionTracker {
       // First sight of a leg order or an externally placed one. Terminal events are
       // excluded because a very late event for an order already reconciled by the REST
       // backfill would otherwise resurrect a reservation for a finished order.
+      const multiplier = eventContractMultiplier(event);
       reservation = this.adoptPendingOrder({
         brokerOrderId: event.id,
         limitPrice: event.limitPrice,
-        unfilledSize: event.qty - event.filledQty,
+        unfilledSize: event.qty.sub(event.filledQty),
         partialFilledSize: event.filledQty,
-        partialTotalCost: typeof event.filledAvgPrice === 'number' ? roundPrice(event.filledQty * event.filledAvgPrice) : 0,
+        partialTotalCost: event.filledAvgPrice === undefined ? Decimal.ZERO : event.filledQty.mul(event.filledAvgPrice).mul(multiplier),
+        multiplier,
       });
     }
 
@@ -244,14 +282,19 @@ export class SymbolPositionTracker implements PositionTracker {
    *
    * The comparison on magnitude is what makes a duplicate a no-op: the broker reports
    * totals, and a repeat carries a total already recorded.
+   *
+   * **This is where the broker's units become the account's.** The broker quotes an
+   * option's premium per share, so a contract filled at 3.85 moved $385 — the same
+   * conversion the ledger's fill path makes, from the same helper, because a hold that
+   * disagreed with the ledger about what a fill cost would drift from it on every trade.
    */
   private apply(event: BrokerOrderEvent, session: Session, reservation: Reservation): void {
-    if (Math.abs(event.filledQty) > Math.abs(session.filledSize) && typeof event.filledAvgPrice === 'number') {
-      const filledTotalCost = roundPrice(event.filledQty * event.filledAvgPrice);
-      const newSize = event.filledQty - session.filledSize;
-      const newCost = roundPrice(filledTotalCost - session.filledTotalCost);
+    if (event.filledQty.abs().gt(session.filledSize.abs()) && event.filledAvgPrice !== undefined) {
+      const filledTotalCost = event.filledQty.mul(event.filledAvgPrice).mul(eventContractMultiplier(event));
 
-      this.reconcile(newSize, roundPrice(newCost / newSize), reservation);
+      // Both are differences of cumulative totals, so no division appears anywhere on
+      // this path: the fill's size and its dollars are carried through as they are.
+      this.reconcile(event.filledQty.sub(session.filledSize), filledTotalCost.sub(session.filledTotalCost), reservation);
 
       session.filledSize = event.filledQty;
       session.filledTotalCost = filledTotalCost;
@@ -271,25 +314,25 @@ export class SymbolPositionTracker implements PositionTracker {
    * function the ledger uses. The legacy carried a second copy of it here, which is two
    * places for a cost basis to be computed differently.
    */
-  private reconcile(filledSize: number, avgPrice: number, reservation: Reservation): void {
+  private reconcile(filledSize: Decimal, filledTotalCost: Decimal, reservation: Reservation): void {
     const reducing = hasDifferentSign(filledSize, this._positionSize);
 
     const result = reconcilePosition({
       positionSize: this._positionSize,
-      positionUnitCost: this._unitCost,
+      positionTotalCost: this._totalCost,
       transactionSize: filledSize,
-      transactionUnitCost: avgPrice,
+      transactionTotalCost: filledTotalCost,
     });
 
-    if (typeof result.transactionProfit === 'number') {
-      this.profitLog.push({ profit: result.transactionProfit, shares: filledSize, timestamp: this.now() });
+    if (result.transactionProfit !== undefined) {
+      this.profitLog.push({ profit: result.transactionProfit, size: filledSize, timestamp: this.now() });
     }
-    this._unitCost = result.positionUnitCost;
+    this._totalCost = result.positionTotalCost;
     this._positionSize = result.positionSize;
 
     this.settleBuyingPower(result.buyingPowerDelta, reducing, reservation);
     this.settleShares(filledSize, reducing, reservation);
-    reservation.pendingSize -= filledSize;
+    reservation.pendingSize = reservation.pendingSize.sub(filledSize);
   }
 
   /**
@@ -299,66 +342,69 @@ export class SymbolPositionTracker implements PositionTracker {
    * the account — the account already gave that 1700 up at reservation time. Only what
    * the reservation cannot cover reaches the account balance.
    */
-  private settleBuyingPower(buyingPowerDelta: number, reducing: boolean, reservation: Reservation): void {
+  private settleBuyingPower(buyingPowerDelta: Decimal, reducing: boolean, reservation: Reservation): void {
     let delta = buyingPowerDelta;
-    if (reservation.reservedBuyingPower > 0 && !reducing) {
-      const fromReservation = Math.min(reservation.reservedBuyingPower, Math.abs(delta));
-      reservation.reservedBuyingPower = roundPrice(reservation.reservedBuyingPower - fromReservation);
-      delta = roundPrice(delta + fromReservation);
+    if (reservation.reservedBuyingPower.isPositive() && !reducing) {
+      const required = delta.abs();
+      const fromReservation = reservation.reservedBuyingPower.lt(required) ? reservation.reservedBuyingPower : required;
+      reservation.reservedBuyingPower = reservation.reservedBuyingPower.sub(fromReservation);
+      delta = delta.add(fromReservation);
     }
     this.props.buyingPower.onAvailableBuyingPowerChange(delta);
   }
 
   /**
-   * A sell consumes the shares it locked before touching the free size.
+   * A sell consumes the units it locked before touching the free size.
    *
    * Long 10 with a reserved sell of 5, and 3 fill: the 3 come out of the reservation's
    * locked 5, leaving 2 locked and the free size unchanged. The shares were already
    * spoken for.
    */
-  private settleShares(filledSize: number, reducing: boolean, reservation: Reservation): void {
+  private settleShares(filledSize: Decimal, reducing: boolean, reservation: Reservation): void {
     if (!reducing) {
-      this._freeSize += filledSize;
+      this._freeSize = this._freeSize.add(filledSize);
       return;
     }
     const fromLocked = nearerZero(reservation.lockedSize, filledSize);
-    reservation.lockedSize -= fromLocked;
-    this._freeSize += filledSize - fromLocked;
+    reservation.lockedSize = reservation.lockedSize.sub(fromLocked);
+    this._freeSize = this._freeSize.add(filledSize.sub(fromLocked));
   }
 
   /**
    * Takes on an order that already exists at the broker, keyed by its broker order id.
    *
    * The session starts at whatever the order has *already* filled, and that is the
-   * important part: those shares are assumed to be in the position the broker reported
+   * important part: those units are assumed to be in the position the broker reported
    * at setup, so applying them again would count them twice. Only fills after this
    * point move the position.
    *
    * The assumption holds for the case this exists for — an order already open when the
    * process started. It is wrong in one corner: an order placed after setup whose early
    * events were all missed, where the first event seen already shows fills. Those
-   * shares are then never applied. Preserved from the legacy deliberately, because
+   * fills are then never applied. Preserved from the legacy deliberately, because
    * double-counting a fill is the worse of the two errors and the REST backfill exists
    * to keep the corner from arising.
    */
   private adoptPendingOrder(pendingOrder: PendingOrder): Reservation {
-    const freeAfter = this._freeSize + pendingOrder.unfilledSize;
-    const reducing = Math.abs(freeAfter) < Math.abs(this._freeSize);
+    const freeAfter = this._freeSize.add(pendingOrder.unfilledSize);
+    const reducing = freeAfter.abs().lt(this._freeSize.abs());
 
     const reservation: Reservation = reducing
-      ? { reservationId: pendingOrder.brokerOrderId, lockedSize: pendingOrder.unfilledSize, pendingSize: pendingOrder.unfilledSize, reservedBuyingPower: 0 }
+      ? { reservationId: pendingOrder.brokerOrderId, lockedSize: pendingOrder.unfilledSize, pendingSize: pendingOrder.unfilledSize, reservedBuyingPower: Decimal.ZERO }
       : {
           reservationId: pendingOrder.brokerOrderId,
-          lockedSize: 0,
+          lockedSize: Decimal.ZERO,
           pendingSize: pendingOrder.unfilledSize,
-          // A market order already open has no limit price, so nothing can be held for it.
-          reservedBuyingPower: typeof pendingOrder.limitPrice === 'number' ? roundPrice(pendingOrder.limitPrice * Math.abs(pendingOrder.unfilledSize)) : 0,
+          // A market order already open has no limit price, so nothing can be held for
+          // it. The multiplier is what makes an open option order hold its premium in
+          // dollars rather than per share.
+          reservedBuyingPower: pendingOrder.limitPrice === undefined ? Decimal.ZERO : pendingOrder.limitPrice.mul(pendingOrder.unfilledSize.abs()).mul(pendingOrder.multiplier),
         };
 
     if (reducing) {
       this._freeSize = freeAfter;
     } else {
-      this.props.buyingPower.onAvailableBuyingPowerChange(-reservation.reservedBuyingPower);
+      this.props.buyingPower.onAvailableBuyingPowerChange(reservation.reservedBuyingPower.neg());
     }
 
     this.reservations.set(reservation.reservationId, reservation);
@@ -376,9 +422,55 @@ export class SymbolPositionTracker implements PositionTracker {
     if (existing !== undefined) {
       return existing;
     }
-    const session: Session = { brokerOrderId: event.id, reservationId, filledSize: 0, filledTotalCost: 0 };
+    const session: Session = { brokerOrderId: event.id, reservationId, filledSize: Decimal.ZERO, filledTotalCost: Decimal.ZERO };
     this.sessions.set(event.id, session);
     return session;
+  }
+
+  /**
+   * The cash an order needs held against it: what it will cost, in dollars.
+   *
+   * The multiplier is the whole point. Without it a single contract quoted at 3.85
+   * holds $3.85 against a purchase that costs $385, and a hundred of them oversubscribe
+   * the account by exactly the factor nobody would notice until the broker refused
+   * something.
+   */
+  private requiredBuyingPower(request: ReservationRequest): Decimal {
+    if (request.unitPrice === undefined) {
+      return Decimal.ZERO;
+    }
+    return request.size
+      .abs()
+      .mul(request.unitPrice)
+      .mul(request.multiplier ?? defaultContractMultiplier(request.assetClass));
+  }
+
+  /**
+   * The one requirement this tracker refuses to guess at, and why it says so rather
+   * than holding something plausible.
+   *
+   * Everything else here is priced: a buy costs what it costs, and a reduction hands
+   * back units it already holds. Writing a short option is different in kind — the
+   * broker's requirement is margin against a position whose loss is unbounded for a
+   * naked call, and a spread's is the width rather than the sum of its legs. Holding
+   * the premium instead would be a number that looks like an answer, and the account
+   * would be oversubscribed by whatever the real requirement exceeded it by.
+   *
+   * Refusing is not a limitation to be worked around by omitting the price: an order
+   * with no `unitPrice` holds nothing at all and would sail straight through. It is
+   * refused on direction and asset class alone. See `md/OPEN-ITEMS.md` item 2b.
+   */
+  private unreservable(request: ReservationRequest): string | undefined {
+    if (request.assetClass === 'equity') {
+      return undefined;
+    }
+    // Reducing hands units back and needs no cash, so only an order that opens or
+    // extends a short is refused. Selling contracts already held is a reduction.
+    const reducing = hasDifferentSign(request.size, this._positionSize);
+    if (request.size.isNegative() && !reducing) {
+      return `Cannot reserve ${request.size.toString()} ${this.symbol}: opening a short ${request.assetClass} position requires margin, which this tracker does not model. See md/OPEN-ITEMS.md item 2b.`;
+    }
+    return undefined;
   }
 
   /**
@@ -391,14 +483,14 @@ export class SymbolPositionTracker implements PositionTracker {
   private release(reservation: Reservation): void {
     this.reservations.delete(reservation.reservationId);
 
-    if (reservation.lockedSize !== 0) {
-      this._freeSize -= reservation.lockedSize;
-      reservation.lockedSize = 0;
+    if (!reservation.lockedSize.isZero()) {
+      this._freeSize = this._freeSize.sub(reservation.lockedSize);
+      reservation.lockedSize = Decimal.ZERO;
     }
-    reservation.pendingSize = 0;
-    if (reservation.reservedBuyingPower !== 0) {
+    reservation.pendingSize = Decimal.ZERO;
+    if (!reservation.reservedBuyingPower.isZero()) {
       this.props.buyingPower.onAvailableBuyingPowerChange(reservation.reservedBuyingPower);
-      reservation.reservedBuyingPower = 0;
+      reservation.reservedBuyingPower = Decimal.ZERO;
     }
 
     this.props.buyingPower.onReservationComplete(reservation.reservationId);

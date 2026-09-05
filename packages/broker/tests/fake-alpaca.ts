@@ -62,6 +62,51 @@ export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   };
 }
 
+/**
+ * An open spread, in the shape Alpaca really returns it: a parent with **no symbol and
+ * no price of its own**, and the contracts nested inside it.
+ *
+ * The parent's `side` is `'buy'` and means nothing — a spread has no direction — which
+ * is exactly what makes seeding a tracker from it produce a position keyed on `''` with
+ * a size signed from a coin toss.
+ */
+export function openMultiLegOrder(): AlpacaOrder {
+  return alpacaOrder({
+    id: 'mleg-parent',
+    symbol: '',
+    asset_class: '',
+    order_class: 'mleg',
+    order_type: 'limit',
+    type: 'limit',
+    limit_price: '-0.85',
+    qty: '1',
+    legs: [
+      alpacaOrder({
+        id: 'mleg-leg-short',
+        symbol: 'AMZN261016C00280000',
+        asset_class: 'us_option',
+        order_class: 'mleg',
+        order_type: 'limit',
+        type: 'limit',
+        side: 'sell',
+        qty: '1',
+        ratio_qty: '1',
+      }),
+      alpacaOrder({
+        id: 'mleg-leg-long',
+        symbol: 'AMZN261016C00285000',
+        asset_class: 'us_option',
+        order_class: 'mleg',
+        order_type: 'limit',
+        type: 'limit',
+        side: 'buy',
+        qty: '1',
+        ratio_qty: '1',
+      }),
+    ],
+  });
+}
+
 export class FakeAlpacaRestClient implements AlpacaRestClient {
   buyingPower = '100000';
   positions: ListPositionsOutput['positions'] = [];
@@ -118,9 +163,9 @@ export class FakeAlpacaRestClient implements AlpacaRestClient {
   }
 
   /**
-   * `@fleece/broker` has no multi-leg request and cannot reserve for one, so nothing
-   * here reaches this. It exists to satisfy the interface, and throws rather than
-   * pretending to place a spread — see `md/OPEN-ITEMS.md` item 2b.
+   * `@fleece/broker` has no multi-leg request yet, so nothing here reaches this. It
+   * exists to satisfy the interface, and throws rather than pretending to place a
+   * spread — see `md/OPEN-ITEMS.md` item 2b.
    */
   async createMultiLegOrder(_input: CreateMultiLegOrderInput): Promise<CreateOrderOutput> {
     throw new Error('FakeAlpacaRestClient cannot place a multi-leg order: no broker path reaches it.');

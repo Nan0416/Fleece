@@ -12,7 +12,6 @@ export interface AlpacaOrderHandleProps {
   readonly symbol: string;
   readonly brokerOrderId: string;
   readonly accountId: string;
-  readonly groupId?: string;
   readonly brokerAccountId: string;
   readonly onEvent: OrderEventHandler;
 }
@@ -28,7 +27,6 @@ export class AlpacaOrderHandle implements OrderObj {
   readonly symbol: string;
   readonly brokerOrderId: string;
   readonly accountId: string;
-  readonly groupId?: string;
   private readonly received: BrokerOrderEvent[] = [];
 
   constructor(
@@ -38,7 +36,6 @@ export class AlpacaOrderHandle implements OrderObj {
     this.symbol = props.symbol;
     this.brokerOrderId = props.brokerOrderId;
     this.accountId = props.accountId;
-    this.groupId = props.groupId;
   }
 
   get events(): ReadonlyArray<BrokerOrderEvent> {

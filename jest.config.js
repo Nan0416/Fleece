@@ -15,17 +15,7 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/packages'],
   testMatch: ['**/tests/**/*.test.ts'],
-  /**
-   * `@fleece/broker` is left out for the same reason it is left out of `npm run build`:
-   * it does not compile against the ledger redesign, and must not be ported by
-   * translating its arithmetic — its option reservations are wrong by a factor of 100,
-   * so converting them first would produce a package that looks correct while still
-   * being wrong. See `md/OPEN-ITEMS.md` items 0 and 2b.
-   *
-   * Excluding it keeps `npm test` a signal rather than a known-red run people stop
-   * reading. CI still runs it, in a job allowed to fail, so the gap stays visible.
-   */
-  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/packages/broker/'],
+  testPathIgnorePatterns: ['/node_modules/'],
   setupFiles: ['<rootDir>/jest.setup.js'],
   moduleNameMapper: {
     '^@fleece/shared$': '<rootDir>/packages/shared/src',

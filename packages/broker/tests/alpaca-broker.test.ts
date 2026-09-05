@@ -3,7 +3,8 @@ import { BrokerOrderEvent } from '@fleece/shared';
 import { AlpacaBroker } from '../src/alpaca-broker';
 import { NotReservableError } from '../src/models/errors';
 import { OrderObj } from '../src/models/order-obj';
-import { alpacaOrder, FakeAlpacaRestClient, FakeAlpacaWsClient, RecordingOrderTrackingClient } from './fake-alpaca';
+import { d, shows } from './decimals';
+import { alpacaOrder, FakeAlpacaRestClient, FakeAlpacaWsClient, openMultiLegOrder, RecordingOrderTrackingClient } from './fake-alpaca';
 
 const account = { accountId: 'PAPER001', live: false };
 const noEvents = async (): Promise<void> => {};
@@ -47,9 +48,9 @@ describe('AlpacaBroker', () => {
 
       await broker.init();
 
-      expect(broker.tracker.availableBuyingPower).toBe(50_000);
-      expect(broker.tracker.positionTracker('AAPL')?.positionSize).toBe(10);
-      expect(broker.tracker.positionTracker('AAPL')?.unitCost).toBe(170);
+      expect(shows(broker.tracker.availableBuyingPower)).toBe('50000');
+      expect(shows(broker.tracker.positionTracker('AAPL')?.positionSize)).toBe('10');
+      expect(shows(broker.tracker.positionTracker('AAPL')?.unitCost)).toBe('170');
     });
 
     it('locks shares already committed to an order open at the broker', async () => {
@@ -59,7 +60,7 @@ describe('AlpacaBroker', () => {
 
       await broker.init();
 
-      expect(broker.tracker.positionTracker('AAPL')?.freeSize).toBe(15);
+      expect(shows(broker.tracker.positionTracker('AAPL')?.freeSize)).toBe('15');
     });
 
     it('holds buying power for an open limit buy, carrying its limit price through', async () => {
@@ -71,7 +72,21 @@ describe('AlpacaBroker', () => {
 
       await broker.init();
 
-      expect(broker.tracker.availableBuyingPower).toBe(98_500);
+      expect(shows(broker.tracker.availableBuyingPower)).toBe('98500');
+    });
+
+    it('seeds an open spread from its contracts, not from the parent that trades none', async () => {
+      // The parent has no symbol and a side that means nothing. Seeding from it opens a
+      // position keyed on the empty string, signed from that side — a wrong number that
+      // looks like a right one.
+      const { broker, rest } = harness();
+      rest.openOrders = [openMultiLegOrder()];
+
+      await broker.init();
+
+      expect(broker.tracker.positionTracker('')).toBeUndefined();
+      expect(broker.tracker.positionTracker('AMZN261016C00280000')).toBeDefined();
+      expect(broker.tracker.positionTracker('AMZN261016C00285000')).toBeDefined();
     });
 
     it('refuses to start against an account with no buying power', async () => {
@@ -92,21 +107,20 @@ describe('AlpacaBroker', () => {
       const { broker, rest } = harness();
       await broker.init();
 
-      await broker.order({ type: 'limit', symbol: 'AAPL', size: 10, limitPrice: 100, accountId: 'MOMENTUM01', onEvent: noEvents });
+      await broker.order({ type: 'limit', symbol: 'AAPL', size: d(10), assetClass: 'equity', limitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
 
       expect(rest.created).toHaveLength(1);
-      expect(broker.tracker.availableBuyingPower).toBe(99_000);
+      expect(shows(broker.tracker.availableBuyingPower)).toBe('99000');
     });
 
-    it('encodes the virtual account and group into the client order id', async () => {
+    it('encodes the virtual account into the client order id', async () => {
       const { broker, rest } = harness();
       await broker.init();
 
-      await broker.order({ type: 'market', symbol: 'AAPL', size: 10, unitPrice: 100, accountId: 'MOMENTUM01', groupId: 'group-1', onEvent: noEvents });
+      await broker.order({ type: 'market', symbol: 'AAPL', size: d(10), assetClass: 'equity', unitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
 
       const correlation = decodeAlpacaOrderCorrelation(rest.created[0].clientOrderId ?? '');
       expect(correlation.virtualAccountId).toBe('MOMENTUM01');
-      expect(correlation.groupId).toBe('group-1');
       expect(correlation.reservationId).toEqual(expect.any(String));
     });
 
@@ -115,7 +129,9 @@ describe('AlpacaBroker', () => {
       rest.buyingPower = '500';
       await broker.init();
 
-      await expect(broker.order({ type: 'limit', symbol: 'AAPL', size: 10, limitPrice: 100, accountId: 'MOMENTUM01', onEvent: noEvents })).rejects.toThrow(NotReservableError);
+      await expect(
+        broker.order({ type: 'limit', symbol: 'AAPL', size: d(10), assetClass: 'equity', limitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents }),
+      ).rejects.toThrow(NotReservableError);
       expect(rest.created).toHaveLength(0);
     });
 
@@ -123,20 +139,22 @@ describe('AlpacaBroker', () => {
       // Otherwise a run of failed placements would silently exhaust the account.
       const { broker, rest } = harness();
       await broker.init();
-      const before = broker.tracker.availableBuyingPower;
+      const before = shows(broker.tracker.availableBuyingPower);
       rest.failNextCreate = new Error('connection reset');
 
-      await expect(broker.order({ type: 'limit', symbol: 'AAPL', size: 10, limitPrice: 100, accountId: 'MOMENTUM01', onEvent: noEvents })).rejects.toThrow('connection reset');
-      expect(broker.tracker.availableBuyingPower).toBe(before);
+      await expect(
+        broker.order({ type: 'limit', symbol: 'AAPL', size: d(10), assetClass: 'equity', limitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents }),
+      ).rejects.toThrow('connection reset');
+      expect(shows(broker.tracker.availableBuyingPower)).toBe(before);
     });
 
-    it('tells the ledger which account and group the order belongs to', async () => {
+    it('tells the ledger which account the order belongs to', async () => {
       const { broker, tracking } = harness();
       await broker.init();
 
-      await broker.order({ type: 'market', symbol: 'AAPL', size: 10, unitPrice: 100, accountId: 'MOMENTUM01', groupId: 'group-1', onEvent: noEvents });
+      await broker.order({ type: 'market', symbol: 'AAPL', size: d(10), assetClass: 'equity', unitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
 
-      expect(tracking.requests).toEqual([{ brokerOrderIds: ['alpaca-order-1'], accountId: 'MOMENTUM01', groupId: 'group-1' }]);
+      expect(tracking.requests).toEqual([{ brokerOrderIds: ['alpaca-order-1'], accountId: 'MOMENTUM01' }]);
     });
 
     it('still returns the order when the ledger could not be told', async () => {
@@ -146,15 +164,26 @@ describe('AlpacaBroker', () => {
       await broker.init();
       tracking.failNext = new Error('no transport configured');
 
-      const handle = await broker.order({ type: 'market', symbol: 'AAPL', size: 10, unitPrice: 100, accountId: 'MOMENTUM01', onEvent: noEvents });
+      const handle = await broker.order({ type: 'market', symbol: 'AAPL', size: d(10), assetClass: 'equity', unitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
       expect(handle.brokerOrderId).toBe('alpaca-order-1');
     });
 
-    it.each([0, 1.5, -0.5])('rejects a size of %s before reserving anything', async (size) => {
+    it('rejects a size of zero before reserving anything', async () => {
       const { broker, rest } = harness();
       await broker.init();
-      await expect(broker.order({ type: 'market', symbol: 'AAPL', size, unitPrice: 100, accountId: 'MOMENTUM01', onEvent: noEvents })).rejects.toThrow(/whole number/);
+      await expect(
+        broker.order({ type: 'market', symbol: 'AAPL', size: d(0), assetClass: 'equity', unitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents }),
+      ).rejects.toThrow(/non-zero/);
       expect(rest.created).toHaveLength(0);
+    });
+
+    it('places a fractional size, which Alpaca fills and the legacy refused', async () => {
+      const { broker, rest } = harness();
+      await broker.init();
+
+      await broker.order({ type: 'limit', symbol: 'AAPL', size: d('1.5'), assetClass: 'equity', limitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
+
+      expect(rest.created[0].size).toBe(1.5);
     });
 
     it('sends a sell as an absolute quantity with a sell side', async () => {
@@ -162,7 +191,7 @@ describe('AlpacaBroker', () => {
       rest.positions = [{ symbol: 'AAPL', asset_id: 'a', asset_class: 'us_equity', qty: '10', avg_entry_price: '100', side: 'long', market_value: '1000', cost_basis: '1000' }];
       await broker.init();
 
-      await broker.order({ type: 'limit', symbol: 'AAPL', size: -4, limitPrice: 150, accountId: 'MOMENTUM01', onEvent: noEvents });
+      await broker.order({ type: 'limit', symbol: 'AAPL', size: d(-4), assetClass: 'equity', limitPrice: d(150), accountId: 'MOMENTUM01', onEvent: noEvents });
 
       expect(rest.created[0].size).toBe(4);
       expect(rest.created[0].side).toBe('sell');
@@ -178,8 +207,9 @@ describe('AlpacaBroker', () => {
       await broker.order({
         type: 'market',
         symbol: 'AAPL',
-        size: 10,
-        unitPrice: 100,
+        size: d(10),
+        assetClass: 'equity',
+        unitPrice: d(100),
         accountId: 'MOMENTUM01',
         onEvent: async (event) => {
           received.push(event);
@@ -195,15 +225,15 @@ describe('AlpacaBroker', () => {
     it('moves the position as fills arrive', async () => {
       const { broker, rest, ws } = harness();
       await broker.init();
-      await broker.order({ type: 'market', symbol: 'AAPL', size: 10, unitPrice: 100, accountId: 'MOMENTUM01', onEvent: noEvents });
+      await broker.order({ type: 'market', symbol: 'AAPL', size: d(10), assetClass: 'equity', unitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
 
       // Alpaca echoes the client order id back on every event, which is how the
       // reservation reaches the tracker. An event without it is a different case.
       ws.emit(alpacaOrder({ client_order_id: rest.created[0].clientOrderId, status: 'filled', filled_qty: '10', filled_avg_price: '100' }));
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(broker.tracker.positionTracker('AAPL')?.positionSize).toBe(10);
-      expect(broker.tracker.positionTracker('AAPL')?.unitCost).toBe(100);
+      expect(shows(broker.tracker.positionTracker('AAPL')?.positionSize)).toBe('10');
+      expect(shows(broker.tracker.positionTracker('AAPL')?.unitCost)).toBe('100');
     });
 
     it('ignores a terminal event whose reservation is already gone', async () => {
@@ -211,12 +241,12 @@ describe('AlpacaBroker', () => {
       // again would double the position, which is the worse of the two errors.
       const { broker, ws } = harness();
       await broker.init();
-      await broker.order({ type: 'market', symbol: 'AAPL', size: 10, unitPrice: 100, accountId: 'MOMENTUM01', onEvent: noEvents });
+      await broker.order({ type: 'market', symbol: 'AAPL', size: d(10), assetClass: 'equity', unitPrice: d(100), accountId: 'MOMENTUM01', onEvent: noEvents });
 
       ws.emit(alpacaOrder({ status: 'filled', filled_qty: '10', filled_avg_price: '100' }));
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(broker.tracker.positionTracker('AAPL')?.positionSize).toBe(0);
+      expect(shows(broker.tracker.positionTracker('AAPL')?.positionSize)).toBe('0');
     });
 
     it('gives the handler back the order it belongs to', async () => {
@@ -227,8 +257,9 @@ describe('AlpacaBroker', () => {
       const handle = await broker.order({
         type: 'market',
         symbol: 'AAPL',
-        size: 10,
-        unitPrice: 100,
+        size: d(10),
+        assetClass: 'equity',
+        unitPrice: d(100),
         accountId: 'MOMENTUM01',
         onEvent: async (_event, orderObj) => {
           seen.push(orderObj);
@@ -251,8 +282,9 @@ describe('AlpacaBroker', () => {
       await broker.order({
         type: 'market',
         symbol: 'AAPL',
-        size: 10,
-        unitPrice: 100,
+        size: d(10),
+        assetClass: 'equity',
+        unitPrice: d(100),
         accountId: 'MOMENTUM01',
         onEvent: async () => {
           throw new Error('handler exploded');
@@ -262,8 +294,9 @@ describe('AlpacaBroker', () => {
       await broker.order({
         type: 'market',
         symbol: 'MSFT',
-        size: 10,
-        unitPrice: 100,
+        size: d(10),
+        assetClass: 'equity',
+        unitPrice: d(100),
         accountId: 'MOMENTUM01',
         onEvent: async () => {
           delivered.push('order-b');
