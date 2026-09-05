@@ -2,8 +2,6 @@ import { BrokerOrder, BrokerOrderRecord, Decimal, InternalServiceError } from '@
 import { Pool } from 'pg';
 import {
   BrokerOrderDao,
-  ClaimBrokerOrderInput,
-  ClaimBrokerOrderOutput,
   DeleteBrokerOrderInput,
   DeleteBrokerOrderOutput,
   GetBrokerOrderInput,
@@ -224,23 +222,6 @@ export class PgBrokerOrderDao implements BrokerOrderDao {
   async listOrphanBrokerOrders(_input: ListOrphanBrokerOrdersInput): Promise<ListOrphanBrokerOrdersOutput> {
     const result = await this.pool.query<BrokerOrderRow>(`SELECT ${SELECT_COLUMNS} FROM broker_order WHERE attribution = 'default' ORDER BY created_at, broker_order_id`);
     return { brokerOrders: result.rows.map(toBrokerOrder) };
-  }
-
-  /**
-   * Guarded in the SQL, not around it. `WHERE attribution = 'default'` means a claim
-   * arriving after the order has already been attributed changes nothing and returns
-   * null, where a read-then-write would lose that race and move a fill onto the wrong
-   * strategy.
-   */
-  async claimBrokerOrder(input: ClaimBrokerOrderInput): Promise<ClaimBrokerOrderOutput> {
-    const result = await this.pool.query<BrokerOrderRow>(
-      `UPDATE broker_order SET account_id = $2, attribution = $3, updated_at = now()
-        WHERE broker_order_id = $1 AND attribution = 'default'
-        RETURNING ${SELECT_COLUMNS}`,
-      [input.brokerOrderId, input.accountId, input.attribution],
-    );
-    const row = result.rows[0];
-    return { brokerOrder: row === undefined ? null : toBrokerOrder(row) };
   }
 
   async deleteBrokerOrder(input: DeleteBrokerOrderInput): Promise<DeleteBrokerOrderOutput> {

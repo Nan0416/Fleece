@@ -151,32 +151,36 @@ describeIntegration('PgBrokerOrderDao', () => {
     });
   });
 
-  describe('claiming an order', () => {
-    it('moves one off the catch-all account', async () => {
-      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT002', attribution: 'default' }));
-      const { brokerOrder } = await dao.claimBrokerOrder({ brokerOrderId: 'order-1', accountId: 'ACCOUNT001', attribution: 'tracking' });
+  describe('the account an order is booked to', () => {
+    it('cannot be changed by any method this DAO offers', async () => {
+      // Deliberate, and the most important line in this file. Every ledger_transaction,
+      // position, profit row and order_fill_progress counter the order produces is keyed
+      // by the account it was booked to. Moving the order alone strands all of them, and
+      // the next cumulative report reads a progress counter that does not exist for the
+      // new account and books the whole fill a second time — silently, and invisibly to
+      // `reconcileOrderFillProgress`, which would find both accounts internally
+      // consistent. The legacy refused to move one for the same reason.
+      const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(dao));
+      expect(methods).not.toContain('claimBrokerOrder');
+      expect(methods.filter((name) => /claim|reattribute|setAccount|moveAccount/i.test(name))).toEqual([]);
+    });
 
+    it('survives a later report that disagrees about it', async () => {
+      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT001', attribution: 'default' }));
+      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT002', attribution: 'correlation' }));
+
+      const { brokerOrder } = await dao.getBrokerOrder({ brokerOrderId: 'order-1' });
       expect(brokerOrder?.accountId).toBe('ACCOUNT001');
-      expect(brokerOrder?.attribution).toBe('tracking');
+      expect(brokerOrder?.attribution).toBe('default');
     });
 
-    it('refuses to move one that something has already claimed', async () => {
-      // Guarded in the UPDATE rather than around it, so a claim arriving concurrently
-      // with the attribution cannot slip between a read and a write.
-      await dao.upsertBrokerOrder(order());
-      const { brokerOrder } = await dao.claimBrokerOrder({ brokerOrderId: 'order-1', accountId: 'ACCOUNT002', attribution: 'tracking' });
-
-      expect(brokerOrder).toBeNull();
-      expect((await dao.getBrokerOrder({ brokerOrderId: 'order-1' })).brokerOrder?.accountId).toBe('ACCOUNT001');
-    });
-
-    it('lets exactly one of two simultaneous claims win', async () => {
-      await dao.upsertBrokerOrder(order({ attribution: 'default' }));
-      const claims = await Promise.all([
-        dao.claimBrokerOrder({ brokerOrderId: 'order-1', accountId: 'ACCOUNT001', attribution: 'tracking' }),
-        dao.claimBrokerOrder({ brokerOrderId: 'order-1', accountId: 'ACCOUNT002', attribution: 'tracking' }),
-      ]);
-      expect(claims.filter((claim) => claim.brokerOrder !== null)).toHaveLength(1);
+    it('leaves a mis-booked order visible as an orphan rather than quietly correcting it', async () => {
+      // An order in the wrong account stays findable, which is the point: correcting it
+      // means moving the *position* with a transfer, which is double-entry and leaves an
+      // audit trail on both sides.
+      await dao.upsertBrokerOrder(order({ accountId: 'ACCOUNT002', attribution: 'default' }));
+      const { brokerOrders } = await dao.listOrphanBrokerOrders({});
+      expect(brokerOrders.map((entry) => entry.brokerOrderId)).toEqual(['order-1']);
     });
   });
 

@@ -356,24 +356,28 @@ describe('OrderTrackingFacade', () => {
       expect(brokerOrders.orders.get('order-1')?.status).toBe('filled');
     });
 
-    it('moves an order off the catch-all account once a real attribution turns up', async () => {
-      // Booked to the default because nobody claimed it in time, then a later event
-      // arrives carrying the correlation after all — a websocket reconnect delivering
-      // what the backfill had already guessed at.
-      facade.enqueue(job({ accountId: undefined }, { defaultAccountId: 'DEFAULTPAPR' }));
+    it('leaves an order on the catch-all account even once a real attribution turns up', async () => {
+      // The tempting fix is to move it. It would strand every transaction, position and
+      // progress counter already written under the old account, and the next cumulative
+      // report would find no progress for the new one and book the whole fill again.
+      facade.enqueue(job({ accountId: undefined, status: 'partially_filled', filledQty: 4, filledAvgPrice: 100 }, { defaultAccountId: 'DEFAULTPAPR' }));
       await facade.drain();
       expect(brokerOrders.orders.get('order-1')?.attribution).toBe('default');
 
-      facade.enqueue(job({ accountId: 'MOMENTUM01' }));
+      facade.enqueue(job({ accountId: 'MOMENTUM01', status: 'filled', filledQty: 10, filledAvgPrice: 106 }));
       await facade.drain();
 
-      expect(brokerOrders.orders.get('order-1')?.accountId).toBe('MOMENTUM01');
-      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('correlation');
+      expect(brokerOrders.orders.get('order-1')?.accountId).toBe('DEFAULTPAPR');
+      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('default');
+      // And every fill stayed with it, so nothing was counted twice.
+      expect(ledger.fills.every((fill) => fill.accountId === 'DEFAULTPAPR')).toBe(true);
+      expect(ledger.netSize('DEFAULTPAPR', 'AAPL').toString()).toBe('10');
+      expect(ledger.netSize('MOMENTUM01', 'AAPL').toString()).toBe('0');
     });
 
-    it('never moves an order that something has already claimed', async () => {
-      // An order's account does not change. A later report that disagrees is a bug
-      // upstream, not a correction to apply, and the guard is in the UPDATE.
+    it('never moves an order that is already attributed, whatever a later report says', async () => {
+      // An order's account is decided once. A later report that disagrees is a bug
+      // upstream, not a correction to apply.
       facade.enqueue(job({ accountId: 'MOMENTUM01' }));
       await facade.drain();
       facade.enqueue(job({ accountId: 'REVERSION1', status: 'filled', filledQty: 10, filledAvgPrice: 100 }));
@@ -381,6 +385,17 @@ describe('OrderTrackingFacade', () => {
 
       expect(brokerOrders.orders.get('order-1')?.accountId).toBe('MOMENTUM01');
       expect(ledger.fills[0].accountId).toBe('MOMENTUM01');
+    });
+
+    it('leaves an order where it is when a tracking request claims it for somebody else', async () => {
+      facade.enqueue(job({ accountId: 'MOMENTUM01' }));
+      await facade.drain();
+
+      facade.track({ brokerOrderIds: ['order-1'], accountId: 'REVERSION1' });
+      await facade.drain();
+
+      expect(brokerOrders.orders.get('order-1')?.accountId).toBe('MOMENTUM01');
+      expect(brokerOrders.orders.get('order-1')?.attribution).toBe('correlation');
     });
 
     it('attributes a leg to its parent rather than to a correlation of its own', async () => {

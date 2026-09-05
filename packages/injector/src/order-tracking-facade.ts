@@ -122,10 +122,10 @@ export class OrderTrackingFacade {
    *
    * **What it is not.** It is a fallback, not an override: it sits last in the
    * resolution order, behind the broker's own echo and behind whatever the broker order
-   * already records. It cannot move an order that is already attributed — `claimBrokerOrder`
-   * guards that in the UPDATE — and a disagreement is logged with the existing
-   * attribution left standing. Ordering does not matter either way; a request arriving
-   * before the events is remembered, and one arriving after releases what is held.
+   * already records. It cannot move an order that is already recorded, whatever it
+   * claims — a disagreement is logged and the existing attribution stands. Ordering does
+   * not matter either way; a request arriving before the events is remembered, and one
+   * arriving after releases what is held.
    *
    * **Nothing calls this yet.** Its transport is unported; see `md/OPEN-ITEMS.md` item 1.
    */
@@ -159,22 +159,14 @@ export class OrderTrackingFacade {
     }
 
     if (existing !== null && existing.accountId !== resolved.accountId) {
-      // An order's account does not change. The upsert below will not move it, so this
-      // says what was ignored rather than warning about something that then happens.
+      // Reported, not applied. An order's account is decided once — see `resolve` — and
+      // this says what was ignored rather than warning about something that then happens.
       logger.error(
         `Broker order ${event.id} is booked to account ${existing.accountId} by ${existing.attribution} but was just reported as belonging to ${resolved.accountId}. Leaving it where it is.`,
       );
     }
 
     await this.props.brokerOrderService.recordBrokerOrder(this.toRecordRequest(job, existing?.accountId ?? resolved.accountId, existing?.attribution ?? resolved.attribution));
-
-    // An order that fell through to the catch-all account and has since acquired a real
-    // attribution is moved onto it. Guarded in the UPDATE, so this cannot take an order
-    // away from an attribution that already stuck.
-    if (existing !== null && existing.attribution === 'default' && resolved.attribution !== 'default') {
-      await this.props.brokerOrderService.claimBrokerOrder({ brokerOrderId: event.id, accountId: resolved.accountId, attribution: resolved.attribution });
-    }
-
     await this.props.brokerOrderService.insertRecord({ record: job.originalEvent });
     await this.applyFill(event, existing?.accountId ?? resolved.accountId);
 
@@ -187,6 +179,17 @@ export class OrderTrackingFacade {
 
   /**
    * Which account this event belongs to, and how that was decided.
+   *
+   * **Decided once, and never revisited.** Whatever answers first is what the order
+   * keeps: `recordBrokerOrder` does not overwrite an account, and nothing anywhere can
+   * move one afterwards. That is not tidiness. Every `ledger_transaction`, `position`,
+   * `profit` row and `order_fill_progress` counter an order produces is keyed by the
+   * account it was booked to, so moving the order alone strands all of them — and the
+   * next cumulative report then reads a progress counter that does not exist for the new
+   * account and books the whole fill a second time. The legacy refused to move one for
+   * exactly this reason, raising a fatal-error metric instead. An order genuinely in the
+   * wrong account is corrected by transferring the *position*, which moves the cost
+   * basis and leaves both sides an audit trail.
    *
    * The order of the branches *is* the order of trust, and each one names a different
    * kind of claim:
@@ -321,13 +324,12 @@ export class OrderTrackingFacade {
         continue;
       }
 
-      // Only an order nobody claimed can be moved, and the UPDATE is what enforces it.
-      const { claimed } = await this.props.brokerOrderService.claimBrokerOrder({ brokerOrderId, accountId: request.accountId, attribution: 'tracking' });
-      if (!claimed) {
-        logger.error(
-          `Broker order ${brokerOrderId} is booked to account ${existing.accountId} by ${existing.attribution} but was just claimed by ${request.accountId}. Leaving it where it is.`,
-        );
-      }
+      // Reported, not applied — the legacy raised a fatal-error metric here and left the
+      // order alone, and so does this. See `resolve` for why moving it would be worse
+      // than leaving it wrong.
+      logger.error(
+        `Broker order ${brokerOrderId} is booked to account ${existing.accountId} by ${existing.attribution} but was just claimed by ${request.accountId}. Leaving it where it is. If it really belongs to ${request.accountId}, move the position with a transfer rather than the order.`,
+      );
     }
 
     // Now that an account is known, anything held for these orders can be applied.

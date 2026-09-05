@@ -1,4 +1,4 @@
-import { AssetClass, BrokerOrder, BrokerOrderAttribution, BrokerOrderRecord, Decimal } from '@fleece/shared';
+import { AssetClass, BrokerOrder, BrokerOrderRecord, Decimal } from '@fleece/shared';
 import { RecordBrokerOrderRequest } from '@fleece/core';
 
 /**
@@ -9,8 +9,8 @@ import { RecordBrokerOrderRequest } from '@fleece/core';
  * when the order is wrong. Against these, a test says what a caller would observe.
  *
  * Where a caller depends on a rule, the fake implements the rule — notably that an
- * upsert never overwrites what an order *is*, and that an attribution can only ever be
- * moved off the catch-all account.
+ * upsert never overwrites what an order *is*. There is no way to move an order between
+ * accounts here because there is none in the real service either.
  */
 
 export interface RecordedFill {
@@ -83,16 +83,6 @@ export class FakeBrokerOrderService {
     };
     this.orders.set(request.brokerOrderId, brokerOrder);
     return { brokerOrder, created: false };
-  }
-
-  /** Implements the real rule: an order is only ever moved off the catch-all account. */
-  async claimBrokerOrder(request: { brokerOrderId: string; accountId: string; attribution: BrokerOrderAttribution }): Promise<{ claimed: boolean }> {
-    const existing = this.orders.get(request.brokerOrderId);
-    if (existing === undefined || existing.attribution !== 'default') {
-      return { claimed: false };
-    }
-    this.orders.set(request.brokerOrderId, { ...existing, accountId: request.accountId, attribution: request.attribution });
-    return { claimed: true };
   }
 
   async insertRecord(request: { record: BrokerOrderRecord }): Promise<Record<string, never>> {

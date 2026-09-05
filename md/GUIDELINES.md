@@ -49,9 +49,18 @@ and most of what follows exists because of that.
    re-derives the counters from the log and reports disagreement — the guarantee that
    came free while the figure was summed on every read, and that has to be asked for now
    that it is stored.
-8. **Guards belong in the SQL, not around it.** Binding an order to a group is
-   `UPDATE ... WHERE group_id IS NULL`, so a late report cannot move an order that is
-   already placed. A read-then-write would lose that race.
+8. **Guards belong in the SQL, not around it.** Where a write must not happen twice,
+   the condition goes in the statement — `INSERT ... ON CONFLICT DO UPDATE` for
+   recording a broker order, `WHERE attribution = 'default'` shapes generally. A
+   read-then-write loses that race.
+8a. **An order's virtual account is written once.** Nothing offers a way to change it.
+   Every `ledger_transaction`, `position`, `profit` row and `order_fill_progress`
+   counter it produces is keyed by that account, so moving the order alone strands all
+   of them and makes the next cumulative fill report book the whole order again — which
+   `reconcileOrderFillProgress` cannot detect, because both accounts stay internally
+   consistent. The legacy raised a fatal-error metric on a mismatch rather than fixing
+   it up. A mis-booked order is corrected by transferring the **position**, which is
+   double-entry and leaves both sides an audit trail.
 9. **Take locks in a fixed order.** A transfer locks both positions sorted by account
    id, so two transfers running in opposite directions between the same pair cannot
    deadlock. Postgres would detect the cycle and abort a victim rather than hang, but

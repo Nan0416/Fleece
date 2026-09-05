@@ -89,17 +89,6 @@ export interface RecordBrokerOrderResponse {
   readonly created: boolean;
 }
 
-export interface ClaimBrokerOrderRequest {
-  readonly brokerOrderId: string;
-  readonly accountId: string;
-  readonly attribution: BrokerOrderAttribution;
-}
-
-export interface ClaimBrokerOrderResponse {
-  /** False when the order was already attributed to somebody, which is never overwritten. */
-  readonly claimed: boolean;
-}
-
 export interface InsertBrokerOrderRecordRequest {
   readonly record: BrokerOrderRecord;
 }
@@ -176,29 +165,6 @@ export class BrokerOrderService {
 
   async listOrphanBrokerOrders(_request: ListOrphanBrokerOrdersRequest = {}): Promise<ListOrphanBrokerOrdersResponse> {
     return await this.brokerOrderDao.listOrphanBrokerOrders({});
-  }
-
-  /**
-   * Moves an order off the catch-all account, and only off the catch-all account.
-   *
-   * An order's account never changes once something has actually claimed it: a leg can
-   * arrive before the tracking request that names its account, but a claim arriving
-   * after the order is attributed is a disagreement, not a correction. The guard lives
-   * in the UPDATE rather than here, so a concurrent late claim cannot slip between a
-   * read and a write.
-   */
-  async claimBrokerOrder(request: ClaimBrokerOrderRequest): Promise<ClaimBrokerOrderResponse> {
-    await this.requireAccount(request.accountId);
-    const existing = await this.requireBrokerOrder(request.brokerOrderId);
-    const { brokerOrder } = await this.brokerOrderDao.claimBrokerOrder(request);
-    if (brokerOrder === null) {
-      logger.warn(
-        `Broker order ${request.brokerOrderId} is already booked to account ${existing.accountId} by ${existing.attribution}, so the claim by ${request.accountId} was not applied. Leaving it where it is.`,
-      );
-      return { claimed: false };
-    }
-    logger.info(`Claimed broker order ${request.brokerOrderId} for account ${request.accountId} by ${request.attribution}.`);
-    return { claimed: true };
   }
 
   /**

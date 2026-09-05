@@ -227,6 +227,14 @@ CREATE INDEX IF NOT EXISTS dividend_account_symbol_idx ON dividend (account_id, 
 -- booked to a catch-all account rather than dropped, because the shares moved whether
 -- or not a strategy asked for them.
 --
+-- **`account_id` and `attribution` are written once and never updated.** Nothing in the
+-- data layer offers a way to change them, deliberately: every `ledger_transaction`,
+-- `position`, `profit` row and `order_fill_progress` counter an order produces is keyed
+-- by the account it was booked to, so moving the order alone strands all of them and
+-- makes the next cumulative report book the whole fill again under the new account.
+-- A mis-booked order is corrected by transferring the *position*, not by relabelling
+-- the order.
+--
 -- `status` has no CHECK. A status this system has not caught up with must be recorded,
 -- not rejected: a rejected row is a fill that never lands. The columns that do carry a
 -- CHECK are the ones our own converter produces, where a violation means our code has
