@@ -107,3 +107,58 @@ export function snapshot(ticker: string, updatedMs: number): unknown {
     min: { av: 100, o: 2.2, h: 2.7, l: 2.1, c: 2.5, v: 15, vw: 2.3 },
   };
 }
+
+/**
+ * Answers `/v3/trades` the way Polygon does, rather than replaying a queue: ascending,
+ * honouring `timestamp.gte`, `timestamp.lt` and `limit`.
+ *
+ * Timestamps are held as bigint and sent as `Number`, which is what makes this faithful
+ * — the value on the wire is the rounded double `JSON.parse` would produce, while the
+ * filtering uses the exact one the provider holds. The paging cursor's whole difficulty
+ * is that gap, and a fake that replays fixed pages cannot show it.
+ */
+export class FakeTradeFeed implements HttpClient {
+  readonly requests: RecordedRequest[] = [];
+
+  constructor(private readonly ticks: ReadonlyArray<{ sip: bigint; price: number }>) {}
+
+  async send(request: HttpRequest): Promise<HttpResponse> {
+    const query: Record<string, string> = {};
+    for (const [key, value] of Object.entries(request.query ?? {})) {
+      if (value !== undefined) {
+        query[key] = String(value);
+      }
+    }
+    this.requests.push({ url: request.url, query });
+
+    const gte = BigInt(query['timestamp.gte'] ?? '0');
+    const lt = BigInt(query['timestamp.lt'] ?? '0');
+    const limit = Number(query['limit'] ?? '0');
+    const matching = this.ticks.filter((tick) => tick.sip >= gte && tick.sip < lt).slice(0, limit);
+
+    return {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: {
+        status: 'OK',
+        results: matching.map((tick, index) => ({
+          participant_timestamp: Number(tick.sip),
+          sip_timestamp: Number(tick.sip),
+          sequence_number: Number(tick.sip % BigInt(1_000_000_000)) + index,
+          id: `t${tick.price}`,
+          exchange: 4,
+          size: 10,
+          conditions: [12],
+          price: tick.price,
+          tape: 3,
+        })),
+      },
+    };
+  }
+}
+
+/** `count` trades one nanosecond apart from `startMs`, which is the ordinary case. */
+export function ticks(startMs: number, count: number): Array<{ sip: bigint; price: number }> {
+  const base = BigInt(startMs) * BigInt(1_000_000);
+  return Array.from({ length: count }, (_, index) => ({ sip: base + BigInt(index), price: 100 + index }));
+}

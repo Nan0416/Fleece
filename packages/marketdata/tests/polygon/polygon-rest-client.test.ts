@@ -1,16 +1,16 @@
-import { easternClock, InternalServiceError, InvalidRequestError } from '@fleece/shared';
+import { easternClock, InternalServiceError, InvalidRequestError, type HttpClient } from '@fleece/shared';
 
 import { DataProviderError } from '../../src/equity-data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { PolygonRestClient } from '../../src/polygon';
 
-import { aggregates, FakeHttpClient, quotes, snapshot, splits, trades } from './fake-http-client';
+import { aggregates, FakeHttpClient, FakeTradeFeed, quotes, snapshot, splits, ticks, trades } from './fake-http-client';
 
 // 2024-12-19 is a full trading session; 2024-12-24 is a half day closing at 13:00.
 const SESSION = '2024-12-19';
 const at = (date: string, time: string): number => easternClock.timestamp(date, time);
 
-function client(http: FakeHttpClient): PolygonRestClient {
+function client(http: HttpClient): PolygonRestClient {
   return new PolygonRestClient({ apiKey: 'test-key', httpClient: http });
 }
 
@@ -288,14 +288,44 @@ describe('trades', () => {
     await expect(send).rejects.toThrow(/where a nanosecond timestamp was expected/);
   });
 
-  it('refuses a window where paging cannot advance, rather than returning half of it', async () => {
-    // Every page identical: the cursor is stuck, and what we hold is part of a session
-    // a caller could not tell from the whole of one.
-    const http = new FakeHttpClient().reply(trades({ ms: at(SESSION, '10:00:00'), price: 1 }, { ms: at(SESSION, '10:00:01'), price: 2 }));
-    const send = client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
+  it.each([1, 2, 3, 7, 50])('returns the whole window with a page size of %i', async (itemsPerRequest) => {
+    // A page smaller than the number of trades inside the 1024ns backoff used to end the
+    // walk with an error: the second page could only hand back what the first already
+    // had. `itemsPerRequest: 1` did it on any ordinary window.
+    const feed = new FakeTradeFeed(ticks(at(SESSION, '10:00:00'), 20));
+    const { trades: result } = await client(feed).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest });
+
+    expect(result).toHaveLength(20);
+    expect(result.map((trade) => trade.p)).toStrictEqual(ticks(0, 20).map((tick) => tick.price));
+  });
+
+  it('gets past a cluster of trades that share a nanosecond', async () => {
+    // The opening cross puts many prints on one timestamp, which is the density that
+    // makes a small page unable to step over them.
+    const base = BigInt(at(SESSION, '10:00:00')) * BigInt(1_000_000);
+    const feed = new FakeTradeFeed([...Array.from({ length: 8 }, (_, index) => ({ sip: base, price: 100 + index })), { sip: base + BigInt(5_000), price: 200 }]);
+    const { trades: result } = await client(feed).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
+
+    expect(result).toHaveLength(9);
+    expect(result[result.length - 1].p).toBe(200);
+  });
+
+  it('returns no trade twice, however small the page', async () => {
+    const feed = new FakeTradeFeed(ticks(at(SESSION, '10:00:00'), 30));
+    const { trades: result } = await client(feed).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 3 });
+
+    expect(new Set(result.map((trade) => `${trade.i}`)).size).toBe(30);
+  });
+
+  it('refuses a window it cannot step over even at the maximum page size', async () => {
+    // More than a full page on one timestamp: no page can reach past it, and what we
+    // hold is part of a session a caller could not tell from the whole of one.
+    const base = BigInt(at(SESSION, '10:00:00')) * BigInt(1_000_000);
+    const feed = new FakeTradeFeed(Array.from({ length: 50_001 }, (_, index) => ({ sip: base, price: index })));
+    const send = client(feed).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 50_000 });
 
     await expect(send).rejects.toThrow(DataProviderError);
-    await expect(send).rejects.toThrow(/paging cannot advance past/);
+    await expect(send).rejects.toThrow(/more than one page can step over/);
   });
 
   it('refuses a window that crosses an Eastern day boundary', async () => {

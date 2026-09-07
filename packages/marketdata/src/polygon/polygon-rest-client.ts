@@ -397,51 +397,57 @@ export class PolygonRestClient implements PolygonStockRestClient {
    */
   private async pageByTimestamp<T extends PagedByTimestamp, R extends { readonly results?: ReadonlyArray<T> | null }>(path: string, window: ResolvedWindow): Promise<T[]> {
     const results: T[] = [];
-    // Only the previous page can repeat: the cursor steps back by nanoseconds, so a
-    // duplicate is always in the page just read. Holding every key instead would cost a
-    // string per trade across a session of millions to reject a handful.
-    let previousKeys = new Set<string>();
+    // Keys of what we hold at or after `from` — the only entries a page can hand back
+    // twice. Bounded by how many trades share the backoff window, not by the session.
+    let overlap = new Set<string>();
     let from = BigInt(window.from) * BigInt(1_000_000);
     const to = BigInt(window.to) * BigInt(1_000_000);
+    let limit = window.itemsPerRequest;
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const body = await this.get<R>(path, {
-        limit: Math.round(window.itemsPerRequest),
+        limit,
         sort: 'timestamp',
         order: 'asc',
         'timestamp.gte': from.toString(),
         'timestamp.lt': to.toString(),
       });
       const entries = body.results ?? [];
-      const keys = new Set<string>();
       let added = 0;
       for (const entry of entries) {
-        const key = `${entry.sequence_number}/${entry.sip_timestamp}`;
-        keys.add(key);
-        if (!previousKeys.has(key)) {
+        if (!overlap.has(keyOf(entry))) {
           results.push(entry);
           added += 1;
         }
       }
-      previousKeys = keys;
 
-      if (entries.length < window.itemsPerRequest) {
+      if (entries.length < limit) {
         return results;
       }
+
       if (added === 0) {
-        // A whole page of what we already have means the cursor cannot get past this
-        // timestamp. Returning what we hold would be a partial session a caller could
-        // not tell from a complete one, which is the failure every other stop in this
-        // class refuses to make.
-        throw new DataProviderError(
-          SOURCE,
-          `returned ${entries.length} entries for ${path} that are all inside the previous page, so paging cannot advance past ${entries[entries.length - 1].sip_timestamp}. Ask for a shorter window.`,
-        );
+        // A full page of entries we already hold: the backoff window has at least this
+        // many trades in it, so no page this size can reach past them. Asking for a
+        // bigger one from the same point is the only move that neither stops early nor
+        // steps over trades — `itemsPerRequest: 1` hit this on any ordinary window.
+        if (limit >= MAX_PAGE) {
+          throw new DataProviderError(
+            SOURCE,
+            `has more than ${MAX_PAGE} entries for ${path} at ${entries[entries.length - 1].sip_timestamp}, which is more than one page can step over. Ask for a shorter window.`,
+          );
+        }
+        limit = Math.min(limit * 2, MAX_PAGE);
+        continue;
       }
+
       from = nanosecondTimestamp(entries[entries.length - 1].sip_timestamp) - CURSOR_BACKOFF_NS;
+      overlap = overlapAt(results, from);
     }
 
-    throw new DataProviderError(SOURCE, `refusing to page past ${MAX_PAGES} pages of ${path}.`);
+    // Naming the page size because it is usually the cause: a small one asks for a
+    // request per handful of trades, and a busy window runs out of pages long before it
+    // runs out of trades.
+    throw new DataProviderError(SOURCE, `has more than ${MAX_PAGES} pages of ${path} at ${limit} entries a page. Ask for a larger itemsPerRequest, or a shorter window.`);
   }
 
   /**
@@ -598,6 +604,26 @@ function pageSize(requested: number | undefined, what: string): number {
   // Not an error to ask for more: asking for 100,000 and believing the 50,000 that came
   // back was the whole day is the failure, and clamping is what makes the page short.
   return Math.min(Math.round(requested), MAX_PAGE);
+}
+
+function keyOf(entry: PagedByTimestamp): string {
+  return `${entry.sequence_number}/${entry.sip_timestamp}`;
+}
+
+/**
+ * Walks back from the end rather than filtering the whole array: entries arrive ascending
+ * and a page only ever repeats what sits inside the backoff window, so this reads a
+ * handful of entries however long the session is.
+ */
+function overlapAt(results: ReadonlyArray<PagedByTimestamp>, from: bigint): Set<string> {
+  const keys = new Set<string>();
+  for (let index = results.length - 1; index >= 0; index -= 1) {
+    if (nanosecondTimestamp(results[index].sip_timestamp) < from) {
+      break;
+    }
+    keys.add(keyOf(results[index]));
+  }
+  return keys;
 }
 
 function pathOf(url: string): string {
