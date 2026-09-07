@@ -261,6 +261,9 @@ export class PolygonRestClient implements PolygonStockRestClient {
   }
 
   async tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse> {
+    if (request.date !== undefined) {
+      requireIsoDate(request.date, 'read the ticker details as of a date');
+    }
     const body = await this.get<PolygonTickerDetailsV3Response>(`/v3/reference/tickers/${encodeURIComponent(request.symbol)}`, { date: request.date });
     // Asked for a date before the ticker existed, Polygon omits `results` rather than
     // sending null, so `=== null` would hand the normaliser an undefined to walk.
@@ -268,12 +271,20 @@ export class PolygonRestClient implements PolygonStockRestClient {
   }
 
   async stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse> {
+    if (request.executionDate !== undefined) {
+      requireIsoDate(request.executionDate, 'filter splits to an execution date');
+    }
     const query: Query = { ticker: request.symbol, limit: 500, sort: 'execution_date', order: 'asc', execution_date: request.executionDate };
     const raw = await this.pageByCursor<PolygonStockSplitV3Response>('/v3/reference/splits', query);
     return { splits: raw.flatMap((body) => (body.results ?? []).map((split) => normalizeStockSplit(split))) };
   }
 
   async dividends(request: DividendsRequest): Promise<DividendsResponse> {
+    // The reference endpoints consult no market-hours table, so nothing else here would
+    // look at these: an impossible date would go to Polygon, come back a 400, and reach
+    // the caller as a `DataProviderError` blaming the provider for a typo.
+    requireIsoDate(request.fromDate, 'read the start of the dividend range');
+    requireIsoDate(request.toDate, 'read the end of the dividend range');
     const query: Query = {
       ticker: request.symbol,
       [`${request.dateType}.gte`]: request.fromDate,

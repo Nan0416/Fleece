@@ -499,6 +499,12 @@ describe('tickerDetails', () => {
     expect((await client(new FakeHttpClient().reply({ status: 'OK' })).tickerDetails({ symbol: 'AAPL', date: '1990-01-01' })).details).toBeUndefined();
   });
 
+  it('refuses an impossible as-of date, which Polygon answers with a 400', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).tickerDetails({ symbol: 'AAPL', date: '2024-02-30' })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
+  });
+
   it('asks for the details as of a date when given one', async () => {
     const http = new FakeHttpClient().reply({ status: 'OK', results: null });
     await client(http).tickerDetails({ symbol: 'AAPL', date: SESSION });
@@ -526,6 +532,21 @@ describe('stockSplits and dividends', () => {
   it('reports no splits rather than throwing when Polygon omits results', async () => {
     const http = new FakeHttpClient().reply({ status: 'OK' });
     expect((await client(http).stockSplits({ symbol: 'BRK.A' })).splits).toStrictEqual([]);
+  });
+
+  it('refuses an impossible date rather than reporting a 400 from Polygon as a provider failure', async () => {
+    // These two endpoints consult no market-hours table, so nothing else here looks at
+    // their dates. Unchecked, 2024-02-30 goes to Polygon and the 400 comes back to the
+    // caller as a `DataProviderError` — the provider blamed for a typo.
+    const http = new FakeHttpClient();
+    const polygon = client(http);
+
+    await expect(polygon.dividends({ symbol: 'AAPL', dateType: 'ex_dividend_date', fromDate: '2024-02-30', toDate: '2024-12-31' })).rejects.toThrow(InvalidRequestError);
+    await expect(polygon.dividends({ symbol: 'AAPL', dateType: 'ex_dividend_date', fromDate: '2024-01-01', toDate: '2023-02-29' })).rejects.toThrow(
+      /real ISO YYYY-MM-DD calendar date/,
+    );
+    await expect(polygon.stockSplits({ symbol: 'AAPL', executionDate: '2026-13-01' })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
   });
 
   it('puts the date range on the field the caller chose', async () => {
