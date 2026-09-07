@@ -4,7 +4,7 @@ import { DataProviderError } from '../../src/equity-data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { PolygonRestClient } from '../../src/polygon';
 
-import { aggregates, FakeHttpClient, quotes, splits, trades } from './fake-http-client';
+import { aggregates, FakeHttpClient, quotes, snapshot, splits, trades } from './fake-http-client';
 
 // 2024-12-19 is a full trading session; 2024-12-24 is a half day closing at 13:00.
 const SESSION = '2024-12-19';
@@ -50,6 +50,16 @@ describe('every request', () => {
     await expect(send).rejects.toThrow(/returned 429/);
   });
 
+  it('reports a failure with an empty body as a provider error, not a TypeError', async () => {
+    // A 502 from a proxy in front of Polygon has no body, and an empty body parses to
+    // undefined — which the error path itself used to choke on.
+    const http = new FakeHttpClient().replyWithStatus(502, undefined);
+    const send = client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' });
+
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/returned 502/);
+  });
+
   it('refuses a body that is not a JSON object', async () => {
     const http = new FakeHttpClient().reply('<html>maintenance</html>');
     await expect(client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' })).rejects.toThrow(/not a JSON object/);
@@ -59,7 +69,7 @@ describe('every request', () => {
 describe('bars', () => {
   it('asks for one daily range and normalises the result', async () => {
     const http = new FakeHttpClient().reply(aggregates({ t: at(SESSION, '09:30:00'), c: 250.5 }));
-    const bars = await client(http).bars({ symbol: 'AAPL', from: '2024-12-16', to: SESSION, multiplier: 1, timespan: 'day' });
+    const { bars } = await client(http).bars({ symbol: 'AAPL', from: '2024-12-16', to: SESSION, multiplier: 1, timespan: 'day' });
 
     expect(http.requests).toHaveLength(1);
     expect(http.lastRequest.url).toBe(`/v2/aggs/ticker/AAPL/range/1/day/${at('2024-12-16', '00:00:00')}/${at(SESSION, '23:59:59')}`);
@@ -81,9 +91,10 @@ describe('bars', () => {
     const http = new FakeHttpClient().reply(aggregates());
     await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' });
 
-    const [, from, to] = http.lastRequest.url.split('/day/')[1].split('/').concat(['']);
-    expect(Number(http.lastRequest.url.split('/day/')[1].split('/')[0])).toBe(Date.parse('2024-12-19T05:00:00Z'));
-    expect(from ?? to).toBeDefined();
+    const [from, to] = http.lastRequest.url.split('/day/')[1].split('/').map(Number);
+    // 2024-12-19 in New York is 05:00Z to 04:59:59Z the next day, in December.
+    expect(from).toBe(Date.parse('2024-12-19T05:00:00Z'));
+    expect(to).toBe(Date.parse('2024-12-20T04:59:59Z'));
   });
 
   it('splits an intraday range into windows rather than asking for years at once', async () => {
@@ -105,20 +116,20 @@ describe('bars', () => {
     const afterHours = at(SESSION, '17:00:00');
     const http = new FakeHttpClient().reply(aggregates({ t: preMarket }, { t: open }, { t: afterHours }));
 
-    const bars = await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'minute' });
+    const { bars } = await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'minute' });
     expect(bars.map((bar) => bar.t)).toStrictEqual([open]);
   });
 
   it('keeps the extended session when asked explicitly', async () => {
     const http = new FakeHttpClient().reply(aggregates({ t: at(SESSION, '08:00:00') }, { t: at(SESSION, '10:30:00') }));
-    const bars = await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'minute', marketHoursOnly: false });
+    const { bars } = await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'minute', marketHoursOnly: false });
 
     expect(bars).toHaveLength(2);
   });
 
   it('never filters a daily bar, which spans the whole session anyway', async () => {
     const http = new FakeHttpClient().reply(aggregates({ t: at(SESSION, '00:00:00') }));
-    const bars = await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' });
+    const { bars } = await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' });
 
     expect(bars).toHaveLength(1);
   });
@@ -139,9 +150,24 @@ describe('bars', () => {
     await expect(send).rejects.toThrow(/market-hours table stops at 2024-12-31/);
   });
 
+  it('refuses a range that ends before it starts', async () => {
+    const polygon = client(new FakeHttpClient().reply(aggregates()));
+
+    await expect(polygon.bars({ symbol: 'AAPL', from: '2024-12-20', to: '2024-12-19', multiplier: 1, timespan: 'day' })).rejects.toThrow(/must start before it ends/);
+    await expect(polygon.bars({ symbol: 'AAPL', from: '2023-01-03', to: '2022-01-03', multiplier: 1, timespan: 'minute' })).rejects.toThrow(/must start before it ends/);
+  });
+
+  it('guards the start of the market-hours table as well as its end', async () => {
+    // Before 2001 every bar reads as closed too, which would empty the result silently.
+    const http = new FakeHttpClient().reply(aggregates({ t: Date.parse('1999-01-04T15:00:00Z') }));
+    const send = client(http).bars({ symbol: 'AAPL', from: '1999-01-04', to: '1999-01-05', multiplier: 1, timespan: 'minute' });
+
+    await expect(send).rejects.toThrow(DataProviderError);
+  });
+
   it('returns nothing for a symbol Polygon has no aggregates for', async () => {
     const http = new FakeHttpClient().reply({ status: 'OK', resultsCount: 0 });
-    expect(await client(http).bars({ symbol: 'NOSUCH', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' })).toStrictEqual([]);
+    expect((await client(http).bars({ symbol: 'NOSUCH', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' })).bars).toStrictEqual([]);
   });
 });
 
@@ -161,7 +187,7 @@ describe('minuteBars and dailyBars', () => {
 describe('trades', () => {
   it('covers a trading day from pre-market open to after-hours close', async () => {
     const http = new FakeHttpClient().reply(trades({ ms: at(SESSION, '09:30:01'), price: 250 }));
-    const result = await client(http).trades({ symbol: 'AAPL', date: SESSION });
+    const { trades: result } = await client(http).trades({ symbol: 'AAPL', date: SESSION });
 
     expect(http.lastRequest.url).toBe('/v3/trades/AAPL');
     expect(http.lastRequest.query['timestamp.gte']).toBe(String(BigInt(at(SESSION, '04:00:00')) * BigInt(1_000_000)));
@@ -171,7 +197,7 @@ describe('trades', () => {
 
   it('has nothing for a day the market was shut', async () => {
     const http = new FakeHttpClient();
-    expect(await client(http).trades({ symbol: 'AAPL', date: '2024-12-25' })).toStrictEqual([]);
+    expect((await client(http).trades({ symbol: 'AAPL', date: '2024-12-25' })).trades).toStrictEqual([]);
     expect(http.requests).toHaveLength(0);
   });
 
@@ -180,7 +206,7 @@ describe('trades', () => {
     const second = trades({ ms: at(SESSION, '10:00:02'), price: 3 });
     const http = new FakeHttpClient().reply(first, second);
 
-    const result = await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
+    const { trades: result } = await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
 
     expect(result.map((trade) => trade.p)).toStrictEqual([1, 2, 3]);
     expect(http.requests).toHaveLength(2);
@@ -192,7 +218,7 @@ describe('trades', () => {
     const boundary = { ms: at(SESSION, '10:00:01'), price: 2 };
     const http = new FakeHttpClient().reply(trades({ ms: at(SESSION, '10:00:00'), price: 1 }, boundary), trades(boundary, { ms: at(SESSION, '10:00:02'), price: 3 }));
 
-    const result = await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
+    const { trades: result } = await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
     expect(result.map((trade) => trade.p)).toStrictEqual([1, 2, 3]);
   });
 
@@ -200,7 +226,7 @@ describe('trades', () => {
     const repeated = trades({ ms: at(SESSION, '10:00:00'), price: 1 }, { ms: at(SESSION, '10:00:01'), price: 2 });
     const http = new FakeHttpClient().reply(repeated);
 
-    const result = await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
+    const { trades: result } = await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
     expect(result).toHaveLength(2);
     expect(http.requests).toHaveLength(2);
   });
@@ -208,6 +234,34 @@ describe('trades', () => {
   it('refuses a window that crosses an Eastern day boundary', async () => {
     const send = client(new FakeHttpClient()).trades({ symbol: 'AAPL', from: at(SESSION, '19:00:00'), to: at('2024-12-20', '10:00:00') });
     await expect(send).rejects.toThrow(/must stay inside one Eastern day/);
+  });
+
+  it('refuses a day past the market-hours table rather than reporting no trades', async () => {
+    // The hole this closes: a backfill over recent days would record nothing and succeed.
+    const past = easternClock.shiftDate(marketHoursCoverage.to, 30);
+    const http = new FakeHttpClient();
+    const send = client(http).trades({ symbol: 'AAPL', date: past });
+
+    await expect(send).rejects.toThrow(/market-hours table stops at 2024-12-31/);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('refuses a timestamp window past the table too', async () => {
+    const past = easternClock.timestamp(easternClock.shiftDate(marketHoursCoverage.to, 30), '10:00:00');
+    await expect(client(new FakeHttpClient()).quotes({ symbol: 'AAPL', from: past, to: past + 1000 })).rejects.toThrow(/market-hours table stops/);
+  });
+
+  it('clamps a page size above what Polygon will serve, so a full page still ends the walk', async () => {
+    const http = new FakeHttpClient().reply(trades({ ms: at(SESSION, '10:00:00'), price: 1 }));
+    await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 100_000 });
+
+    expect(http.lastRequest.query['limit']).toBe('50000');
+  });
+
+  it('refuses a page size of zero or less', async () => {
+    const polygon = client(new FakeHttpClient());
+    await expect(polygon.trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 0 })).rejects.toThrow(/at least one item per request/);
+    await expect(polygon.trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: -5 })).rejects.toThrow(/at least one item per request/);
   });
 
   it('refuses a window that ends before it starts, and one with no start at all', async () => {
@@ -220,8 +274,8 @@ describe('trades', () => {
     const beforeSplit = at('2020-08-28', '10:00:00');
     const http = new FakeHttpClient().reply(trades({ ms: beforeSplit, price: 499.23 }), splits({ date: '2020-08-31', from: 1, to: 4 }));
 
-    const [trade] = await client(http).trades({ symbol: 'AAPL', from: beforeSplit, to: beforeSplit + 60_000, adjustForSplit: true });
-    expect(trade.p).toBeCloseTo(124.8075, 4);
+    const { trades: tradeResults } = await client(http).trades({ symbol: 'AAPL', from: beforeSplit, to: beforeSplit + 60_000, adjustForSplit: true });
+    expect(tradeResults[0].p).toBeCloseTo(124.8075, 4);
   });
 
   it('does not ask for splits when no adjustment was requested', async () => {
@@ -235,18 +289,18 @@ describe('trades', () => {
 describe('quotes', () => {
   it('normalises both sides of the book', async () => {
     const http = new FakeHttpClient().reply(quotes({ ms: at(SESSION, '10:00:00'), bid: 249.9, ask: 250.1 }));
-    const [quote] = await client(http).quotes({ symbol: 'AAPL', date: SESSION });
+    const { quotes: quoteResults } = await client(http).quotes({ symbol: 'AAPL', date: SESSION });
 
-    expect(quote).toStrictEqual({ S: 'AAPL', t: at(SESSION, '10:00:00'), bx: 12, bp: 249.9, bs: 3, ax: 11, ap: 250.1, as: 2, z: 3 });
+    expect(quoteResults[0]).toStrictEqual({ S: 'AAPL', t: at(SESSION, '10:00:00'), bx: 12, bp: 249.9, bs: 3, ax: 11, ap: 250.1, as: 2, z: 3 });
   });
 
   it('adjusts both bid and ask across a split', async () => {
     const beforeSplit = at('2020-08-28', '10:00:00');
     const http = new FakeHttpClient().reply(quotes({ ms: beforeSplit, bid: 400, ask: 404 }), splits({ date: '2020-08-31', from: 1, to: 4 }));
 
-    const [quote] = await client(http).quotes({ symbol: 'AAPL', from: beforeSplit, to: beforeSplit + 60_000, adjustForSplit: true });
-    expect(quote.bp).toBeCloseTo(100, 6);
-    expect(quote.ap).toBeCloseTo(101, 6);
+    const { quotes: quoteResults } = await client(http).quotes({ symbol: 'AAPL', from: beforeSplit, to: beforeSplit + 60_000, adjustForSplit: true });
+    expect(quoteResults[0].bp).toBeCloseTo(100, 6);
+    expect(quoteResults[0].ap).toBeCloseTo(101, 6);
   });
 });
 
@@ -259,8 +313,60 @@ describe('snapshot', () => {
 
   it('asks for nothing when given no symbols', async () => {
     const http = new FakeHttpClient();
-    expect(await client(http).snapshots({ symbols: [] })).toStrictEqual([]);
+    expect((await client(http).snapshots({ symbols: [] })).snapshots).toStrictEqual([]);
     expect(http.requests).toHaveLength(0);
+  });
+
+  describe('during a session the table covers', () => {
+    const during = at(SESSION, '10:00:00');
+
+    beforeEach(() => {
+      jest.spyOn(Date, 'now').mockReturnValue(during);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('stamps the day bar at Eastern midnight, the same base as the previous day bar', async () => {
+      const http = new FakeHttpClient().reply({ status: 'OK', ticker: snapshot('AAPL', during) });
+      const { snapshot: result } = await client(http).snapshot({ symbol: 'AAPL' });
+
+      // A UTC day floor would put this on 2024-12-18, the previous trading day.
+      expect(easternClock.date(result!.db.t)).toBe(SESSION);
+      expect(easternClock.time(result!.db.t)).toBe('00:00:00');
+      expect(easternClock.date(result!.pdb.t)).toBe('2024-12-18');
+      expect(easternClock.time(result!.pdb.t)).toBe('00:00:00');
+    });
+
+    it('stamps the minute bar at the start of its minute', async () => {
+      const http = new FakeHttpClient().reply({ status: 'OK', ticker: snapshot('AAPL', during + 42_000) });
+      const { snapshot: result } = await client(http).snapshot({ symbol: 'AAPL' });
+
+      expect(easternClock.time(result!.mb.t)).toBe('10:00:00');
+    });
+
+    it('has no snapshot for a symbol Polygon returned no ticker for', async () => {
+      const http = new FakeHttpClient().reply({ status: 'OK' });
+      expect((await client(http).snapshot({ symbol: 'NOSUCH' })).snapshot).toBeUndefined();
+    });
+
+    it('has no snapshot for a name that has not traded, whose sections are missing', async () => {
+      const http = new FakeHttpClient().reply({ status: 'OK', ticker: { ticker: 'THIN', updated: during * 1_000_000 } });
+      expect((await client(http).snapshot({ symbol: 'THIN' })).snapshot).toBeUndefined();
+    });
+
+    it('skips the tickers it cannot read rather than throwing on the batch', async () => {
+      const http = new FakeHttpClient().reply({ status: 'OK', count: 2, tickers: [snapshot('AAPL', during), { ticker: 'THIN', updated: during * 1_000_000 }] });
+      const { snapshots } = await client(http).snapshots({ symbols: ['AAPL', 'THIN'] });
+
+      expect(snapshots.map((entry) => entry.S)).toStrictEqual(['AAPL']);
+    });
+
+    it('reports no snapshots when Polygon omits the list entirely', async () => {
+      const http = new FakeHttpClient().reply({ status: 'OK', count: 0 });
+      expect((await client(http).snapshots({ symbols: ['AAPL'] })).snapshots).toStrictEqual([]);
+    });
   });
 });
 
@@ -270,7 +376,7 @@ describe('tickers', () => {
     // page is 1000 — so anything smaller here would test the stop, not the paging.
     const http = new FakeHttpClient().reply(page(1000, 'A'), page(500, 'B'));
 
-    const result = await client(http).tickers({ limit: 1500 });
+    const { tickers: result } = await client(http).tickers({ limit: 1500 });
 
     expect(result).toHaveLength(1500);
     expect(http.requests).toHaveLength(2);
@@ -281,7 +387,7 @@ describe('tickers', () => {
 
   it('stops as soon as a page comes back short', async () => {
     const http = new FakeHttpClient().reply(page(3, 'A'));
-    const result = await client(http).tickers({});
+    const { tickers: result } = await client(http).tickers({});
 
     expect(result.map((ticker) => ticker.ticker)).toStrictEqual(['A0', 'A1', 'A2']);
     expect(http.requests).toHaveLength(1);
@@ -299,9 +405,10 @@ describe('tickers', () => {
 });
 
 describe('tickerDetails', () => {
-  it('has nothing for a symbol Polygon does not know', async () => {
-    const http = new FakeHttpClient().reply({ status: 'OK', results: null });
-    expect(await client(http).tickerDetails({ symbol: 'NOSUCH' })).toBeUndefined();
+  it('has nothing for a symbol Polygon does not know, whether it says null or says nothing', async () => {
+    // Asked for a date before the ticker existed, Polygon omits `results` entirely.
+    expect((await client(new FakeHttpClient().reply({ status: 'OK', results: null })).tickerDetails({ symbol: 'NOSUCH' })).details).toBeUndefined();
+    expect((await client(new FakeHttpClient().reply({ status: 'OK' })).tickerDetails({ symbol: 'AAPL', date: '1990-01-01' })).details).toBeUndefined();
   });
 
   it('asks for the details as of a date when given one', async () => {
@@ -318,7 +425,7 @@ describe('stockSplits and dividends', () => {
     const withCursor = { ...(splits({ date: '2020-08-31', from: 1, to: 4 }) as object), next_url: 'https://api.polygon.io/v3/reference/splits?order=asc&cursor=abc123&limit=500' };
     const http = new FakeHttpClient().reply(withCursor, splits({ date: '2014-06-09', from: 1, to: 7 }));
 
-    const result = await client(http).stockSplits({ symbol: 'AAPL' });
+    const { splits: result } = await client(http).stockSplits({ symbol: 'AAPL' });
 
     expect(result.map((split) => split.executionDate)).toStrictEqual(['2020-08-31', '2014-06-09']);
     expect(http.requests[1].query['cursor']).toBe('abc123');
@@ -331,7 +438,7 @@ describe('stockSplits and dividends', () => {
 
   it('reports no splits rather than throwing when Polygon omits results', async () => {
     const http = new FakeHttpClient().reply({ status: 'OK' });
-    expect(await client(http).stockSplits({ symbol: 'BRK.A' })).toStrictEqual([]);
+    expect((await client(http).stockSplits({ symbol: 'BRK.A' })).splits).toStrictEqual([]);
   });
 
   it('puts the date range on the field the caller chose', async () => {
@@ -360,8 +467,8 @@ describe('stockSplits and dividends', () => {
       ],
     });
 
-    const [dividend] = await client(http).dividends({ symbol: 'AAPL', dateType: 'ex_dividend_date', fromDate: '2024-01-01', toDate: '2024-12-31' });
-    expect(dividend).toStrictEqual({
+    const { dividends: dividendResults } = await client(http).dividends({ symbol: 'AAPL', dateType: 'ex_dividend_date', fromDate: '2024-01-01', toDate: '2024-12-31' });
+    expect(dividendResults[0]).toStrictEqual({
       ticker: 'AAPL',
       cashAmount: 0.25,
       currency: 'USD',
@@ -380,16 +487,16 @@ describe('stockSplits and dividends', () => {
       results: [{ cash_amount: 1, currency: 'USD', dividend_type: 'XX', ticker: 'AAPL', frequency: 3, declaration_date: '', ex_dividend_date: '', record_date: '', pay_date: '' }],
     });
 
-    const [dividend] = await client(http).dividends({ symbol: 'AAPL', dateType: 'pay_date', fromDate: '2024-01-01', toDate: '2024-12-31' });
-    expect(dividend.dividendType).toBe('SC');
-    expect(dividend.frequency).toBe('one-time');
+    const { dividends: dividendResults } = await client(http).dividends({ symbol: 'AAPL', dateType: 'pay_date', fromDate: '2024-01-01', toDate: '2024-12-31' });
+    expect(dividendResults[0].dividendType).toBe('SC');
+    expect(dividendResults[0].frequency).toBe('one-time');
   });
 });
 
 describe('historicalBars', () => {
   it('walks back over trading days, skipping the weekend', async () => {
     const http = new FakeHttpClient().reply(aggregates({ t: at(SESSION, '10:00:00') }));
-    const days = await client(http).historicalBars({ symbol: 'AAPL', endDate: '2024-12-23', days: 3, marketHoursOnly: false });
+    const { days } = await client(http).historicalBars({ symbol: 'AAPL', endDate: '2024-12-23', days: 3, marketHoursOnly: false });
 
     expect([...days.keys()]).toStrictEqual(['2024-12-23', '2024-12-20', '2024-12-19']);
   });

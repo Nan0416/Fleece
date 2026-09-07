@@ -102,20 +102,68 @@ export interface HistoricalBarsRequest {
   readonly marketHoursOnly?: boolean;
 }
 
+/**
+ * Every method answers with an object rather than the collection itself. A provider's
+ * answer grows fields — a cursor, a count, a note that a window was truncated — and an
+ * array has nowhere to put them without changing the signature of every caller.
+ */
+export interface BarsResponse {
+  readonly bars: ReadonlyArray<Bar>;
+}
+
+export interface TradesResponse {
+  readonly trades: ReadonlyArray<Trade>;
+}
+
+export interface QuotesResponse {
+  readonly quotes: ReadonlyArray<Quote>;
+}
+
+/** `snapshot` is absent when the market is shut: Polygon serves these only intraday. */
+export interface SnapshotResponse {
+  readonly snapshot?: LatestSnapshot;
+}
+
+export interface SnapshotsResponse {
+  readonly snapshots: ReadonlyArray<LatestSnapshot>;
+}
+
+export interface TickersResponse {
+  readonly tickers: ReadonlyArray<Ticker>;
+}
+
+/** `details` is absent for a symbol the provider does not know as of that date. */
+export interface TickerDetailsResponse {
+  readonly details?: TickerDetails;
+}
+
+export interface StockSplitsResponse {
+  readonly splits: ReadonlyArray<StockSplit>;
+}
+
+export interface DividendsResponse {
+  readonly dividends: ReadonlyArray<Dividend>;
+}
+
+/** Keyed by Eastern date, most recent first. Non-trading days are absent, not empty. */
+export interface HistoricalBarsResponse {
+  readonly days: ReadonlyMap<string, ReadonlyArray<Bar>>;
+}
+
 export interface StockRestClient {
-  bars(request: BarsRequest): Promise<Bar[]>;
-  minuteBars(request: MinuteBarsRequest): Promise<Bar[]>;
-  dailyBars(request: DailyBarsRequest): Promise<Bar[]>;
-  trades(request: TradesRequest): Promise<Trade[]>;
-  quotes(request: QuotesRequest): Promise<Quote[]>;
-  snapshot(request: SnapshotRequest): Promise<LatestSnapshot | undefined>;
-  snapshots(request: SnapshotsRequest): Promise<LatestSnapshot[]>;
+  bars(request: BarsRequest): Promise<BarsResponse>;
+  minuteBars(request: MinuteBarsRequest): Promise<BarsResponse>;
+  dailyBars(request: DailyBarsRequest): Promise<BarsResponse>;
+  trades(request: TradesRequest): Promise<TradesResponse>;
+  quotes(request: QuotesRequest): Promise<QuotesResponse>;
+  snapshot(request: SnapshotRequest): Promise<SnapshotResponse>;
+  snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse>;
 }
 
 export interface PolygonStockRestClient extends StockRestClient {
-  tickers(request: TickersRequest): Promise<Ticker[]>;
-  tickerDetails(request: TickerDetailsRequest): Promise<TickerDetails | undefined>;
-  stockSplits(request: StockSplitsRequest): Promise<StockSplit[]>;
-  dividends(request: DividendsRequest): Promise<Dividend[]>;
-  historicalBars(request: HistoricalBarsRequest): Promise<Map<string, Bar[]>>;
+  tickers(request: TickersRequest): Promise<TickersResponse>;
+  tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse>;
+  stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
+  dividends(request: DividendsRequest): Promise<DividendsResponse>;
+  historicalBars(request: HistoricalBarsRequest): Promise<HistoricalBarsResponse>;
 }

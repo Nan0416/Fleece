@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { easternClock, LoggerFactory } from '@fleece/shared';
 
 import type { Bar, Dividend, DividendFrequency, DividendType, LatestSnapshot, Quote, StockSplit, Ticker, TickerDetails, Trade } from '../equity-data-models';
 
@@ -17,7 +17,6 @@ import type {
 const logger = LoggerFactory.getLogger('PolygonNormalizers');
 
 const ONE_MINUTE_MS = 60_000;
-const ONE_DAY_MS = 86_400_000;
 
 const DIVIDEND_FREQUENCY: Record<PolygonDividendFrequency, DividendFrequency> = {
   0: 'one-time',
@@ -153,6 +152,11 @@ export function normalizeStockSplit(split: PolygonStockSplit): StockSplit {
 
 export function normalizeSnapshot(snapshot: PolygonLatestSnapshot, previousTradingDayStartTimestamp: number): LatestSnapshot {
   const updatedAt = nanosecondsToMilliseconds(snapshot.updated);
+  // The day bar is stamped at Eastern midnight, not at a UTC day floor: `pdb` below is a
+  // real Eastern session start, and a UTC floor would put the two bars on different time
+  // bases — filing a 10:00 ET snapshot under the previous trading day, and an evening one
+  // under the next.
+  const easternMidnight = easternClock.timestamp(easternClock.date(updatedAt), '00:00:00');
   return {
     S: snapshot.ticker,
     f: 'p',
@@ -183,7 +187,7 @@ export function normalizeSnapshot(snapshot: PolygonLatestSnapshot, previousTradi
       v: snapshot.min.v,
       t: Math.floor(updatedAt / ONE_MINUTE_MS) * ONE_MINUTE_MS,
     },
-    db: { S: snapshot.ticker, o: snapshot.day.o, h: snapshot.day.h, l: snapshot.day.l, c: snapshot.day.c, v: snapshot.day.v, t: Math.floor(updatedAt / ONE_DAY_MS) * ONE_DAY_MS },
+    db: { S: snapshot.ticker, o: snapshot.day.o, h: snapshot.day.h, l: snapshot.day.l, c: snapshot.day.c, v: snapshot.day.v, t: easternMidnight },
     pdb: {
       S: snapshot.ticker,
       o: snapshot.prevDay.o,

@@ -4,27 +4,31 @@ import {
   DataProviderError,
   type Bar,
   type BarsRequest,
+  type BarsResponse,
   type DailyBarsRequest,
-  type Dividend,
+  type DateOrTimestamp,
   type DividendsRequest,
+  type DividendsResponse,
   type HistoricalBarsRequest,
-  type LatestSnapshot,
+  type HistoricalBarsResponse,
   type MinuteBarsRequest,
   type PolygonStockRestClient,
-  type Quote,
   type QuotesRequest,
+  type QuotesResponse,
   type SnapshotRequest,
+  type SnapshotResponse,
   type SnapshotsRequest,
-  type StockSplit,
+  type SnapshotsResponse,
   type StockSplitsRequest,
+  type StockSplitsResponse,
   type Ticker,
-  type TickerDetails,
   type TickerDetailsRequest,
+  type TickerDetailsResponse,
   type TickersRequest,
+  type TickersResponse,
   type Timespan,
-  type Trade,
   type TradesRequest,
-  type DateOrTimestamp,
+  type TradesResponse,
 } from '../equity-data-models';
 import { marketHour, marketHourByIndex, marketHoursCoverage, marketState } from '../market-hours';
 
@@ -40,6 +44,7 @@ import {
 } from './normalizers';
 import type {
   PolygonAggregateResponse,
+  PolygonLatestSnapshot,
   PolygonDividendResponse,
   PolygonLatestSnapshotResponse,
   PolygonLatestSnapshotsResponse,
@@ -105,7 +110,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
     this.http = props.httpClient ?? new FetchHttpClient({ baseUrl: props.baseUrl ?? DEFAULT_BASE_URL, timeoutMs: props.timeoutMs ?? DEFAULT_TIMEOUT_MS });
   }
 
-  async minuteBars(request: MinuteBarsRequest): Promise<Bar[]> {
+  async minuteBars(request: MinuteBarsRequest): Promise<BarsResponse> {
     return await this.bars({ ...request, to: request.to ?? defaultEnd(request.from), multiplier: 1, timespan: 'minute' });
   }
 
@@ -113,11 +118,11 @@ export class PolygonRestClient implements PolygonStockRestClient {
    * Called during a session with today as the end date, the last bar is a partial one for
    * the session so far.
    */
-  async dailyBars(request: DailyBarsRequest): Promise<Bar[]> {
+  async dailyBars(request: DailyBarsRequest): Promise<BarsResponse> {
     return await this.bars({ ...request, to: request.to ?? defaultEnd(request.from), multiplier: 1, timespan: 'day', marketHoursOnly: false });
   }
 
-  async bars(request: BarsRequest): Promise<Bar[]> {
+  async bars(request: BarsRequest): Promise<BarsResponse> {
     if (!TIMESPANS.includes(request.timespan)) {
       throw new InvalidRequestError(`${request.timespan} is not a timespan Polygon aggregates. Use one of [${TIMESPANS.join(', ')}].`);
     }
@@ -132,47 +137,53 @@ export class PolygonRestClient implements PolygonStockRestClient {
 
     const from = startOfDay(request.from);
     const to = endOfDay(request.to);
+    if (from >= to) {
+      throw new InvalidRequestError(`A bars request must start before it ends, got ${easternClock.datetime(from)} to ${easternClock.datetime(to)}.`);
+    }
 
     if (DAILY_OR_COARSER.includes(request.timespan)) {
       // 50,000 days is 136 years, so one request covers any range worth asking for, and
       // market hours do not apply to a bar that spans the whole day.
-      return await this.aggregates(request.symbol, `${path}/${from}/${to}`, query);
+      return { bars: await this.aggregates(request.symbol, `${path}/${from}/${to}`, query) };
     }
 
     const bars = await this.intradayBars(request.symbol, path, query, from, to);
     if (request.marketHoursOnly === false) {
-      return bars;
+      return { bars };
     }
+    // Both ends: outside the table every bar reads as closed, so an unguarded filter
+    // returns nothing for a range before 2001 exactly as it does for one after 2024.
+    this.requireMarketHoursCover(easternClock.date(from), 'filter bars to market hours');
     this.requireMarketHoursCover(easternClock.date(to), 'filter bars to market hours');
-    return bars.filter((bar) => marketState(bar.t) === 'open');
+    return { bars: bars.filter((bar) => marketState(bar.t) === 'open') };
   }
 
-  async trades(request: TradesRequest): Promise<Trade[]> {
+  async trades(request: TradesRequest): Promise<TradesResponse> {
     const window = this.resolveWindow(request, 'trades');
     if (window === undefined) {
-      return [];
+      return { trades: [] };
     }
-    const raw = await this.pageByTimestamp<PolygonTradeV3, PolygonTradesResponseV3>(`/v3/trades/${request.symbol}`, window);
+    // Started together: the split table depends on the symbol, not on the trades, and
+    // waiting for every page before asking for it serialises two independent calls.
+    const [raw, ratios] = await Promise.all([
+      this.pageByTimestamp<PolygonTradeV3, PolygonTradesResponseV3>(`/v3/trades/${request.symbol}`, window),
+      window.adjustForSplit === true ? this.splitRatios(request.symbol) : Promise.resolve([]),
+    ]);
     const trades = raw.map((trade) => normalizeTrade(request.symbol, trade));
-    if (window.adjustForSplit !== true) {
-      return trades;
-    }
-    const ratios = await this.splitRatios(request.symbol);
-    return trades.map((trade) => ({ ...trade, p: adjust(trade.p, trade.t, ratios) }));
+    return { trades: ratios.length === 0 ? trades : trades.map((trade) => ({ ...trade, p: adjust(trade.p, trade.t, ratios) })) };
   }
 
-  async quotes(request: QuotesRequest): Promise<Quote[]> {
+  async quotes(request: QuotesRequest): Promise<QuotesResponse> {
     const window = this.resolveWindow(request, 'quotes');
     if (window === undefined) {
-      return [];
+      return { quotes: [] };
     }
-    const raw = await this.pageByTimestamp<PolygonQuoteV3, PolygonQuotesResponseV3>(`/v3/quotes/${request.symbol}`, window);
+    const [raw, ratios] = await Promise.all([
+      this.pageByTimestamp<PolygonQuoteV3, PolygonQuotesResponseV3>(`/v3/quotes/${request.symbol}`, window),
+      window.adjustForSplit === true ? this.splitRatios(request.symbol) : Promise.resolve([]),
+    ]);
     const quotes = raw.map((quote) => normalizeQuote(request.symbol, quote));
-    if (window.adjustForSplit !== true) {
-      return quotes;
-    }
-    const ratios = await this.splitRatios(request.symbol);
-    return quotes.map((quote) => ({ ...quote, ap: adjust(quote.ap, quote.t, ratios), bp: adjust(quote.bp, quote.t, ratios) }));
+    return { quotes: ratios.length === 0 ? quotes : quotes.map((quote) => ({ ...quote, ap: adjust(quote.ap, quote.t, ratios), bp: adjust(quote.bp, quote.t, ratios) })) };
   }
 
   /**
@@ -180,28 +191,32 @@ export class PolygonRestClient implements PolygonStockRestClient {
    * midnight and answers 404 until pre-market opens, and after 20:00 it repeats the last
    * trade before the close.
    */
-  async snapshot(request: SnapshotRequest): Promise<LatestSnapshot | undefined> {
+  async snapshot(request: SnapshotRequest): Promise<SnapshotResponse> {
     const session = this.currentSession();
     if (session === undefined) {
-      return undefined;
+      return {};
     }
     const body = await this.get<PolygonLatestSnapshotResponse>(`/v2/snapshot/locale/us/markets/stocks/tickers/${request.symbol}`, {});
-    return normalizeSnapshot(body.ticker, session.previousSessionStart);
+    // A symbol with no session data comes back 200 with no `ticker` at all.
+    if (!isSnapshot(body.ticker)) {
+      return {};
+    }
+    return { snapshot: normalizeSnapshot(body.ticker, session.previousSessionStart) };
   }
 
-  async snapshots(request: SnapshotsRequest): Promise<LatestSnapshot[]> {
+  async snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse> {
     if (request.symbols.length === 0) {
-      return [];
+      return { snapshots: [] };
     }
     const session = this.currentSession();
     if (session === undefined) {
-      return [];
+      return { snapshots: [] };
     }
     const body = await this.get<PolygonLatestSnapshotsResponse>('/v2/snapshot/locale/us/markets/stocks/tickers', { tickers: request.symbols.join(',') });
-    return body.tickers.map((ticker) => normalizeSnapshot(ticker, session.previousSessionStart));
+    return { snapshots: (body.tickers ?? []).filter((ticker) => isSnapshot(ticker)).map((ticker) => normalizeSnapshot(ticker, session.previousSessionStart)) };
   }
 
-  async tickers(request: TickersRequest): Promise<Ticker[]> {
+  async tickers(request: TickersRequest): Promise<TickersResponse> {
     const results: Ticker[] = [];
     let after: string | undefined = undefined;
 
@@ -209,7 +224,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
       const remaining = request.limit === undefined ? REFERENCE_PAGE : request.limit - results.length;
       const limit = Math.min(REFERENCE_PAGE, remaining);
       if (limit <= 0) {
-        return results;
+        return { tickers: results };
       }
 
       // Paged by ticker rather than by cursor, so a caller can resume from a known symbol.
@@ -228,7 +243,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
       const page_ = (body.results ?? []).map((ticker) => normalizeTicker(ticker));
       results.push(...page_);
       if (page_.length < limit) {
-        return results;
+        return { tickers: results };
       }
       after = page_[page_.length - 1].ticker;
     }
@@ -236,18 +251,20 @@ export class PolygonRestClient implements PolygonStockRestClient {
     throw new DataProviderError(SOURCE, `refusing to page past ${MAX_PAGES} pages of tickers.`);
   }
 
-  async tickerDetails(request: TickerDetailsRequest): Promise<TickerDetails | undefined> {
+  async tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse> {
     const body = await this.get<PolygonTickerDetailsV3Response>(`/v3/reference/tickers/${request.symbol}`, { date: request.date });
-    return body.results === null ? undefined : normalizeTickerDetails(body.results);
+    // Asked for a date before the ticker existed, Polygon omits `results` rather than
+    // sending null, so `=== null` would hand the normaliser an undefined to walk.
+    return body.results === null || body.results === undefined ? {} : { details: normalizeTickerDetails(body.results) };
   }
 
-  async stockSplits(request: StockSplitsRequest): Promise<StockSplit[]> {
+  async stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse> {
     const query: Query = { ticker: request.symbol, limit: 500, sort: 'execution_date', order: 'asc', execution_date: request.executionDate };
     const raw = await this.pageByCursor<PolygonStockSplitV3Response>('/v3/reference/splits', query);
-    return raw.flatMap((body) => (body.results ?? []).map((split) => normalizeStockSplit(split)));
+    return { splits: raw.flatMap((body) => (body.results ?? []).map((split) => normalizeStockSplit(split))) };
   }
 
-  async dividends(request: DividendsRequest): Promise<Dividend[]> {
+  async dividends(request: DividendsRequest): Promise<DividendsResponse> {
     const query: Query = {
       ticker: request.symbol,
       [`${request.dateType}.gte`]: request.fromDate,
@@ -257,27 +274,38 @@ export class PolygonRestClient implements PolygonStockRestClient {
       limit: REFERENCE_PAGE,
     };
     const raw = await this.pageByCursor<PolygonDividendResponse>('/v3/reference/dividends', query);
-    return raw.flatMap((body) => (body.results ?? []).map((dividend) => normalizeDividend(dividend)));
+    return { dividends: raw.flatMap((body) => (body.results ?? []).map((dividend) => normalizeDividend(dividend))) };
   }
 
-  async historicalBars(request: HistoricalBarsRequest): Promise<Map<string, Bar[]>> {
+  async historicalBars(request: HistoricalBarsRequest): Promise<HistoricalBarsResponse> {
     this.requireMarketHoursCover(request.endDate, 'walk back through trading days');
-    const bars = new Map<string, Bar[]>();
 
-    for (let date = request.endDate; bars.size < request.days; date = easternClock.shiftDate(date, -1)) {
+    // The dates first, then the requests: one day's bars do not depend on another's, and
+    // awaiting each in turn made a sixty-day backfill sixty round trips end to end.
+    const dates: string[] = [];
+    for (let date = request.endDate; dates.length < request.days; date = easternClock.shiftDate(date, -1)) {
       if (date < marketHoursCoverage.from) {
         // The legacy loop had no floor and spun forever once it ran off the table.
         throw new DataProviderError(
           SOURCE,
-          `only ${bars.size} of the ${request.days} trading days before ${request.endDate} are in the market-hours table, which starts at ${marketHoursCoverage.from}.`,
+          `only ${dates.length} of the ${request.days} trading days before ${request.endDate} are in the market-hours table, which starts at ${marketHoursCoverage.from}.`,
         );
       }
       if (marketHour(date) !== undefined) {
-        bars.set(date, await this.minuteBars({ symbol: request.symbol, from: date, to: date, marketHoursOnly: request.marketHoursOnly }));
+        dates.push(date);
       }
     }
 
-    return bars;
+    const days = new Map<string, ReadonlyArray<Bar>>();
+    for (let index = 0; index < dates.length; index += PARALLEL_WINDOWS) {
+      const batch = dates.slice(index, index + PARALLEL_WINDOWS);
+      const fetched = await Promise.all(
+        batch.map(async (date) => await this.minuteBars({ symbol: request.symbol, from: date, to: date, marketHoursOnly: request.marketHoursOnly })),
+      );
+      batch.forEach((date, offset) => days.set(date, fetched[offset].bars));
+    }
+
+    return { days };
   }
 
   private async intradayBars(symbol: string, path: string, query: Query, from: number, to: number): Promise<Bar[]> {
@@ -309,11 +337,15 @@ export class PolygonRestClient implements PolygonStockRestClient {
    */
   private resolveWindow(request: TradesRequest, what: string): ResolvedWindow | undefined {
     if (request.date !== undefined) {
+      // Before reading "no session" as "the market was shut": past the table's end every
+      // real trading day looks like a holiday, and a backfill would record nothing and
+      // report success.
+      this.requireMarketHoursCover(request.date, `tell whether the market traded, to fetch ${what}`);
       const session = marketHour(request.date);
       if (session === undefined) {
         return undefined;
       }
-      return { from: session.preMarketOpenAt, to: session.afterMarketCloseAt, adjustForSplit: request.adjustForSplit, itemsPerRequest: request.itemsPerRequest ?? MAX_PAGE };
+      return { from: session.preMarketOpenAt, to: session.afterMarketCloseAt, adjustForSplit: request.adjustForSplit, itemsPerRequest: pageSize(request.itemsPerRequest, what) };
     }
 
     if (request.from === undefined) {
@@ -328,7 +360,8 @@ export class PolygonRestClient implements PolygonStockRestClient {
     if (fromDate !== toDate) {
       throw new InvalidRequestError(`A ${what} request must stay inside one Eastern day, got ${fromDate} to ${toDate}.`);
     }
-    return { from: request.from, to, adjustForSplit: request.adjustForSplit, itemsPerRequest: request.itemsPerRequest ?? MAX_PAGE };
+    this.requireMarketHoursCover(fromDate, `tell whether the market traded, to fetch ${what}`);
+    return { from: request.from, to, adjustForSplit: request.adjustForSplit, itemsPerRequest: pageSize(request.itemsPerRequest, what) };
   }
 
   /**
@@ -337,7 +370,10 @@ export class PolygonRestClient implements PolygonStockRestClient {
    */
   private async pageByTimestamp<T extends PagedByTimestamp, R extends { readonly results?: ReadonlyArray<T> | null }>(path: string, window: ResolvedWindow): Promise<T[]> {
     const results: T[] = [];
-    const seen = new Set<string>();
+    // Only the previous page can repeat: the cursor steps back by nanoseconds, so a
+    // duplicate is always in the page just read. Holding every key instead would cost a
+    // string per trade across a session of millions to reject a handful.
+    let previousKeys = new Set<string>();
     let from = BigInt(window.from) * BigInt(1_000_000);
     const to = BigInt(window.to) * BigInt(1_000_000);
 
@@ -350,15 +386,17 @@ export class PolygonRestClient implements PolygonStockRestClient {
         'timestamp.lt': to.toString(),
       });
       const entries = body.results ?? [];
+      const keys = new Set<string>();
       let added = 0;
       for (const entry of entries) {
         const key = `${entry.sequence_number}/${entry.sip_timestamp}`;
-        if (!seen.has(key)) {
-          seen.add(key);
+        keys.add(key);
+        if (!previousKeys.has(key)) {
           results.push(entry);
           added += 1;
         }
       }
+      previousKeys = keys;
 
       if (entries.length < window.itemsPerRequest) {
         return results;
@@ -400,7 +438,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
   }
 
   private async splitRatios(symbol: string): Promise<ReadonlyArray<SplitRatio>> {
-    const splits = await this.stockSplits({ symbol });
+    const { splits } = await this.stockSplits({ symbol });
     return splits.map((split) => ({
       // A 1-for-4 split makes a share worth a quarter of what it was, so a price before
       // it is multiplied by from/to to be comparable with prices after.
@@ -432,6 +470,9 @@ export class PolygonRestClient implements PolygonStockRestClient {
     if (date > marketHoursCoverage.to) {
       throw new DataProviderError(SOURCE, `cannot ${what} on ${date}: the market-hours table stops at ${marketHoursCoverage.to} and needs refreshing.`);
     }
+    if (date < marketHoursCoverage.from) {
+      throw new DataProviderError(SOURCE, `cannot ${what} on ${date}: the market-hours table starts at ${marketHoursCoverage.from}.`);
+    }
   }
 
   private async get<T>(path: string, query: Query): Promise<T> {
@@ -439,14 +480,17 @@ export class PolygonRestClient implements PolygonStockRestClient {
 
     if (response.status !== 200) {
       // The key rides in the query string, so neither the URL nor the query reaches a log.
-      logger.warn(`Polygon returned ${response.status} for ${path}: ${JSON.stringify(response.body).slice(0, 300)}`);
+      // `?? ''` because an empty body parses to undefined, and `JSON.stringify(undefined)`
+      // is undefined rather than a string — which would throw here, in the error path,
+      // replacing the typed failure a caller branches on with a bare TypeError.
+      logger.warn(`Polygon returned ${response.status} for ${path}: ${JSON.stringify(response.body ?? '').slice(0, 300)}`);
       throw new DataProviderError(SOURCE, `returned ${response.status} for ${path}.`, response.status);
     }
     if (typeof response.body !== 'object' || response.body === null) {
       throw new DataProviderError(SOURCE, `returned a body for ${path} that is not a JSON object.`);
     }
 
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the boundary with Polygon's schema; the body is checked to be an object here and every field read from it is optional-guarded in the normalisers and the paging above.
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the boundary with Polygon's schema; the body is checked to be an object here, and every collection read from it is guarded before it is walked: `results ?? []` in the paging, and `isSnapshot` on the snapshot sections.
     return response.body as T;
   }
 }
@@ -470,6 +514,30 @@ interface CurrentSession {
 interface SplitRatio {
   readonly ratio: number;
   readonly before: number;
+}
+
+/** Polygon caps a page at 50,000 whatever is asked for, and a short page ends the walk. */
+function pageSize(requested: number | undefined, what: string): number {
+  if (requested === undefined) {
+    return MAX_PAGE;
+  }
+  if (!Number.isFinite(requested) || requested < 1) {
+    throw new InvalidRequestError(`A ${what} request needs at least one item per request, got ${requested}.`);
+  }
+  // Not an error to ask for more: asking for 100,000 and believing the 50,000 that came
+  // back was the whole day is the failure, and clamping is what makes the page short.
+  return Math.min(Math.round(requested), MAX_PAGE);
+}
+
+function isSnapshot(snapshot: PolygonLatestSnapshot | undefined): snapshot is PolygonLatestSnapshot {
+  return (
+    snapshot !== undefined &&
+    snapshot.lastTrade !== undefined &&
+    snapshot.lastQuote !== undefined &&
+    snapshot.min !== undefined &&
+    snapshot.day !== undefined &&
+    snapshot.prevDay !== undefined
+  );
 }
 
 function adjust(price: number, timestamp: number, ratios: ReadonlyArray<SplitRatio>): number {

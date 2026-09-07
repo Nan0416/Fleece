@@ -12,10 +12,10 @@ export class PolygonClient implements MarketDataClient {
   }
 
   async listDividends(input: ListDividendsInput): Promise<ListDividendsOutput> {
-    return { dividends: await this.rest.dividends(input) };
+    return await this.rest.dividends(input);
   }
 
   async listStockSplits(input: ListStockSplitsInput): Promise<ListStockSplitsOutput> {
-    return { splits: await this.rest.stockSplits(input) };
+    return await this.rest.stockSplits(input);
   }
 }

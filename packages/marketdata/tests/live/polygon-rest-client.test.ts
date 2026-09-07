@@ -26,7 +26,7 @@ jest.setTimeout(60_000);
 
 describe('bars', () => {
   it('returns one daily bar per session in the range', async () => {
-    const bars = await polygon.dailyBars({ symbol: 'AAPL', from: '2024-12-16', to: '2024-12-20' });
+    const { bars } = await polygon.dailyBars({ symbol: 'AAPL', from: '2024-12-16', to: '2024-12-20' });
 
     expect(bars.map((bar) => easternClock.date(bar.t))).toStrictEqual(['2024-12-16', '2024-12-17', '2024-12-18', '2024-12-19', '2024-12-20']);
     expect(bars.every((bar) => bar.S === 'AAPL' && bar.l <= bar.o && bar.o <= bar.h && bar.v > 0)).toBe(true);
@@ -34,15 +34,15 @@ describe('bars', () => {
 
   it('adjusts historical prices for a later split only when asked', async () => {
     // AAPL split 4-for-1 on 2020-08-31, so its 2020-08-28 close reads either way.
-    const [raw] = await polygon.dailyBars({ symbol: 'AAPL', from: '2020-08-28', to: '2020-08-28' });
-    const [adjusted] = await polygon.dailyBars({ symbol: 'AAPL', from: '2020-08-28', to: '2020-08-28', adjustForSplit: true });
+    const { bars: raw } = await polygon.dailyBars({ symbol: 'AAPL', from: '2020-08-28', to: '2020-08-28' });
+    const { bars: adjusted } = await polygon.dailyBars({ symbol: 'AAPL', from: '2020-08-28', to: '2020-08-28', adjustForSplit: true });
 
-    expect(raw.c).toBeCloseTo(499.23, 2);
-    expect(adjusted.c).toBeCloseTo(124.81, 2);
+    expect(raw[0].c).toBeCloseTo(499.23, 2);
+    expect(adjusted[0].c).toBeCloseTo(124.81, 2);
   });
 
   it('returns exactly the regular session in one-minute bars', async () => {
-    const bars = await polygon.minuteBars({ symbol: 'AAPL', from: SESSION, to: SESSION });
+    const { bars } = await polygon.minuteBars({ symbol: 'AAPL', from: SESSION, to: SESSION });
 
     expect(bars).toHaveLength(390); // 09:30 to 15:59 inclusive
     expect(easternClock.time(bars[0].t)).toBe('09:30:00');
@@ -50,20 +50,20 @@ describe('bars', () => {
   });
 
   it('returns pre-market and after-hours bars too when not filtered', async () => {
-    const extended = await polygon.minuteBars({ symbol: 'AAPL', from: SESSION, to: SESSION, marketHoursOnly: false });
+    const { bars: extended } = await polygon.minuteBars({ symbol: 'AAPL', from: SESSION, to: SESSION, marketHoursOnly: false });
 
     expect(extended.length).toBeGreaterThan(390);
     expect(easternClock.time(extended[0].t) < '09:30:00').toBe(true);
   });
 
   it('stops at 13:00 on a half day', async () => {
-    const bars = await polygon.minuteBars({ symbol: 'AAPL', from: HALF_DAY, to: HALF_DAY });
+    const { bars } = await polygon.minuteBars({ symbol: 'AAPL', from: HALF_DAY, to: HALF_DAY });
 
     expect(easternClock.time(bars[bars.length - 1].t)).toBe('12:59:00');
   });
 
   it('has nothing for a symbol that does not exist', async () => {
-    expect(await polygon.dailyBars({ symbol: 'ZZZZNOPE', from: SESSION, to: SESSION })).toStrictEqual([]);
+    expect((await polygon.dailyBars({ symbol: 'ZZZZNOPE', from: SESSION, to: SESSION })).bars).toStrictEqual([]);
   });
 });
 
@@ -72,7 +72,7 @@ describe('trades and quotes', () => {
   const to = easternClock.timestamp(SESSION, '10:00:05');
 
   it('returns trades inside the window, in order', async () => {
-    const result = await polygon.trades({ symbol: 'AAPL', from, to });
+    const { trades: result } = await polygon.trades({ symbol: 'AAPL', from, to });
 
     expect(result.length).toBeGreaterThan(100);
     expect(result.every((trade) => trade.S === 'AAPL' && trade.t >= from && trade.t < to && trade.p > 0)).toBe(true);
@@ -81,28 +81,28 @@ describe('trades and quotes', () => {
 
   it('pages past its own limit to return the whole window', async () => {
     // A page smaller than the window forces the timestamp cursor to be exercised.
-    const paged = await polygon.trades({ symbol: 'AAPL', from, to, itemsPerRequest: 50 });
-    const single = await polygon.trades({ symbol: 'AAPL', from, to });
+    const { trades: paged } = await polygon.trades({ symbol: 'AAPL', from, to, itemsPerRequest: 50 });
+    const { trades: single } = await polygon.trades({ symbol: 'AAPL', from, to });
 
     expect(paged).toHaveLength(single.length);
     expect(paged[paged.length - 1].t).toBe(single[single.length - 1].t);
   });
 
   it('returns quotes with both sides of the book', async () => {
-    const result = await polygon.quotes({ symbol: 'AAPL', from, to: easternClock.timestamp(SESSION, '10:00:01') });
+    const { quotes: result } = await polygon.quotes({ symbol: 'AAPL', from, to: easternClock.timestamp(SESSION, '10:00:01') });
 
     expect(result.length).toBeGreaterThan(0);
     expect(result.every((quote) => quote.bp > 0 && quote.ap >= quote.bp)).toBe(true);
   });
 
   it('has nothing for a day the market never opened', async () => {
-    expect(await polygon.trades({ symbol: 'AAPL', date: '2024-12-25' })).toStrictEqual([]);
+    expect((await polygon.trades({ symbol: 'AAPL', date: '2024-12-25' })).trades).toStrictEqual([]);
   });
 });
 
 describe('reference data', () => {
   it('lists every AAPL split Polygon knows', async () => {
-    const splits = await polygon.stockSplits({ symbol: 'AAPL' });
+    const { splits } = await polygon.stockSplits({ symbol: 'AAPL' });
 
     expect(splits.map((split) => `${split.executionDate} ${split.splitFrom}:${split.splitTo}`)).toStrictEqual([
       '1987-06-16 1:2',
@@ -114,7 +114,7 @@ describe('reference data', () => {
   });
 
   it("lists AAPL's four 2024 dividends, quarterly", async () => {
-    const dividends = await polygon.dividends({ symbol: 'AAPL', dateType: 'ex_dividend_date', fromDate: '2024-01-01', toDate: '2024-12-31' });
+    const { dividends } = await polygon.dividends({ symbol: 'AAPL', dateType: 'ex_dividend_date', fromDate: '2024-01-01', toDate: '2024-12-31' });
 
     expect(dividends).toHaveLength(4);
     expect(dividends.map((dividend) => dividend.exDividendDate)).toStrictEqual(['2024-02-09', '2024-05-10', '2024-08-12', '2024-11-08']);
@@ -122,7 +122,7 @@ describe('reference data', () => {
   });
 
   it('describes a ticker', async () => {
-    const details = await polygon.tickerDetails({ symbol: 'AAPL' });
+    const { details } = await polygon.tickerDetails({ symbol: 'AAPL' });
 
     expect(details?.name).toMatch(/Apple/);
     expect(details?.primaryExchange).toBe('XNAS');
@@ -131,7 +131,7 @@ describe('reference data', () => {
   });
 
   it('lists tickers in symbol order, up to the limit asked for', async () => {
-    const tickers = await polygon.tickers({ limit: 5, type: 'CS', active: true });
+    const { tickers } = await polygon.tickers({ limit: 5, type: 'CS', active: true });
 
     expect(tickers).toHaveLength(5);
     expect(tickers.map((ticker) => ticker.ticker)).toStrictEqual([...tickers.map((ticker) => ticker.ticker)].sort());
@@ -139,9 +139,18 @@ describe('reference data', () => {
   });
 
   it('resumes from a given ticker', async () => {
-    const tickers = await polygon.tickers({ startTicker: 'MSFT', limit: 3 });
+    const { tickers } = await polygon.tickers({ startTicker: 'MSFT', limit: 3 });
 
     expect(tickers[0].ticker >= 'MSFT').toBe(true);
+  });
+});
+
+describe('historicalBars', () => {
+  it('returns the trading days before the end date, most recent first', async () => {
+    const { days } = await polygon.historicalBars({ symbol: 'AAPL', endDate: '2024-12-23', days: 3 });
+
+    expect([...days.keys()]).toStrictEqual(['2024-12-23', '2024-12-20', '2024-12-19']);
+    expect([...days.values()].every((bars) => bars.length === 390)).toBe(true);
   });
 });
 

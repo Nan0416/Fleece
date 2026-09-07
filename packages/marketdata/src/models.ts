@@ -1,4 +1,4 @@
-import type { DividendQueryDateType } from './equity-data-models';
+import type { Dividend, DividendQueryDateType, StockSplit } from './equity-data-models';
 
 export type { Dividend, DividendFrequency, DividendType, StockSplit } from './equity-data-models';
 
@@ -15,7 +15,7 @@ export interface ListDividendsInput {
 }
 
 export interface ListDividendsOutput {
-  readonly dividends: ReadonlyArray<import('./equity-data-models').Dividend>;
+  readonly dividends: ReadonlyArray<Dividend>;
 }
 
 export interface ListStockSplitsInput {
@@ -25,7 +25,7 @@ export interface ListStockSplitsInput {
 }
 
 export interface ListStockSplitsOutput {
-  readonly splits: ReadonlyArray<import('./equity-data-models').StockSplit>;
+  readonly splits: ReadonlyArray<StockSplit>;
 }
 
 /**
