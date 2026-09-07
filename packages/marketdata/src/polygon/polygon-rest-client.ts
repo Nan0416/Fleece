@@ -33,6 +33,7 @@ import {
 import { marketHour, marketHourByIndex, marketHoursCoverage, marketState } from '../market-hours';
 
 import {
+  nanosecondTimestamp,
   normalizeAggregateBar,
   normalizeQuote,
   normalizeDividend,
@@ -437,7 +438,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
           `returned ${entries.length} entries for ${path} that are all inside the previous page, so paging cannot advance past ${entries[entries.length - 1].sip_timestamp}. Ask for a shorter window.`,
         );
       }
-      from = BigInt(entries[entries.length - 1].sip_timestamp) - CURSOR_BACKOFF_NS;
+      from = nanosecondTimestamp(entries[entries.length - 1].sip_timestamp) - CURSOR_BACKOFF_NS;
     }
 
     throw new DataProviderError(SOURCE, `refusing to page past ${MAX_PAGES} pages of ${path}.`);

@@ -77,15 +77,21 @@ function toDividendFrequency(value: number): DividendFrequency {
 /**
  * Polygon timestamps trades and quotes in nanoseconds, which does not fit a double.
  *
- * Checked rather than assumed: `BigInt(undefined)` throws a bare `TypeError`, and a
- * payload missing a timestamp — a thin name, a halted one, a shape change — would crash
- * here instead of failing as the provider error every caller of this client branches on.
+ * Checked rather than caught. `BigInt` fails three different ways on a malformed value —
+ * `TypeError` on undefined, `RangeError` on a fraction, `SyntaxError` on a string that is
+ * not a number — none of them the provider error a caller of this client branches on. And
+ * a `try` would not help with the case that matters: `BigInt('')` is `0n`, so an empty
+ * timestamp succeeds and reads as the epoch.
  */
-export function nanosecondsToMilliseconds(timestamp: number): number {
+export function nanosecondTimestamp(timestamp: number): bigint {
   if (!Number.isInteger(timestamp)) {
     throw new DataProviderError('Polygon', `sent ${JSON.stringify(timestamp)} where a nanosecond timestamp was expected.`);
   }
-  return Number(BigInt(timestamp) / BigInt(1_000_000));
+  return BigInt(timestamp);
+}
+
+export function nanosecondsToMilliseconds(timestamp: number): number {
+  return Number(nanosecondTimestamp(timestamp) / BigInt(1_000_000));
 }
 
 export function normalizeAggregateBar(symbol: string, bar: PolygonAggregateBar): Bar {

@@ -270,6 +270,24 @@ describe('trades', () => {
     expect(result.map((trade) => trade.p)).toStrictEqual([1, 2, 3, 4]);
   });
 
+  it.each([
+    ['missing', undefined],
+    ['an empty string', ''],
+    ['a fraction', 1734620400042.5],
+    ['not a number at all', 'yesterday'],
+  ])('refuses a page whose last timestamp is %s, rather than paging from it', async (_label, malformed) => {
+    // The cursor is read from this value. `BigInt` fails three different ways on these,
+    // none of them a provider error — and `BigInt('')` is 0n, so an empty one would not
+    // fail at all: the next page would be requested from the epoch.
+    const page = trades({ ms: at(SESSION, '10:00:00'), price: 1 }, { ms: at(SESSION, '10:00:01'), price: 2 }) as { results: Array<Record<string, unknown>> };
+    page.results[1]['sip_timestamp'] = malformed;
+    const http = new FakeHttpClient().reply(page);
+
+    const send = client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/where a nanosecond timestamp was expected/);
+  });
+
   it('refuses a window where paging cannot advance, rather than returning half of it', async () => {
     // Every page identical: the cursor is stuck, and what we hold is part of a session
     // a caller could not tell from the whole of one.
