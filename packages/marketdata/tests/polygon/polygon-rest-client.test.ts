@@ -4,7 +4,7 @@ import { DataProviderError } from '../../src/equity-data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { PolygonRestClient } from '../../src/polygon';
 
-import { aggregates, FakeHttpClient, FakeTradeFeed, quotes, snapshot, splits, ticks, trades } from './fake-http-client';
+import { aggregates, FakeHttpClient, FakeTradeFeed, quotes, snapshot, spacedTicks, splits, tiedTicks, trades } from './fake-http-client';
 
 // 2024-12-19 is a full trading session; 2024-12-24 is a half day closing at 13:00.
 const SESSION = '2024-12-19';
@@ -288,15 +288,25 @@ describe('trades', () => {
     await expect(send).rejects.toThrow(/where a nanosecond timestamp was expected/);
   });
 
-  it.each([1, 2, 3, 7, 50])('returns the whole window with a page size of %i', async (itemsPerRequest) => {
-    // A page smaller than the number of trades inside the 1024ns backoff used to end the
-    // walk with an error: the second page could only hand back what the first already
-    // had. `itemsPerRequest: 1` did it on any ordinary window.
-    const feed = new FakeTradeFeed(ticks(at(SESSION, '10:00:00'), 20));
+  it.each([1, 2, 3, 7, 50])('walks a spread-out window with a page size of %i', async (itemsPerRequest) => {
+    // The ordinary shape, and the one this cursor spends its time in: trades far enough
+    // apart that it advances between pages.
+    const feed = new FakeTradeFeed(spacedTicks(at(SESSION, '10:00:00'), 20));
     const { trades: result } = await client(feed).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest });
 
     expect(result).toHaveLength(20);
-    expect(result.map((trade) => trade.p)).toStrictEqual(ticks(0, 20).map((tick) => tick.price));
+    expect(result.map((trade) => trade.p)).toStrictEqual(spacedTicks(0, 20).map((tick) => tick.price));
+  });
+
+  it.each([1, 2, 3, 7, 50])('gets a window of trades sharing one timestamp with a page size of %i', async (itemsPerRequest) => {
+    // A page smaller than the number of trades inside the 1024ns backoff used to end the
+    // walk with an error: the second page could only hand back what the first already
+    // had. `itemsPerRequest: 1` did it on any ordinary window.
+    const feed = new FakeTradeFeed(tiedTicks(at(SESSION, '10:00:00'), 20));
+    const { trades: result } = await client(feed).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest });
+
+    expect(result).toHaveLength(20);
+    expect(result.map((trade) => trade.p)).toStrictEqual(tiedTicks(0, 20).map((tick) => tick.price));
   });
 
   it('gets past a cluster of trades that share a nanosecond', async () => {
@@ -311,10 +321,22 @@ describe('trades', () => {
   });
 
   it('returns no trade twice, however small the page', async () => {
-    const feed = new FakeTradeFeed(ticks(at(SESSION, '10:00:00'), 30));
+    // The length is the assertion doing the work: distinct ids alone would hold just as
+    // well for 35 entries containing 30 of them.
+    const feed = new FakeTradeFeed(spacedTicks(at(SESSION, '10:00:00'), 30));
     const { trades: result } = await client(feed).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 3 });
 
+    expect(result).toHaveLength(30);
     expect(new Set(result.map((trade) => `${trade.i}`)).size).toBe(30);
+  });
+
+  it('holds a window that mixes a cluster with spread-out trades either side', async () => {
+    const start = at(SESSION, '10:00:00');
+    const feed = new FakeTradeFeed([...spacedTicks(start, 4), ...tiedTicks(start + 1, 6), ...spacedTicks(start + 2, 4)]);
+    const { trades: result } = await client(feed).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
+
+    expect(result).toHaveLength(14);
+    expect(result.every((trade, index) => index === 0 || trade.t >= result[index - 1].t)).toBe(true);
   });
 
   it('refuses a window it cannot step over even at the maximum page size', async () => {

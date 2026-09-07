@@ -134,17 +134,24 @@ export class FakeTradeFeed implements HttpClient {
     const gte = BigInt(query['timestamp.gte'] ?? '0');
     const lt = BigInt(query['timestamp.lt'] ?? '0');
     const limit = Number(query['limit'] ?? '0');
-    const matching = this.ticks.filter((tick) => tick.sip >= gte && tick.sip < lt).slice(0, limit);
+    // Numbered once, from its position in the feed, so a trade keeps its identity
+    // wherever it lands. Numbering by position in the *page* gave the same trade a
+    // different sequence number on every page, which is the client's de-duplication key
+    // — the fake would have reported duplicates as distinct trades and blamed the client.
+    const matching = this.ticks
+      .map((tick, sequence) => ({ ...tick, sequence }))
+      .filter((tick) => tick.sip >= gte && tick.sip < lt)
+      .slice(0, limit);
 
     return {
       status: 200,
       headers: { 'content-type': 'application/json' },
       body: {
         status: 'OK',
-        results: matching.map((tick, index) => ({
+        results: matching.map((tick) => ({
           participant_timestamp: Number(tick.sip),
           sip_timestamp: Number(tick.sip),
-          sequence_number: Number(tick.sip % BigInt(1_000_000_000)) + index,
+          sequence_number: tick.sequence,
           id: `t${tick.price}`,
           exchange: 4,
           size: 10,
@@ -157,8 +164,26 @@ export class FakeTradeFeed implements HttpClient {
   }
 }
 
-/** `count` trades one nanosecond apart from `startMs`, which is the ordinary case. */
-export function ticks(startMs: number, count: number): Array<{ sip: bigint; price: number }> {
+/**
+ * Trades far enough apart that the cursor moves between pages, which is the ordinary
+ * shape of a window and the one this client spends its time in.
+ *
+ * The gap has to clear `CURSOR_BACKOFF_NS`, or every trade lands in the backoff window
+ * and the walk never leaves its first timestamp.
+ */
+export function spacedTicks(startMs: number, count: number, gapNs: number = 5_000): Array<{ sip: bigint; price: number }> {
   const base = BigInt(startMs) * BigInt(1_000_000);
-  return Array.from({ length: count }, (_, index) => ({ sip: base + BigInt(index), price: 100 + index }));
+  return Array.from({ length: count }, (_, index) => ({ sip: base + BigInt(index * gapNs), price: 100 + index }));
+}
+
+/**
+ * Trades on one timestamp, as the opening cross prints them — the shape that makes a
+ * small page unable to step past them.
+ *
+ * A nanosecond apart would do as well: at this magnitude a double's step is 256ns, so
+ * anything closer than that arrives as the same wire timestamp anyway.
+ */
+export function tiedTicks(startMs: number, count: number): Array<{ sip: bigint; price: number }> {
+  const base = BigInt(startMs) * BigInt(1_000_000);
+  return Array.from({ length: count }, (_, index) => ({ sip: base, price: 100 + index }));
 }
