@@ -100,7 +100,7 @@ export function dividend(overrides: Partial<Dividend> & { exDividendDate: string
     cashAmount: 0.25,
     currency: 'USD',
     dividendType: 'CD',
-    frequency: 4,
+    frequency: 'quarterly',
     declarationDate: '2026-02-01',
     recordDate: '2026-02-09',
     payDate: '2026-02-13',

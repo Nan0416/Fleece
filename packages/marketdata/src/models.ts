@@ -1,45 +1,12 @@
-/** Corporate actions, normalised away from any one data provider's field names. */
+import type { DividendQueryDateType } from './equity-data-models';
 
-export interface StockSplit {
-  readonly ticker: string;
-  /** ISO `YYYY-MM-DD`, the Eastern calendar date the split took effect. */
-  readonly executionDate: string;
-  /** A 1-for-4 split is `splitFrom: 1, splitTo: 4` — one share becomes four. */
-  readonly splitFrom: number;
-  readonly splitTo: number;
-}
+export type { Dividend, DividendFrequency, DividendType, StockSplit } from './equity-data-models';
 
-/** How many times a year the issuer pays. 0 means a one-off. */
-export type DividendFrequency = 0 | 1 | 2 | 4 | 12;
-
-export type DividendType =
-  | 'CD' // consistent, scheduled
-  | 'SC' // special
-  | 'LT' // long-term
-  | 'ST'; // short-term
-
-export interface Dividend {
-  readonly ticker: string;
-  readonly cashAmount: number;
-  readonly currency: string;
-  readonly dividendType: DividendType;
-  readonly frequency: DividendFrequency;
-  readonly declarationDate: string;
-  /**
-   * The date the shares begin trading without the dividend. Holding at the close of
-   * the day *before* this is what earns the payment, which is why the corporate-action
-   * job looks up the position on the preceding day rather than on this one.
-   */
-  readonly exDividendDate: string;
-  readonly recordDate: string;
-  readonly payDate: string;
-}
-
-export type DividendDateType = 'declaration_date' | 'ex_dividend_date' | 'record_date' | 'pay_date';
+/** Which of a dividend's four dates a query's range applies to. */
+export type DividendDateType = DividendQueryDateType;
 
 export interface ListDividendsInput {
   readonly symbol: string;
-  /** Which of the four dates the range applies to. */
   readonly dateType: DividendDateType;
   /** Inclusive, ISO `YYYY-MM-DD`. */
   readonly fromDate: string;
@@ -48,7 +15,7 @@ export interface ListDividendsInput {
 }
 
 export interface ListDividendsOutput {
-  readonly dividends: ReadonlyArray<Dividend>;
+  readonly dividends: ReadonlyArray<import('./equity-data-models').Dividend>;
 }
 
 export interface ListStockSplitsInput {
@@ -58,12 +25,15 @@ export interface ListStockSplitsInput {
 }
 
 export interface ListStockSplitsOutput {
-  readonly splits: ReadonlyArray<StockSplit>;
+  readonly splits: ReadonlyArray<import('./equity-data-models').StockSplit>;
 }
 
 /**
- * The corporate actions the ledger needs. Prices, quotes and trades belong to services
- * that are not part of this port.
+ * The corporate actions the ledger needs, which is the slice `corporate-actions` depends
+ * on. Bars, trades and quotes are on `PolygonStockRestClient`.
+ *
+ * A dividend is earned by holding at the close of the day *before* its ex-dividend date,
+ * which is why the job looks up the position on the preceding day rather than on that one.
  */
 export interface MarketDataClient {
   listDividends(input: ListDividendsInput): Promise<ListDividendsOutput>;

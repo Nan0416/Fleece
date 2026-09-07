@@ -15,7 +15,9 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/packages'],
   testMatch: ['**/tests/**/*.test.ts'],
-  testPathIgnorePatterns: ['/node_modules/'],
+  // `tests/live/` talks to a real provider over the network and needs a key; it runs
+  // from `jest.live.config.js` via `npm run test:live`.
+  testPathIgnorePatterns: ['/node_modules/', '/tests/live/'],
   setupFiles: ['<rootDir>/jest.setup.js'],
   moduleNameMapper: {
     '^@fleece/shared$': '<rootDir>/packages/shared/src',

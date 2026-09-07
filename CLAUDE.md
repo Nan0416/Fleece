@@ -16,7 +16,7 @@ An npm-workspaces monorepo, nine packages under `packages/`:
 | `client` | Typed client for that API |
 | `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
 | `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price |
-| `marketdata` | Polygon client for splits and dividends, and the US market-hours table |
+| `marketdata` | The equity data model, the Polygon REST client (bars, trades, quotes, snapshots, reference data) and the US market-hours table |
 | `tracking-service` | Turns broker order events into ledger entries, and takes claims about whose an order is |
 | `corporate-actions` | Records the dividends each account is owed |
 
@@ -75,6 +75,10 @@ tests that use them, named anything but `*.test.ts`.
 `npm test` skips `packages/core/tests/data-integration/` — the suites needing a real
 PostgreSQL — unless `FLEECE_TEST_DATABASE_URL` points at a throwaway database.
 Everything else runs against fakes and needs nothing installed.
+
+`tests/live/` is excluded from `npm test` entirely rather than skipped: those suites call
+a real data provider, CI has no key for one, and a suite that skipped itself there would
+make the run green having tested nothing. `npm run test:live` runs them, reading `.env`.
 
 ## Conventions
 
