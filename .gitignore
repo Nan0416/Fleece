@@ -120,3 +120,6 @@ backup_metrics
 
 # Written by `npm run test:ci` so the workflow can check what actually ran.
 jest-results.json
+
+# Session notes, not part of the codebase.
+prompts/
