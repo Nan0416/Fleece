@@ -1,4 +1,4 @@
-import { Dividend, easternDate, isIsoDate, InvalidRequestError, ListDividendsRequest, ListDividendsResponse, LoggerFactory, NotFoundError, Decimal } from '@fleece/shared';
+import { Dividend, easternClock, isIsoDate, InvalidRequestError, ListDividendsRequest, ListDividendsResponse, LoggerFactory, NotFoundError, Decimal } from '@fleece/shared';
 import { AccountDao } from '../data/account-dao';
 import { DividendDao } from '../data/dividend-dao';
 
@@ -42,7 +42,7 @@ export class DividendService {
     return await this.dividendDao.listDividends({
       accountId: request.accountId,
       symbol: request.symbol,
-      today: easternDate(this.now()),
+      today: easternClock.date(this.now()),
     });
   }
 
@@ -64,7 +64,7 @@ export class DividendService {
     logger.info(
       `Recording a ${request.amountPerShare.toString()}/share dividend on ${request.symbol} for account ${request.accountId}, ex-dividend ${request.exDividendDate}, size ${request.size.toString()}.`,
     );
-    return await this.dividendDao.upsertDividend({ ...request, today: easternDate(this.now()) });
+    return await this.dividendDao.upsertDividend({ ...request, today: easternClock.date(this.now()) });
   }
 
   private async requireAccount(accountId: string): Promise<void> {
