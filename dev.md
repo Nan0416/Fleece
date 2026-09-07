@@ -147,6 +147,7 @@ is the list worth watching.
 | --- | --- | --- |
 | `FLEECE_TEST_DATABASE_URL` | *(unset)* | A throwaway database. Unset skips `packages/core/tests/data-integration/` |
 | `POLYGON_KEY` | *(unset)* | Read from `.env` by `npm run test:live`. Those suites are not part of `npm test`, so an absent key costs nothing |
+| `ALPACA_PAPER_API_KEY` / `ALPACA_PAPER_SECRET_KEY` | *(unset)* | Same: the Alpaca market-data live suite. Market data works with paper keys |
 
 ```bash
 createdb fleece_test

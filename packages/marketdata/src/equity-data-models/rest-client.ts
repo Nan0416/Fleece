@@ -159,17 +159,53 @@ export interface HistoricalBarsResponse {
   readonly days: ReadonlyMap<string, ReadonlyArray<Bar>>;
 }
 
+/** What every provider serves: prices over a window. */
 export interface StockRestClient {
   bars(request: BarsRequest): Promise<BarsResponse>;
   minuteBars(request: MinuteBarsRequest): Promise<BarsResponse>;
   dailyBars(request: DailyBarsRequest): Promise<BarsResponse>;
   trades(request: TradesRequest): Promise<TradesResponse>;
   quotes(request: QuotesRequest): Promise<QuotesResponse>;
-  snapshot(request: SnapshotRequest): Promise<SnapshotResponse>;
-  snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse>;
+}
+
+/** A trading day as the exchange calendar records it, and as the session table stores it. */
+export interface MarketSession {
+  /** Eastern calendar date, ISO `YYYY-MM-DD`. */
+  readonly date: string;
+  /** `HH:mm` Eastern, usually 09:30. */
+  readonly open: string;
+  /** `HH:mm` Eastern — 13:00 on a half day. */
+  readonly close: string;
+  readonly openAt: number;
+  readonly closeAt: number;
+  readonly preMarketOpenAt: number;
+  readonly afterMarketCloseAt: number;
+}
+
+export interface MarketHoursRequest {
+  /** Inclusive, ISO `YYYY-MM-DD`. */
+  readonly fromDate: string;
+  /** Inclusive, ISO `YYYY-MM-DD`. */
+  readonly toDate: string;
+}
+
+export interface MarketHoursResponse {
+  /** Trading days only, ascending. A weekend or a holiday is absent, not empty. */
+  readonly sessions: ReadonlyArray<MarketSession>;
+}
+
+/**
+ * Alpaca additionally serves the exchange calendar, which is where the session table in
+ * `market-hours.ts` comes from — including the after-hours close that varies between
+ * half days, which no rule derives.
+ */
+export interface AlpacaStockRestClient extends StockRestClient {
+  marketHours(request: MarketHoursRequest): Promise<MarketHoursResponse>;
 }
 
 export interface PolygonStockRestClient extends StockRestClient {
+  snapshot(request: SnapshotRequest): Promise<SnapshotResponse>;
+  snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse>;
   tickers(request: TickersRequest): Promise<TickersResponse>;
   tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse>;
   stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;

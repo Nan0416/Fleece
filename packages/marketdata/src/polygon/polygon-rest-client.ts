@@ -1,4 +1,4 @@
-import { FetchHttpClient, InternalServiceError, InvalidRequestError, LoggerFactory, easternClock, isIsoDate, type HttpClient, type HttpResponse, type Query } from '@fleece/shared';
+import { FetchHttpClient, InternalServiceError, InvalidRequestError, LoggerFactory, easternClock, type HttpClient, type HttpResponse, type Query } from '@fleece/shared';
 
 import {
   DataProviderError,
@@ -30,7 +30,8 @@ import {
   type TradesRequest,
   type TradesResponse,
 } from '../equity-data-models';
-import { marketHour, marketHourByIndex, marketHoursCoverage, marketState } from '../market-hours';
+import { marketHour, marketHourByIndex, marketHoursCoverage } from '../market-hours';
+import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, startOfDay } from '../request-window';
 
 import {
   nanosecondTimestamp,
@@ -138,9 +139,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
 
     const from = startOfDay(request.from);
     const to = endOfDay(request.to);
-    if (from >= to) {
-      throw new InvalidRequestError(`A bars request must start before it ends, got ${easternClock.datetime(from)} to ${easternClock.datetime(to)}.`);
-    }
+    requireForwardRange(from, to, 'bars');
 
     if (DAILY_OR_COARSER.includes(request.timespan)) {
       // 50,000 days is 136 years, so one request covers any range worth asking for, and
@@ -153,12 +152,11 @@ export class PolygonRestClient implements PolygonStockRestClient {
     // Both ends, because outside the table every bar reads as closed — a range before
     // 2001 empties exactly as silently as one after 2024.
     if (request.marketHoursOnly !== false) {
-      this.requireMarketHoursCover(easternClock.date(from), 'filter bars to market hours');
-      this.requireMarketHoursCover(easternClock.date(to), 'filter bars to market hours');
+      requireCoveredRange(from, to, 'filter bars to market hours');
     }
 
     const bars = await this.intradayBars(request.symbol, path, query, from, to);
-    return { bars: request.marketHoursOnly === false ? bars : bars.filter((bar) => marketState(bar.t) === 'open') };
+    return { bars: request.marketHoursOnly === false ? bars : regularHoursOnly(bars) };
   }
 
   async trades(request: TradesRequest): Promise<TradesResponse> {
@@ -299,7 +297,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
   }
 
   async historicalBars(request: HistoricalBarsRequest): Promise<HistoricalBarsResponse> {
-    this.requireMarketHoursCover(request.endDate, 'walk back through trading days');
+    requireMarketHoursCover(request.endDate, 'walk back through trading days');
 
     // The dates first, then the requests: one day's bars do not depend on another's, and
     // awaiting each in turn made a sixty-day backfill sixty round trips end to end.
@@ -367,7 +365,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
       // Before reading "no session" as "the market was shut": past the table's end every
       // real trading day looks like a holiday, and a backfill would record nothing and
       // report success.
-      this.requireMarketHoursCover(request.date, `tell whether the market traded, to fetch ${what}`);
+      requireMarketHoursCover(request.date, `tell whether the market traded, to fetch ${what}`);
       const session = marketHour(request.date);
       if (session === undefined) {
         return undefined;
@@ -387,7 +385,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
     if (fromDate !== toDate) {
       throw new InvalidRequestError(`A ${what} request must stay inside one Eastern day, got ${fromDate} to ${toDate}.`);
     }
-    this.requireMarketHoursCover(fromDate, `tell whether the market traded, to fetch ${what}`);
+    requireMarketHoursCover(fromDate, `tell whether the market traded, to fetch ${what}`);
     return { from: request.from, to, adjustForSplit: request.adjustForSplit, itemsPerRequest: pageSize(request.itemsPerRequest, what) };
   }
 
@@ -493,7 +491,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
   private currentSession(): CurrentSession | undefined {
     const now = Date.now();
     const today = easternClock.date(now);
-    this.requireMarketHoursCover(today, 'tell whether the market is open');
+    requireMarketHoursCover(today, 'tell whether the market is open');
 
     const session = marketHour(now);
     if (session === undefined || now < session.preMarketOpenAt || now > session.afterMarketCloseAt) {
@@ -509,23 +507,6 @@ export class PolygonRestClient implements PolygonStockRestClient {
    * every date reads as closed, so a caller that trusted it would be told the market is
    * shut rather than that we do not know — which is the failure this refuses to make.
    */
-  /**
-   * `InternalServiceError`, not `DataProviderError`: no provider has been contacted when
-   * this throws, and nothing a caller sends can fix it. It is our shipped table
-   * disagreeing with the dates we are asked about, which only refreshing the file clears
-   * — and a caller branching on a 502 would retry that forever.
-   */
-  private requireMarketHoursCover(date: string, what: string): void {
-    requireIsoDate(date, what);
-    if (date > marketHoursCoverage.to) {
-      throw new InternalServiceError(
-        `Cannot ${what} on ${date}: the market-hours table stops at ${marketHoursCoverage.to}. Refresh packages/marketdata/src/market-hours-data.json.`,
-      );
-    }
-    if (date < marketHoursCoverage.from) {
-      throw new InternalServiceError(`Cannot ${what} on ${date}: the market-hours table starts at ${marketHoursCoverage.from}.`);
-    }
-  }
 
   private async get<T>(path: string, query: Query): Promise<T> {
     return this.read<T>(path, await this.http.send({ method: 'GET', url: path, query: { ...query, apiKey: this.apiKey } }));
@@ -576,21 +557,6 @@ interface CurrentSession {
 interface SplitRatio {
   readonly ratio: number;
   readonly before: number;
-}
-
-/**
- * Checked before the table is consulted, because the coverage test compares strings: a
- * typo sorts after 2024-12-31 and would tell an operator to go and refresh a data file.
- * `easternClock.timestamp` would throw for these too, but a bare `Error` is a 500 and
- * this is a 400 — guideline 28.
- *
- * Real, not merely well-shaped. 2024-02-30 has no session in the table, so without this
- * `trades` would report a day that never existed as one the market was shut.
- */
-function requireIsoDate(value: string, what: string): void {
-  if (!isIsoDate(value)) {
-    throw new InvalidRequestError(`Cannot ${what}: expected a real ISO YYYY-MM-DD calendar date, got "${value}".`);
-  }
 }
 
 /** Polygon caps a page at 50,000 whatever is asked for, and a short page ends the walk. */
@@ -651,20 +617,4 @@ function adjust(price: number, timestamp: number, ratios: ReadonlyArray<SplitRat
 
 function defaultEnd(from: DateOrTimestamp): DateOrTimestamp {
   return typeof from === 'number' ? Date.now() : easternClock.date();
-}
-
-function startOfDay(value: DateOrTimestamp): number {
-  if (typeof value === 'number') {
-    return value;
-  }
-  requireIsoDate(value, 'read the start of the range');
-  return easternClock.timestamp(value, '00:00:00');
-}
-
-function endOfDay(value: DateOrTimestamp): number {
-  if (typeof value === 'number') {
-    return value;
-  }
-  requireIsoDate(value, 'read the end of the range');
-  return easternClock.timestamp(value, '23:59:59');
 }
