@@ -173,11 +173,6 @@ export interface PolygonStockRestClient extends StockRestClient {
   tickers(request: TickersRequest): Promise<TickersResponse>;
   tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse>;
   stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
-  /**
-   * A dividend is earned by holding at the close of the day *before* its ex-dividend
-   * date, which is why the corporate-action job looks up the position on the preceding
-   * day rather than on that one.
-   */
   dividends(request: DividendsRequest): Promise<DividendsResponse>;
   historicalBars(request: HistoricalBarsRequest): Promise<HistoricalBarsResponse>;
 }
