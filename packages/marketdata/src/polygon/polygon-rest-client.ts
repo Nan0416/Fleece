@@ -557,12 +557,15 @@ interface SplitRatio {
 /**
  * Checked before the table is consulted, because the coverage test compares strings: a
  * typo sorts after 2024-12-31 and would tell an operator to go and refresh a data file.
- * `easternClock.timestamp` would throw here too, but a bare `Error` is a 500 and this is
- * a 400 — guideline 28.
+ * `easternClock.timestamp` would throw for these too, but a bare `Error` is a 500 and
+ * this is a 400 — guideline 28.
+ *
+ * Real, not merely well-shaped. 2024-02-30 has no session in the table, so without this
+ * `trades` would report a day that never existed as one the market was shut.
  */
 function requireIsoDate(value: string, what: string): void {
   if (!isIsoDate(value)) {
-    throw new InvalidRequestError(`Cannot ${what}: expected an ISO YYYY-MM-DD date, got "${value}".`);
+    throw new InvalidRequestError(`Cannot ${what}: expected a real ISO YYYY-MM-DD calendar date, got "${value}".`);
   }
 }
 

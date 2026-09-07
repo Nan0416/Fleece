@@ -188,12 +188,25 @@ describe('bars', () => {
     await expect(send).rejects.toThrow(/the window is truncated/);
   });
 
+  it('refuses a date that is shaped right but does not exist', async () => {
+    // 2024-02-30 passed the shape check and has no session, so `trades` reported a day
+    // that never existed as one the market was shut, and `bars` reached the clock and
+    // threw a bare Error — a 500 for something a caller sent.
+    const http = new FakeHttpClient();
+    const polygon = client(http);
+
+    await expect(polygon.trades({ symbol: 'AAPL', date: '2024-02-30' })).rejects.toThrow(InvalidRequestError);
+    await expect(polygon.bars({ symbol: 'AAPL', from: '2024-02-30', to: SESSION, multiplier: 1, timespan: 'day' })).rejects.toThrow(InvalidRequestError);
+    await expect(polygon.historicalBars({ symbol: 'AAPL', endDate: '2023-02-29', days: 1 })).rejects.toThrow(/real ISO YYYY-MM-DD calendar date/);
+    expect(http.requests).toHaveLength(0);
+  });
+
   it('refuses a date that is not ISO, rather than blaming the market-hours table', async () => {
     const polygon = client(new FakeHttpClient());
     // A typo sorts after 2024-12-31, so an unchecked comparison sends an operator off to
     // refresh a data file.
     await expect(polygon.bars({ symbol: 'AAPL', from: 'yesterday', to: SESSION, multiplier: 1, timespan: 'day' })).rejects.toThrow(InvalidRequestError);
-    await expect(polygon.trades({ symbol: 'AAPL', date: 'yesterday' })).rejects.toThrow(/expected an ISO YYYY-MM-DD date/);
+    await expect(polygon.trades({ symbol: 'AAPL', date: 'yesterday' })).rejects.toThrow(/expected a real ISO YYYY-MM-DD calendar date/);
   });
 
   it('returns nothing for a symbol Polygon has no aggregates for', async () => {
