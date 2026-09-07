@@ -3,6 +3,8 @@ import type { HttpClient, HttpRequest, HttpResponse } from '@fleece/shared';
 export interface RecordedRequest {
   readonly url: string;
   readonly query: Record<string, string>;
+  /** Set only when a request overrides the client's own base URL. */
+  readonly baseUrl?: string;
 }
 
 /**
@@ -36,7 +38,7 @@ export class FakeHttpClient implements HttpClient {
         query[key] = String(value);
       }
     }
-    this.requests.push({ url: request.url, query });
+    this.requests.push({ url: request.url, query, baseUrl: request.baseUrl });
 
     if (this.bodies.length === 0) {
       throw new Error(`FakeHttpClient has no reply queued for ${request.url}`);

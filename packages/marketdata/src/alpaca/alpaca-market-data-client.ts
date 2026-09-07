@@ -25,9 +25,23 @@ const logger = LoggerFactory.getLogger('AlpacaMarketDataClient');
 
 const SOURCE = 'Alpaca';
 
-/** Market data and the trading API are different hosts; the calendar is on the latter. */
-const DEFAULT_DATA_BASE_URL = 'https://data.alpaca.markets';
-const DEFAULT_TRADING_BASE_URL = 'https://api.alpaca.markets';
+/**
+ * Market data and the trading API are different hosts, and only the second has a paper
+ * variant: `data.alpaca.markets` serves paper and live accounts alike, because what a key
+ * may read is a matter of its subscription rather than the account it belongs to. There
+ * is no paper endpoint to point market data at.
+ *
+ * The calendar is on the trading host, and that defaults to paper — the exchange calendar
+ * is identical on both, so the safer host costs nothing, and it means a paper key never
+ * reaches the live one. A live key needs `tradingBaseUrl` set to `ALPACA_TRADING_LIVE_URL`.
+ *
+ * Spelled out here rather than imported from `@fleece/alpaca`: that package is the trading
+ * API, and market data depending on it would point an arrow the dependency graph does not
+ * have.
+ */
+const ALPACA_DATA_URL = 'https://data.alpaca.markets';
+export const ALPACA_TRADING_PAPER_URL = 'https://paper-api.alpaca.markets';
+export const ALPACA_TRADING_LIVE_URL = 'https://api.alpaca.markets';
 
 const DEFAULT_TIMEOUT_MS = 40_000;
 
@@ -61,6 +75,7 @@ export interface AlpacaMarketDataClientProps {
    */
   readonly feed?: AlpacaFeed;
   readonly dataBaseUrl?: string;
+  /** Where the calendar is read from. Defaults to paper; a live key needs the live host. */
   readonly tradingBaseUrl?: string;
   readonly timeoutMs?: number;
   readonly httpClient?: HttpClient;
@@ -75,8 +90,8 @@ export class AlpacaMarketDataClient implements AlpacaStockRestClient {
   constructor(props: AlpacaMarketDataClientProps) {
     this.headers = { 'APCA-API-KEY-ID': props.apiKey, 'APCA-API-SECRET-KEY': props.secretKey };
     this.feed = props.feed ?? 'sip';
-    this.tradingBaseUrl = props.tradingBaseUrl ?? DEFAULT_TRADING_BASE_URL;
-    this.http = props.httpClient ?? new FetchHttpClient({ baseUrl: props.dataBaseUrl ?? DEFAULT_DATA_BASE_URL, timeoutMs: props.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+    this.tradingBaseUrl = props.tradingBaseUrl ?? ALPACA_TRADING_PAPER_URL;
+    this.http = props.httpClient ?? new FetchHttpClient({ baseUrl: props.dataBaseUrl ?? ALPACA_DATA_URL, timeoutMs: props.timeoutMs ?? DEFAULT_TIMEOUT_MS });
   }
 
   async minuteBars(request: MinuteBarsRequest): Promise<BarsResponse> {

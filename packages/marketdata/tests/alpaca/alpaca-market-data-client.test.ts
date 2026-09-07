@@ -1,6 +1,6 @@
 import { easternClock, InternalServiceError, InvalidRequestError } from '@fleece/shared';
 
-import { AlpacaMarketDataClient } from '../../src/alpaca';
+import { AlpacaMarketDataClient, ALPACA_TRADING_LIVE_URL, ALPACA_TRADING_PAPER_URL } from '../../src/alpaca';
 import { DataProviderError } from '../../src/equity-data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { FakeHttpClient } from '../fake-http-client';
@@ -250,8 +250,32 @@ describe('marketHours', () => {
     await client(http).marketHours({ fromDate: '2024-12-23', toDate: '2024-12-27' });
 
     expect(http.lastRequest.url).toBe('/v2/calendar');
+    expect(http.lastRequest.baseUrl).toBe(ALPACA_TRADING_PAPER_URL);
     expect(http.lastRequest.query['start']).toBe('2024-12-23');
     expect(http.lastRequest.query['end']).toBe('2024-12-27');
+  });
+
+  it('reads the calendar from paper by default, and from live when told to', async () => {
+    // The calendar is the same on both, so paper is the safer default: a paper key never
+    // reaches the live host, and a live key would be refused by paper.
+    const paper = new FakeHttpClient().reply(calendar());
+    await client(paper).marketHours({ fromDate: '2024-12-23', toDate: '2024-12-23' });
+    expect(paper.lastRequest.baseUrl).toBe(ALPACA_TRADING_PAPER_URL);
+
+    const live = new FakeHttpClient().reply(calendar());
+    await new AlpacaMarketDataClient({ apiKey: 'key', secretKey: 'secret', tradingBaseUrl: ALPACA_TRADING_LIVE_URL, httpClient: live }).marketHours({
+      fromDate: '2024-12-23',
+      toDate: '2024-12-23',
+    });
+    expect(live.lastRequest.baseUrl).toBe(ALPACA_TRADING_LIVE_URL);
+  });
+
+  it('reads market data from the one host there is, paper or not', async () => {
+    const http = new FakeHttpClient().reply(bars('AAPL'));
+    await client(http).dailyBars({ symbol: 'AAPL', from: SESSION, to: SESSION });
+
+    // No paper variant exists for market data; entitlement is the subscription's business.
+    expect(http.lastRequest.baseUrl).toBeUndefined();
   });
 
   it('refuses a range that is backwards or not a real date', async () => {
