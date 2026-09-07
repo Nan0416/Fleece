@@ -547,6 +547,27 @@ describe('stockSplits and dividends', () => {
     expect(http.requests[1].query['apiKey']).toBe('test-key');
   });
 
+  it.each([
+    ['null', null],
+    ['an empty string', ''],
+  ])('treats a next_url of %s as the end of the listing, not as a page to fetch', async (_label, nextUrl) => {
+    // Only `undefined` ended the walk, so a proxy answering `"next_url": null` fell
+    // through to `new URL(null)` — a bare TypeError out of the dividend job.
+    const http = new FakeHttpClient().reply({ ...(splits({ date: '2020-08-31', from: 1, to: 4 }) as object), next_url: nextUrl });
+    const { splits: result } = await client(http).stockSplits({ symbol: 'AAPL' });
+
+    expect(result).toHaveLength(1);
+    expect(http.requests).toHaveLength(1);
+  });
+
+  it('refuses a next_url that is not an absolute URL, rather than throwing a TypeError', async () => {
+    const http = new FakeHttpClient().reply({ ...(splits({ date: '2020-08-31', from: 1, to: 4 }) as object), next_url: '/v3/reference/splits?cursor=abc' });
+    const send = client(http).stockSplits({ symbol: 'AAPL' });
+
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/not an absolute URL/);
+  });
+
   it('reports no splits rather than throwing when Polygon omits results', async () => {
     const http = new FakeHttpClient().reply({ status: 'OK' });
     expect((await client(http).stockSplits({ symbol: 'BRK.A' })).splits).toStrictEqual([]);

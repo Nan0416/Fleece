@@ -455,14 +455,17 @@ export class PolygonRestClient implements PolygonStockRestClient {
    * `dividends({ symbol: 'AAPL' })` returns page two of every issuer's dividends and the
    * job credits an account cash it is not owed, with nothing raised anywhere.
    */
-  private async pageByCursor<R extends { readonly next_url?: string }>(path: string, query: Query): Promise<R[]> {
+  private async pageByCursor<R extends { readonly next_url?: string | null }>(path: string, query: Query): Promise<R[]> {
     const pages: R[] = [];
     let next: string | undefined = undefined;
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const body: R = next === undefined ? await this.get<R>(path, query) : await this.getUrl<R>(next);
       pages.push(body);
-      if (body.next_url === undefined) {
+      // Absent, null and empty all say the same thing: there is no next page. Only
+      // `undefined` ended the walk, so a proxy answering `"next_url": null` fell through
+      // to `new URL(null)` — a bare TypeError, and a 500 out of the dividend job.
+      if (body.next_url === undefined || body.next_url === null || body.next_url.length === 0) {
         return pages;
       }
       next = body.next_url;
@@ -524,7 +527,10 @@ export class PolygonRestClient implements PolygonStockRestClient {
 
   /** For a `next_url`, which is absolute and already carries every filter. */
   private async getUrl<T>(url: string): Promise<T> {
-    return this.read<T>(new URL(url).pathname, await this.http.send({ method: 'GET', url, baseUrl: '', query: { apiKey: this.apiKey } }));
+    // Parsed before the request, both for the path this logs under and because anything
+    // `new URL` cannot read is the provider having sent something broken — a relative
+    // path, a truncated string — rather than a network failure or a caller's mistake.
+    return this.read<T>(pathOf(url), await this.http.send({ method: 'GET', url, baseUrl: '', query: { apiKey: this.apiKey } }));
   }
 
   private read<T>(path: string, response: HttpResponse): T {
@@ -592,6 +598,14 @@ function pageSize(requested: number | undefined, what: string): number {
   // Not an error to ask for more: asking for 100,000 and believing the 50,000 that came
   // back was the whole day is the failure, and clamping is what makes the page short.
   return Math.min(Math.round(requested), MAX_PAGE);
+}
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    throw new DataProviderError(SOURCE, `sent a next_url that is not an absolute URL: ${JSON.stringify(url)}.`);
+  }
 }
 
 function isSnapshot(snapshot: PolygonLatestSnapshot | undefined): snapshot is PolygonLatestSnapshot {

@@ -46,7 +46,7 @@ export interface PolygonAggregateBar {
  */
 export interface PolygonQuotesResponseV3 {
   readonly request_id: string;
-  readonly next_url: string;
+  readonly next_url?: string | null;
   readonly results?: PolygonQuoteV3[] | null;
 }
 
@@ -69,7 +69,7 @@ export interface PolygonQuoteV3 {
 
 export interface PolygonTradesResponseV3 {
   readonly request_id: string;
-  readonly next_url: string;
+  readonly next_url?: string | null;
   readonly status: 'OK' | string;
   readonly results?: PolygonTradeV3[] | null;
 }
@@ -262,7 +262,7 @@ export interface PolygonStockSplitV3Response {
   readonly results: PolygonStockSplit[];
   readonly status: 'OK' | string;
   readonly request_id: string;
-  readonly next_url?: string;
+  readonly next_url?: string | null;
 }
 
 export type PolygonDividendType =
@@ -295,5 +295,5 @@ export interface PolygonDividendResponse {
   readonly results: PolygonDividend[];
   readonly status: 'OK' | string;
   readonly request_id: string;
-  readonly next_url?: string;
+  readonly next_url?: string | null;
 }
