@@ -247,4 +247,25 @@ describe('isIsoDate', () => {
     expect(isIsoDate('06/02/2026')).toBe(false);
     expect(isIsoDate('')).toBe(false);
   });
+
+  it('rejects a date that is shaped right but does not exist', () => {
+    // The shape alone was the whole check, and these all passed it — including as an
+    // ex-dividend date, which is part of a ledger row's primary key.
+    expect(isIsoDate('2024-02-30')).toBe(false);
+    expect(isIsoDate('2026-06-31')).toBe(false);
+    expect(isIsoDate('2026-13-01')).toBe(false);
+    expect(isIsoDate('2026-00-10')).toBe(false);
+    expect(isIsoDate('2026-01-00')).toBe(false);
+  });
+
+  it('knows which Februaries have a 29th', () => {
+    expect(isIsoDate('2024-02-29')).toBe(true);
+    expect(isIsoDate('2023-02-29')).toBe(false);
+    expect(isIsoDate('2000-02-29')).toBe(true);
+    expect(isIsoDate('1900-02-29')).toBe(false);
+  });
+
+  it('reads a year under 100 as itself, not as the twentieth century', () => {
+    expect(isIsoDate('0050-01-01')).toBe(true);
+  });
 });

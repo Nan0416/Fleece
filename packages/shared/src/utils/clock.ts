@@ -9,8 +9,25 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_FORMAT = 'YYYY-MM-DD';
 const TIME_FORMAT = 'HH:mm:ss';
 
+/**
+ * True for a date that exists, not merely one shaped like a date.
+ *
+ * The shape alone was the whole check, and 2024-02-30 passed it — which mattered because
+ * this is what the dividend service validates an ex-dividend date with before it becomes
+ * part of a ledger row's primary key, and what the Polygon client validates a request
+ * date with before deciding the market was shut that day.
+ */
 export function isIsoDate(value: string): boolean {
-  return ISO_DATE.test(value);
+  if (!ISO_DATE.test(value)) {
+    return false;
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  // A day past the end of its month rolls into the next one, so the round trip is what
+  // proves it existed. `setUTCFullYear` rather than `Date.UTC`, which reads a year under
+  // 100 as 19xx.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 export class Clock {
@@ -62,18 +79,16 @@ export class Clock {
   }
 
   private wallClock(date: string, time: string): moment.Moment {
-    if (!isIsoDate(date)) {
+    if (!ISO_DATE.test(date)) {
       throw new Error(`Expected an ISO YYYY-MM-DD date, got "${date}"`);
+    }
+    if (!isIsoDate(date)) {
+      throw new Error(`No such date: "${date}"`);
     }
     if (!HH_MM_SS.test(time)) {
       throw new Error(`Expected a 24-hour HH:mm:ss time, got "${time}"`);
     }
-    // Strict, so 2026-02-31 is refused rather than rolled over into March.
-    const parsed = moment.tz(`${date} ${time}`, `${DATE_FORMAT} ${TIME_FORMAT}`, true, this.timezone);
-    if (!parsed.isValid()) {
-      throw new Error(`No such date: "${date}"`);
-    }
-    return parsed;
+    return moment.tz(`${date} ${time}`, `${DATE_FORMAT} ${TIME_FORMAT}`, true, this.timezone);
   }
 }
 

@@ -188,12 +188,25 @@ describe('bars', () => {
     await expect(send).rejects.toThrow(/the window is truncated/);
   });
 
+  it('refuses a date that is shaped right but does not exist', async () => {
+    // 2024-02-30 passed the shape check and has no session, so `trades` reported a day
+    // that never existed as one the market was shut, and `bars` reached the clock and
+    // threw a bare Error — a 500 for something a caller sent.
+    const http = new FakeHttpClient();
+    const polygon = client(http);
+
+    await expect(polygon.trades({ symbol: 'AAPL', date: '2024-02-30' })).rejects.toThrow(InvalidRequestError);
+    await expect(polygon.bars({ symbol: 'AAPL', from: '2024-02-30', to: SESSION, multiplier: 1, timespan: 'day' })).rejects.toThrow(InvalidRequestError);
+    await expect(polygon.historicalBars({ symbol: 'AAPL', endDate: '2023-02-29', days: 1 })).rejects.toThrow(/real ISO YYYY-MM-DD calendar date/);
+    expect(http.requests).toHaveLength(0);
+  });
+
   it('refuses a date that is not ISO, rather than blaming the market-hours table', async () => {
     const polygon = client(new FakeHttpClient());
     // A typo sorts after 2024-12-31, so an unchecked comparison sends an operator off to
     // refresh a data file.
     await expect(polygon.bars({ symbol: 'AAPL', from: 'yesterday', to: SESSION, multiplier: 1, timespan: 'day' })).rejects.toThrow(InvalidRequestError);
-    await expect(polygon.trades({ symbol: 'AAPL', date: 'yesterday' })).rejects.toThrow(/expected an ISO YYYY-MM-DD date/);
+    await expect(polygon.trades({ symbol: 'AAPL', date: 'yesterday' })).rejects.toThrow(/expected a real ISO YYYY-MM-DD calendar date/);
   });
 
   it('returns nothing for a symbol Polygon has no aggregates for', async () => {
@@ -486,6 +499,12 @@ describe('tickerDetails', () => {
     expect((await client(new FakeHttpClient().reply({ status: 'OK' })).tickerDetails({ symbol: 'AAPL', date: '1990-01-01' })).details).toBeUndefined();
   });
 
+  it('refuses an impossible as-of date, which Polygon answers with a 400', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).tickerDetails({ symbol: 'AAPL', date: '2024-02-30' })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
+  });
+
   it('asks for the details as of a date when given one', async () => {
     const http = new FakeHttpClient().reply({ status: 'OK', results: null });
     await client(http).tickerDetails({ symbol: 'AAPL', date: SESSION });
@@ -513,6 +532,21 @@ describe('stockSplits and dividends', () => {
   it('reports no splits rather than throwing when Polygon omits results', async () => {
     const http = new FakeHttpClient().reply({ status: 'OK' });
     expect((await client(http).stockSplits({ symbol: 'BRK.A' })).splits).toStrictEqual([]);
+  });
+
+  it('refuses an impossible date rather than reporting a 400 from Polygon as a provider failure', async () => {
+    // These two endpoints consult no market-hours table, so nothing else here looks at
+    // their dates. Unchecked, 2024-02-30 goes to Polygon and the 400 comes back to the
+    // caller as a `DataProviderError` — the provider blamed for a typo.
+    const http = new FakeHttpClient();
+    const polygon = client(http);
+
+    await expect(polygon.dividends({ symbol: 'AAPL', dateType: 'ex_dividend_date', fromDate: '2024-02-30', toDate: '2024-12-31' })).rejects.toThrow(InvalidRequestError);
+    await expect(polygon.dividends({ symbol: 'AAPL', dateType: 'ex_dividend_date', fromDate: '2024-01-01', toDate: '2023-02-29' })).rejects.toThrow(
+      /real ISO YYYY-MM-DD calendar date/,
+    );
+    await expect(polygon.stockSplits({ symbol: 'AAPL', executionDate: '2026-13-01' })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
   });
 
   it('puts the date range on the field the caller chose', async () => {
