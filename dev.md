@@ -22,6 +22,7 @@ npm start               # migrates on the way up
 | `npm run build:all` | Type-check every package, `broker` included |
 | `npm test` | Unit tests; integration suites skip without a database |
 | `npm run test:ci` | What CI runs: no cache, and writes `jest-results.json` |
+| `npm run test:live` | The suites that call a real data provider; needs `POLYGON_KEY` in `.env` |
 | `npm run lint` / `lint:fix` | ESLint |
 | `npm run format:lint` / `format:fix` | Prettier |
 | `npm run clean` | Remove `dist/` and build info |
@@ -145,6 +146,7 @@ is the list worth watching.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `FLEECE_TEST_DATABASE_URL` | *(unset)* | A throwaway database. Unset skips `packages/core/tests/data-integration/` |
+| `POLYGON_KEY` | *(unset)* | Read from `.env` by `npm run test:live`. Those suites are not part of `npm test`, so an absent key costs nothing |
 
 ```bash
 createdb fleece_test

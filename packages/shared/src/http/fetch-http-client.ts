@@ -7,6 +7,18 @@ const logger = LoggerFactory.getLogger('FetchHttpClient');
 
 const JSON_CONTENT_TYPE = 'application/json';
 
+/**
+ * Query parameters whose value never appears in a log or an error message.
+ *
+ * Polygon carries its key in the query string, so a URL built here is a credential.
+ * Guideline 35 says never to log one — and the trap is that the obvious places are not
+ * the only ones: an error message becomes a log line the moment a caller catches it and
+ * logs the stack, which is exactly what the dividend job does with a per-symbol failure.
+ */
+const SECRET_QUERY_PARAMS: ReadonlySet<string> = new Set(['apikey', 'api_key', 'key', 'token', 'access_token', 'secret', 'client_secret', 'password', 'signature', 'sig']);
+
+const REDACTED = 'REDACTED';
+
 export interface FetchHttpClientProps {
   readonly baseUrl?: string;
   readonly timeoutMs?: number;
@@ -36,7 +48,7 @@ export class FetchHttpClient implements HttpClient {
       init.body = JSON.stringify(body);
     }
 
-    logger.debug(`${request.method} ${url}`);
+    logger.debug(`${request.method} ${redact(url)}`);
 
     let response: Response;
     let text: string;
@@ -44,13 +56,13 @@ export class FetchHttpClient implements HttpClient {
       response = await fetch(url, init);
       text = await response.text();
     } catch (err) {
-      throw unreachable(request.method, url, timeoutMs, err);
+      throw unreachable(request.method, redact(url), timeoutMs, err);
     }
 
     return {
       status: response.status,
       headers: collectHeaders(response.headers),
-      body: parseBody(response.headers.get('content-type'), text, request.method, url),
+      body: parseBody(response.headers.get('content-type'), text, request.method, redact(url)),
     };
   }
 
@@ -64,6 +76,23 @@ export class FetchHttpClient implements HttpClient {
 
 function hasBody(request: HttpRequest): request is HttpPostRequest | HttpPutRequest | HttpPatchRequest {
   return request.method === 'POST' || request.method === 'PUT' || request.method === 'PATCH';
+}
+
+/** Replaces the value of any credential-bearing query parameter, leaving the rest legible. */
+export function redact(url: string): string {
+  const start = url.indexOf('?');
+  if (start === -1) {
+    return url;
+  }
+  const params = new URLSearchParams(url.slice(start + 1));
+  let redacted = false;
+  for (const key of [...params.keys()]) {
+    if (SECRET_QUERY_PARAMS.has(key.toLowerCase())) {
+      params.set(key, REDACTED);
+      redacted = true;
+    }
+  }
+  return redacted ? `${url.slice(0, start)}?${params.toString()}` : url;
 }
 
 function stripTrailingSlash(url: string): string {
