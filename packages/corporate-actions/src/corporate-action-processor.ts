@@ -1,7 +1,7 @@
 import { DividendService, LedgerService } from '@fleece/core';
 import { AccountService } from '@fleece/core';
 import { MarketDataClient } from '@fleece/marketdata';
-import { easternDate, LoggerFactory, shiftIsoDate, Decimal } from '@fleece/shared';
+import { easternClock, LoggerFactory, Decimal } from '@fleece/shared';
 
 const logger = LoggerFactory.getLogger('CorporateActionProcessor');
 
@@ -63,11 +63,11 @@ export class CorporateActionProcessor {
   constructor(private readonly props: CorporateActionProcessorProps) {}
 
   async process(request: ProcessCorporateActionsRequest = {}): Promise<ProcessCorporateActionsResponse> {
-    const referenceDate = request.referenceDate ?? easternDate();
+    const referenceDate = request.referenceDate ?? easternClock.date();
     const window: DateWindow = {
       referenceDate,
-      from: shiftIsoDate(referenceDate, -LOOKBACK_DAYS),
-      to: shiftIsoDate(referenceDate, LOOKAHEAD_DAYS),
+      from: easternClock.shiftDate(referenceDate, -LOOKBACK_DAYS),
+      to: easternClock.shiftDate(referenceDate, LOOKAHEAD_DAYS),
     };
 
     logger.info(`Processing corporate actions for ${referenceDate}, looking at ex-dividend dates from ${window.from} to ${window.to}.`);
@@ -169,7 +169,7 @@ export class CorporateActionProcessor {
       }
 
       for (const position of positions) {
-        const date = easternDate(position.updatedAt);
+        const date = easternClock.date(position.updatedAt);
         // Descending by time, so the first entry seen for a date is that day's last —
         // its close.
         if (date !== seenDate) {

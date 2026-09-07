@@ -10,7 +10,7 @@ and most of what follows exists because of that.
 
 1. **One monorepo, nine packages.** `shared` (models, contracts, utilities), `core`
    (the ledger), `service` (the HTTP API), `client` (typed client), `alpaca` (broker),
-   `broker` (order placement), `marketdata` (Polygon), `tracking-service` (broker events
+   `broker` (order placement), `marketdata` (Polygon, market hours), `tracking-service` (broker events
    in, and claims about whose an order is), `corporate-actions` (the dividend job). A
    package exists when something needs to be installed separately — `core` is separate
    from `service` because the tracking service and the dividend job need the ledger

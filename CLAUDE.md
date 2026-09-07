@@ -10,13 +10,13 @@ An npm-workspaces monorepo, nine packages under `packages/`:
 
 | Package | What it is |
 | --- | --- |
-| `shared` | Domain models, API contracts, errors, utilities. Imports nothing of ours |
+| `shared` | Domain models, API contracts, errors, the HTTP client seam, utilities. Imports nothing of ours |
 | `core` | The ledger: account facade, data access, schema migrations. The only writer |
 | `service` | The HTTP API over the ledger |
 | `client` | Typed client for that API |
 | `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
 | `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price |
-| `marketdata` | Polygon client for splits and dividends |
+| `marketdata` | Polygon client for splits and dividends, and the US market-hours table |
 | `tracking-service` | Turns broker order events into ledger entries, and takes claims about whose an order is |
 | `corporate-actions` | Records the dividends each account is owed |
 

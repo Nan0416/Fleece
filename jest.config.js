@@ -33,6 +33,7 @@ module.exports = {
         tsconfig: {
           module: 'commonjs',
           target: 'es2022',
+          resolveJsonModule: true,
           lib: ['es2022'],
           esModuleInterop: true,
           strict: true,
