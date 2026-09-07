@@ -79,13 +79,23 @@ describe('trades and quotes', () => {
     expect(result.every((trade, index) => index === 0 || trade.t >= result[index - 1].t)).toBe(true);
   });
 
-  it('pages past its own limit to return the whole window', async () => {
-    // A page smaller than the window forces the timestamp cursor to be exercised.
-    const { trades: paged } = await polygon.trades({ symbol: 'AAPL', from, to, itemsPerRequest: 50 });
-    const { trades: single } = await polygon.trades({ symbol: 'AAPL', from, to });
+  it.each([1, 2, 50])('returns the same window with a page size of %i as in one page', async (itemsPerRequest) => {
+    // Real tick density is the point: a page smaller than the number of trades sharing
+    // the cursor's backoff window used to end the walk with an error, and 1 and 2 did it
+    // on any ordinary window. A second is narrow enough that even one-at-a-time stays
+    // inside the page cap.
+    const narrow = easternClock.timestamp(SESSION, '10:00:01');
+    const { trades: paged } = await polygon.trades({ symbol: 'AAPL', from, to: narrow, itemsPerRequest });
+    const { trades: single } = await polygon.trades({ symbol: 'AAPL', from, to: narrow });
 
     expect(paged).toHaveLength(single.length);
-    expect(paged[paged.length - 1].t).toBe(single[single.length - 1].t);
+    expect(paged.map((trade) => trade.t)).toStrictEqual(single.map((trade) => trade.t));
+  });
+
+  it('says the page size is the problem when a window needs more pages than it has', async () => {
+    // 642 trades at four a page is past the cap, and the message has to say why.
+    const send = polygon.trades({ symbol: 'AAPL', from, to, itemsPerRequest: 1 });
+    await expect(send).rejects.toThrow(/Ask for a larger itemsPerRequest/);
   });
 
   it('returns quotes with both sides of the book', async () => {
