@@ -1,6 +1,6 @@
 import { DividendService, LedgerService } from '@fleece/core';
 import { AccountService } from '@fleece/core';
-import { MarketDataClient } from '@fleece/marketdata';
+import { PolygonRestClient } from '@fleece/marketdata';
 import { easternClock, LoggerFactory, Decimal } from '@fleece/shared';
 
 const logger = LoggerFactory.getLogger('CorporateActionProcessor');
@@ -36,7 +36,7 @@ export interface CorporateActionProcessorProps {
   readonly accountService: AccountService;
   readonly ledgerService: LedgerService;
   readonly dividendService: DividendService;
-  readonly marketDataClient: MarketDataClient;
+  readonly marketDataClient: PolygonRestClient;
 }
 
 export interface ProcessCorporateActionsRequest {
@@ -97,7 +97,7 @@ export class CorporateActionProcessor {
   }
 
   private async processSymbol(accountId: string, symbol: string, window: DateWindow): Promise<number> {
-    const { dividends } = await this.props.marketDataClient.listDividends({
+    const { dividends } = await this.props.marketDataClient.dividends({
       symbol,
       dateType: 'ex_dividend_date',
       fromDate: window.from,

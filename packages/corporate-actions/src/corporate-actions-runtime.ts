@@ -1,5 +1,5 @@
 import { createLedgerServices, createPool } from '@fleece/core';
-import { PolygonClient } from '@fleece/marketdata';
+import { PolygonRestClient } from '@fleece/marketdata';
 import { LoggerFactory } from '@fleece/shared';
 import { CorporateActionProcessor, ProcessCorporateActionsResponse } from './corporate-action-processor';
 import { CorporateActionsConfig } from './corporate-actions-config';
@@ -26,7 +26,7 @@ export async function runCorporateActions(config: CorporateActionsConfig, option
       accountService,
       ledgerService,
       dividendService,
-      marketDataClient: new PolygonClient({ apiKey: config.polygonApiKey }),
+      marketDataClient: new PolygonRestClient({ apiKey: config.polygonApiKey }),
     });
     return await processor.process({ referenceDate: options.referenceDate });
   } finally {

@@ -1,5 +1,5 @@
 import { Account, Decimal, HistoricalPosition, Position } from '@fleece/shared';
-import { Dividend, ListDividendsInput, ListDividendsOutput, ListStockSplitsInput, ListStockSplitsOutput, MarketDataClient } from '@fleece/marketdata';
+import { Dividend, DividendsRequest, DividendsResponse, PolygonRestClient, StockSplitsResponse } from '@fleece/marketdata';
 
 export class FakeAccountService {
   constructor(private readonly accounts: ReadonlyArray<Account>) {}
@@ -44,26 +44,39 @@ export class FakeDividendService {
   }
 }
 
-export class FakeMarketDataClient implements MarketDataClient {
-  readonly dividendQueries: ListDividendsInput[] = [];
+/**
+ * Subclasses rather than reimplements: `PolygonRestClient` holds private state, and
+ * TypeScript compares a class with private members nominally, so nothing but a subclass
+ * is assignable. Overriding the two methods the job calls leaves the other ten inherited
+ * and unreachable — the API key is never used, because nothing here sends a request.
+ */
+export class FakeMarketDataClient extends PolygonRestClient {
+  readonly dividendQueries: DividendsRequest[] = [];
 
-  constructor(private readonly dividends: ReadonlyArray<Dividend> = []) {}
-
-  async listDividends(input: ListDividendsInput): Promise<ListDividendsOutput> {
-    this.dividendQueries.push(input);
-    return { dividends: this.dividends.filter((dividend) => dividend.ticker === input.symbol) };
+  constructor(private readonly declared: ReadonlyArray<Dividend> = []) {
+    super({ apiKey: 'not-used' });
   }
 
-  async listStockSplits(_input: ListStockSplitsInput): Promise<ListStockSplitsOutput> {
+  override async dividends(input: DividendsRequest): Promise<DividendsResponse> {
+    this.dividendQueries.push(input);
+    return { dividends: this.declared.filter((dividend) => dividend.ticker === input.symbol) };
+  }
+
+  override async stockSplits(): Promise<StockSplitsResponse> {
     return { splits: [] };
   }
 }
 
-export class ThrowingMarketDataClient implements MarketDataClient {
-  async listDividends(): Promise<ListDividendsOutput> {
+export class ThrowingMarketDataClient extends PolygonRestClient {
+  constructor() {
+    super({ apiKey: 'not-used' });
+  }
+
+  override async dividends(): Promise<DividendsResponse> {
     throw new Error('Polygon is having a day');
   }
-  async listStockSplits(): Promise<ListStockSplitsOutput> {
+
+  override async stockSplits(): Promise<StockSplitsResponse> {
     return { splits: [] };
   }
 }

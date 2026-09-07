@@ -1,5 +1,5 @@
 import { AccountService, DividendService, LedgerService } from '@fleece/core';
-import { MarketDataClient } from '@fleece/marketdata';
+import { PolygonRestClient } from '@fleece/marketdata';
 import { CorporateActionProcessor } from '../src/corporate-action-processor';
 import { account, dividend, FakeAccountService, FakeDividendService, FakeLedgerService, FakeMarketDataClient, historyEntry, position, ThrowingMarketDataClient } from './fakes';
 
@@ -16,7 +16,7 @@ function harness(options: {
   positions?: ReturnType<typeof position>[];
   history?: ReturnType<typeof historyEntry>[];
   dividends?: ReturnType<typeof dividend>[];
-  marketDataClient?: MarketDataClient;
+  marketDataClient?: PolygonRestClient;
 }): Harness {
   const dividendService = new FakeDividendService();
   const marketData = new FakeMarketDataClient(options.dividends ?? []);
