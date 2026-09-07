@@ -68,7 +68,10 @@ export interface TickersRequest {
   readonly type?: TickerType;
   readonly active?: boolean;
   readonly limit?: number;
+  /** Inclusive: the listing starts at this symbol. */
   readonly startTicker?: string;
+  /** Exclusive, and what a previous response's `resumeFrom` is for. */
+  readonly startAfter?: string;
 }
 
 export interface TickerDetailsRequest {
@@ -130,6 +133,12 @@ export interface SnapshotsResponse {
 
 export interface TickersResponse {
   readonly tickers: ReadonlyArray<Ticker>;
+  /**
+   * Set when the listing stopped before running out — the whole US equity universe is
+   * more pages than one call will walk. Pass it as the next request's `startAfter`.
+   * Absent means these are all of them.
+   */
+  readonly resumeFrom?: string;
 }
 
 /** `details` is absent for a symbol the provider does not know as of that date. */

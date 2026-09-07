@@ -28,15 +28,15 @@ export interface PolygonAggregateResponse {
 
 export interface PolygonAggregateBar {
   /** The trading volume of the symbol in the given time period. */
-  v: number;
+  readonly v: number;
   /* The volume weighted average price. */
-  vw: number;
-  o: number;
-  c: number;
-  h: number;
-  l: number;
+  readonly vw: number;
+  readonly o: number;
+  readonly c: number;
+  readonly h: number;
+  readonly l: number;
   /* The Unix Msec timestamp for the start of the aggregate window. */
-  t: number;
+  readonly t: number;
   /* The number of items in the aggregate window. */
   // n: number;
 }
@@ -178,20 +178,14 @@ export interface PolygonLatestSnapshotsResponse {
   readonly tickers: PolygonLatestSnapshot[];
 }
 
-// https://polygon.io/docs/stocks/get_v3_reference_tickers_types
-export type PolygonTickerType = 'CS' | 'ETF' | 'ETN' | 'PFD' | 'WARRANT' | 'RIGHT' | 'BOND' | 'SP' | 'ADRC' | 'ADRW' | 'ADRR' | 'FUND' | 'BASKET' | 'UNIT' | 'LT';
-
-// https://polygon.io/docs/stocks/get_v3_reference_exchanges
-export type PolygonExchangeType = 'XASE' | 'XBOS' | 'XCIS' | 'EDGA' | 'EDGX' | 'XCHI' | 'XNYS' | 'ARCX' | 'XNAS' | 'LTSE' | 'IEXG' | 'XPHL' | 'BATY' | 'BATS' | 'EPRL' | 'MEMX';
-
 // https://polygon.io/docs/get_v3_reference_tickers_anchor
 export interface PolygonTicker {
   readonly ticker: string;
   readonly name: string;
   readonly market: 'stocks' | 'crypto' | 'fx';
   readonly locale: 'us' | string;
-  readonly primary_exchange: PolygonExchangeType;
-  readonly type: PolygonTickerType;
+  readonly primary_exchange: Exchange;
+  readonly type: TickerType;
   readonly active: boolean;
   readonly currency_name: 'usd' | string;
   readonly cik: string;
@@ -296,8 +290,6 @@ export interface PolygonDividend {
   readonly record_date: string;
   readonly pay_date: string;
 }
-
-export type PolygonDividendQueryDateType = 'declaration_date' | 'ex_dividend_date' | 'record_date' | 'pay_date';
 
 export interface PolygonDividendResponse {
   readonly results: PolygonDividend[];

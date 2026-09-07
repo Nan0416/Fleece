@@ -1,4 +1,4 @@
-import { easternClock, InvalidRequestError } from '@fleece/shared';
+import { easternClock, InternalServiceError, InvalidRequestError } from '@fleece/shared';
 
 import { DataProviderError } from '../../src/equity-data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
@@ -58,6 +58,14 @@ describe('every request', () => {
 
     await expect(send).rejects.toThrow(DataProviderError);
     await expect(send).rejects.toThrow(/returned 502/);
+  });
+
+  it('escapes a symbol rather than letting it change the path or the query', async () => {
+    const http = new FakeHttpClient().reply({ status: 'OK', results: null });
+    await client(http).tickerDetails({ symbol: 'BRK B?limit=1' });
+
+    expect(http.lastRequest.url).toBe('/v3/reference/tickers/BRK%20B%3Flimit%3D1');
+    expect(http.lastRequest.query['limit']).toBeUndefined();
   });
 
   it('refuses a body that is not a JSON object', async () => {
@@ -146,8 +154,10 @@ describe('bars', () => {
     const http = new FakeHttpClient().reply(aggregates({ t: at(past, '10:30:00') }));
     const send = client(http).bars({ symbol: 'AAPL', from: past, to: past, multiplier: 1, timespan: 'minute' });
 
-    await expect(send).rejects.toThrow(DataProviderError);
+    // Ours, not Polygon's: nothing was asked of them, and no caller can fix it.
+    await expect(send).rejects.toThrow(InternalServiceError);
     await expect(send).rejects.toThrow(/market-hours table stops at 2024-12-31/);
+    expect(http.requests).toHaveLength(0);
   });
 
   it('refuses a range that ends before it starts', async () => {
@@ -162,7 +172,28 @@ describe('bars', () => {
     const http = new FakeHttpClient().reply(aggregates({ t: Date.parse('1999-01-04T15:00:00Z') }));
     const send = client(http).bars({ symbol: 'AAPL', from: '1999-01-04', to: '1999-01-05', multiplier: 1, timespan: 'minute' });
 
+    await expect(send).rejects.toThrow(/market-hours table starts at 2001-01-02/);
+    // Refused before the requests, not after paying for them.
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('refuses a window Polygon truncated instead of reporting it as the whole of one', async () => {
+    // Aggregates carry no cursor, so a page that comes back exactly full is a cut-off
+    // window that reads like a symbol which stopped trading.
+    const full = Array.from({ length: 50_000 }, (_, index) => ({ t: at(SESSION, '00:00:00') + index }));
+    const http = new FakeHttpClient().reply(aggregates(...full));
+    const send = client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' });
+
     await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/the window is truncated/);
+  });
+
+  it('refuses a date that is not ISO, rather than blaming the market-hours table', async () => {
+    const polygon = client(new FakeHttpClient());
+    // A typo sorts after 2024-12-31, so an unchecked comparison sends an operator off to
+    // refresh a data file.
+    await expect(polygon.bars({ symbol: 'AAPL', from: 'yesterday', to: SESSION, multiplier: 1, timespan: 'day' })).rejects.toThrow(InvalidRequestError);
+    await expect(polygon.trades({ symbol: 'AAPL', date: 'yesterday' })).rejects.toThrow(/expected an ISO YYYY-MM-DD date/);
   });
 
   it('returns nothing for a symbol Polygon has no aggregates for', async () => {
@@ -216,19 +247,24 @@ describe('trades', () => {
 
   it('drops the trades the backoff re-reads rather than returning them twice', async () => {
     const boundary = { ms: at(SESSION, '10:00:01'), price: 2 };
-    const http = new FakeHttpClient().reply(trades({ ms: at(SESSION, '10:00:00'), price: 1 }, boundary), trades(boundary, { ms: at(SESSION, '10:00:02'), price: 3 }));
+    const http = new FakeHttpClient().reply(
+      trades({ ms: at(SESSION, '10:00:00'), price: 1 }, boundary),
+      trades(boundary, { ms: at(SESSION, '10:00:02'), price: 3 }),
+      trades({ ms: at(SESSION, '10:00:03'), price: 4 }),
+    );
 
     const { trades: result } = await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
-    expect(result.map((trade) => trade.p)).toStrictEqual([1, 2, 3]);
+    expect(result.map((trade) => trade.p)).toStrictEqual([1, 2, 3, 4]);
   });
 
-  it('stops when a page is nothing but trades it has already read', async () => {
-    const repeated = trades({ ms: at(SESSION, '10:00:00'), price: 1 }, { ms: at(SESSION, '10:00:01'), price: 2 });
-    const http = new FakeHttpClient().reply(repeated);
+  it('refuses a window where paging cannot advance, rather than returning half of it', async () => {
+    // Every page identical: the cursor is stuck, and what we hold is part of a session
+    // a caller could not tell from the whole of one.
+    const http = new FakeHttpClient().reply(trades({ ms: at(SESSION, '10:00:00'), price: 1 }, { ms: at(SESSION, '10:00:01'), price: 2 }));
+    const send = client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
 
-    const { trades: result } = await client(http).trades({ symbol: 'AAPL', date: SESSION, itemsPerRequest: 2 });
-    expect(result).toHaveLength(2);
-    expect(http.requests).toHaveLength(2);
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/paging cannot advance past/);
   });
 
   it('refuses a window that crosses an Eastern day boundary', async () => {
@@ -306,9 +342,16 @@ describe('quotes', () => {
 
 describe('snapshot', () => {
   it('says the market-hours table needs refreshing rather than reporting the market shut', async () => {
-    // Today is past the table's coverage, which is the state this repo is in.
-    const send = client(new FakeHttpClient()).snapshot({ symbol: 'AAPL' });
-    await expect(send).rejects.toThrow(/market-hours table stops at 2024-12-31/);
+    // Frozen past the table rather than trusting that today is: refreshing the data file
+    // is what the error tells an operator to do, and that must not turn this red.
+    jest.spyOn(Date, 'now').mockReturnValue(easternClock.timestamp(easternClock.shiftDate(marketHoursCoverage.to, 30), '10:00:00'));
+    try {
+      const http = new FakeHttpClient();
+      await expect(client(http).snapshot({ symbol: 'AAPL' })).rejects.toThrow(/market-hours table stops at 2024-12-31/);
+      expect(http.requests).toHaveLength(0);
+    } finally {
+      jest.restoreAllMocks();
+    }
   });
 
   it('asks for nothing when given no symbols', async () => {
@@ -351,6 +394,16 @@ describe('snapshot', () => {
       expect((await client(http).snapshot({ symbol: 'NOSUCH' })).snapshot).toBeUndefined();
     });
 
+    it('refuses a payload whose timestamp is missing rather than throwing a TypeError', async () => {
+      // `BigInt(undefined)` throws bare; the sections are all present here, so only the
+      // timestamp check catches it.
+      const withoutUpdated = { ...(snapshot('AAPL', during) as Record<string, unknown>) };
+      delete withoutUpdated['updated'];
+      const http = new FakeHttpClient().reply({ status: 'OK', ticker: withoutUpdated });
+
+      await expect(client(http).snapshot({ symbol: 'AAPL' })).rejects.toThrow(DataProviderError);
+    });
+
     it('has no snapshot for a name that has not traded, whose sections are missing', async () => {
       const http = new FakeHttpClient().reply({ status: 'OK', ticker: { ticker: 'THIN', updated: during * 1_000_000 } });
       expect((await client(http).snapshot({ symbol: 'THIN' })).snapshot).toBeUndefined();
@@ -385,12 +438,34 @@ describe('tickers', () => {
     expect(http.requests[1].query['limit']).toBe('500');
   });
 
+  it('says where to resume when it stops before the listing runs out', async () => {
+    // There are more US tickers than one call walks, so this is an ordinary outcome —
+    // and throwing would discard every page already paid for.
+    // A full page at the limit: the caller has what it asked for, and there is more.
+    const http = new FakeHttpClient().reply(page(1000, 'A'));
+    const { tickers, resumeFrom } = await client(http).tickers({ limit: 1000 });
+
+    expect(tickers).toHaveLength(1000);
+    expect(resumeFrom).toBe('A999');
+    expect(http.requests).toHaveLength(1);
+  });
+
+  it('resumes exactly after the ticker a previous call stopped at', async () => {
+    const http = new FakeHttpClient().reply(page(2, 'B'));
+    await client(http).tickers({ startAfter: 'A999', limit: 2 });
+
+    expect(http.requests[0].query['ticker.gt']).toBe('A999');
+    expect(http.requests[0].query['ticker.gte']).toBeUndefined();
+  });
+
   it('stops as soon as a page comes back short', async () => {
     const http = new FakeHttpClient().reply(page(3, 'A'));
-    const { tickers: result } = await client(http).tickers({});
+    const { tickers: result, resumeFrom } = await client(http).tickers({});
 
     expect(result.map((ticker) => ticker.ticker)).toStrictEqual(['A0', 'A1', 'A2']);
     expect(http.requests).toHaveLength(1);
+    // A short page is the end of the listing, so there is nothing to resume from.
+    expect(resumeFrom).toBeUndefined();
   });
 
   it('starts from a given ticker and stops at the limit', async () => {
@@ -421,19 +496,18 @@ describe('tickerDetails', () => {
 });
 
 describe('stockSplits and dividends', () => {
-  it('follows next_url by its cursor parameter, whatever its position', async () => {
-    const withCursor = { ...(splits({ date: '2020-08-31', from: 1, to: 4 }) as object), next_url: 'https://api.polygon.io/v3/reference/splits?order=asc&cursor=abc123&limit=500' };
+  it('follows next_url as given, keeping every filter Polygon put in it', async () => {
+    const nextUrl = 'https://api.polygon.io/v3/reference/splits?ticker=AAPL&order=asc&cursor=abc123&limit=500';
+    const withCursor = { ...(splits({ date: '2020-08-31', from: 1, to: 4 }) as object), next_url: nextUrl };
     const http = new FakeHttpClient().reply(withCursor, splits({ date: '2014-06-09', from: 1, to: 7 }));
 
     const { splits: result } = await client(http).stockSplits({ symbol: 'AAPL' });
 
     expect(result.map((split) => split.executionDate)).toStrictEqual(['2020-08-31', '2014-06-09']);
-    expect(http.requests[1].query['cursor']).toBe('abc123');
-  });
-
-  it('refuses a next_url with no cursor rather than looping', async () => {
-    const http = new FakeHttpClient().reply({ status: 'OK', results: [], next_url: 'https://api.polygon.io/v3/reference/splits?order=asc' });
-    await expect(client(http).stockSplits({ symbol: 'AAPL' })).rejects.toThrow(/next_url with no cursor/);
+    // The whole URL, not a request rebuilt from its cursor: rebuilding drops `ticker`,
+    // and a page of every issuer's splits would look exactly like this symbol's.
+    expect(http.requests[1].url).toBe(nextUrl);
+    expect(http.requests[1].query['apiKey']).toBe('test-key');
   });
 
   it('reports no splits rather than throwing when Polygon omits results', async () => {

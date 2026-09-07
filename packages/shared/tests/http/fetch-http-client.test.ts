@@ -221,6 +221,45 @@ describe('FetchHttpClient', () => {
       await expect(send).rejects.toThrow(ServiceUnreachableError);
     });
 
+    it('keeps a credential in the query out of the error it throws', async () => {
+      // Polygon carries its key in the query string, and an error message becomes a log
+      // line the moment a caller catches it and logs the stack — which the dividend job
+      // does for every per-symbol failure.
+      const closed = await startTestServer();
+      const baseUrl = closed.baseUrl;
+      await closed.close();
+      const send = new FetchHttpClient({ baseUrl }).send({ method: 'GET', url: '/v3/reference/dividends', query: { ticker: 'AAPL', apiKey: 'sk-live-secret' } });
+
+      await expect(send).rejects.toThrow(/apiKey=REDACTED/);
+      await expect(send).rejects.not.toThrow(/sk-live-secret/);
+      // The rest of the query stays legible, or the message says nothing useful.
+      await expect(send).rejects.toThrow(/ticker=AAPL/);
+    });
+
+    it('redacts a credential under any of its usual names, and a timeout message too', async () => {
+      server.reply({ status: 200, headers: JSON_REPLY, body: '{}', delayMs: 2_000 });
+      const send = new FetchHttpClient({ baseUrl: server.baseUrl, timeoutMs: 60 }).send({
+        method: 'GET',
+        url: '/v1/quote',
+        query: { api_key: 'one', token: 'two', access_token: 'three', client_secret: 'four', signature: 'five', symbol: 'AAPL' },
+      });
+
+      await expect(send).rejects.toThrow(/timed out after 60ms/);
+      for (const secret of ['one', 'two', 'three', 'four', 'five']) {
+        await expect(send).rejects.not.toThrow(new RegExp(`=${secret}(&|$)`));
+      }
+      await expect(send).rejects.toThrow(/symbol=AAPL/);
+    });
+
+    it('leaves a URL with no credential alone', async () => {
+      const closed = await startTestServer();
+      const baseUrl = closed.baseUrl;
+      await closed.close();
+      const send = new FetchHttpClient({ baseUrl }).send({ method: 'GET', url: '/v1/quote', query: { symbol: 'AAPL' } });
+
+      await expect(send).rejects.toThrow(/\/v1\/quote\?symbol=AAPL/);
+    });
+
     it('names the method and URL, so a failure says which call it was', async () => {
       const send = new FetchHttpClient({ baseUrl: 'http://127.0.0.1:1' }).send({ method: 'DELETE', url: '/v2/orders/9' });
 

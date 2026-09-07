@@ -1,4 +1,4 @@
-import { FetchHttpClient, InvalidRequestError, LoggerFactory, easternClock, type HttpClient, type Query } from '@fleece/shared';
+import { FetchHttpClient, InternalServiceError, InvalidRequestError, LoggerFactory, easternClock, isIsoDate, type HttpClient, type HttpResponse, type Query } from '@fleece/shared';
 
 import {
   DataProviderError,
@@ -130,7 +130,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
       throw new InvalidRequestError(`${request.multiplier} is not a valid minute multiplier. Use 1, 5 or 30.`);
     }
 
-    const path = `/v2/aggs/ticker/${request.symbol}/range/${request.multiplier}/${request.timespan}`;
+    const path = `/v2/aggs/ticker/${encodeURIComponent(request.symbol)}/range/${request.multiplier}/${request.timespan}`;
     // Polygon's documented parameter. The legacy client sent the older `unadjusted`,
     // whose sense is inverted; both are still honoured and agree.
     const query: Query = { adjusted: request.adjustForSplit === true, sort: 'asc', limit: MAX_PAGE };
@@ -147,15 +147,17 @@ export class PolygonRestClient implements PolygonStockRestClient {
       return { bars: await this.aggregates(request.symbol, `${path}/${from}/${to}`, query) };
     }
 
-    const bars = await this.intradayBars(request.symbol, path, query, from, to);
-    if (request.marketHoursOnly === false) {
-      return { bars };
+    // Before the requests rather than after them: a two-decade minute range is 180 calls
+    // against a paid API, and refusing it afterwards spends every one of them first.
+    // Both ends, because outside the table every bar reads as closed — a range before
+    // 2001 empties exactly as silently as one after 2024.
+    if (request.marketHoursOnly !== false) {
+      this.requireMarketHoursCover(easternClock.date(from), 'filter bars to market hours');
+      this.requireMarketHoursCover(easternClock.date(to), 'filter bars to market hours');
     }
-    // Both ends: outside the table every bar reads as closed, so an unguarded filter
-    // returns nothing for a range before 2001 exactly as it does for one after 2024.
-    this.requireMarketHoursCover(easternClock.date(from), 'filter bars to market hours');
-    this.requireMarketHoursCover(easternClock.date(to), 'filter bars to market hours');
-    return { bars: bars.filter((bar) => marketState(bar.t) === 'open') };
+
+    const bars = await this.intradayBars(request.symbol, path, query, from, to);
+    return { bars: request.marketHoursOnly === false ? bars : bars.filter((bar) => marketState(bar.t) === 'open') };
   }
 
   async trades(request: TradesRequest): Promise<TradesResponse> {
@@ -166,7 +168,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
     // Started together: the split table depends on the symbol, not on the trades, and
     // waiting for every page before asking for it serialises two independent calls.
     const [raw, ratios] = await Promise.all([
-      this.pageByTimestamp<PolygonTradeV3, PolygonTradesResponseV3>(`/v3/trades/${request.symbol}`, window),
+      this.pageByTimestamp<PolygonTradeV3, PolygonTradesResponseV3>(`/v3/trades/${encodeURIComponent(request.symbol)}`, window),
       window.adjustForSplit === true ? this.splitRatios(request.symbol) : Promise.resolve([]),
     ]);
     const trades = raw.map((trade) => normalizeTrade(request.symbol, trade));
@@ -179,7 +181,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
       return { quotes: [] };
     }
     const [raw, ratios] = await Promise.all([
-      this.pageByTimestamp<PolygonQuoteV3, PolygonQuotesResponseV3>(`/v3/quotes/${request.symbol}`, window),
+      this.pageByTimestamp<PolygonQuoteV3, PolygonQuotesResponseV3>(`/v3/quotes/${encodeURIComponent(request.symbol)}`, window),
       window.adjustForSplit === true ? this.splitRatios(request.symbol) : Promise.resolve([]),
     ]);
     const quotes = raw.map((quote) => normalizeQuote(request.symbol, quote));
@@ -196,7 +198,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
     if (session === undefined) {
       return {};
     }
-    const body = await this.get<PolygonLatestSnapshotResponse>(`/v2/snapshot/locale/us/markets/stocks/tickers/${request.symbol}`, {});
+    const body = await this.get<PolygonLatestSnapshotResponse>(`/v2/snapshot/locale/us/markets/stocks/tickers/${encodeURIComponent(request.symbol)}`, {});
     // A symbol with no session data comes back 200 with no `ticker` at all.
     if (!isSnapshot(body.ticker)) {
       return {};
@@ -216,15 +218,21 @@ export class PolygonRestClient implements PolygonStockRestClient {
     return { snapshots: (body.tickers ?? []).filter((ticker) => isSnapshot(ticker)).map((ticker) => normalizeSnapshot(ticker, session.previousSessionStart)) };
   }
 
+  /**
+   * Stops at `limit`, at a short page, or at `MAX_PAGES` — and says which by whether the
+   * response carries a `resumeFrom`. There are more US tickers than one call can walk, so
+   * running out of pages is an ordinary outcome here rather than a failure, and throwing
+   * would discard every page already paid for.
+   */
   async tickers(request: TickersRequest): Promise<TickersResponse> {
     const results: Ticker[] = [];
-    let after: string | undefined = undefined;
+    let after: string | undefined = request.startAfter;
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const remaining = request.limit === undefined ? REFERENCE_PAGE : request.limit - results.length;
       const limit = Math.min(REFERENCE_PAGE, remaining);
       if (limit <= 0) {
-        return { tickers: results };
+        return { tickers: results, resumeFrom: after };
       }
 
       // Paged by ticker rather than by cursor, so a caller can resume from a known symbol.
@@ -242,17 +250,18 @@ export class PolygonRestClient implements PolygonStockRestClient {
       const body = await this.get<PolygonTickersResponse>('/v3/reference/tickers', query);
       const page_ = (body.results ?? []).map((ticker) => normalizeTicker(ticker));
       results.push(...page_);
+      after = page_.length === 0 ? after : page_[page_.length - 1].ticker;
       if (page_.length < limit) {
+        // A short page is the end of the listing, not a place to resume from.
         return { tickers: results };
       }
-      after = page_[page_.length - 1].ticker;
     }
 
-    throw new DataProviderError(SOURCE, `refusing to page past ${MAX_PAGES} pages of tickers.`);
+    return { tickers: results, resumeFrom: after };
   }
 
   async tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse> {
-    const body = await this.get<PolygonTickerDetailsV3Response>(`/v3/reference/tickers/${request.symbol}`, { date: request.date });
+    const body = await this.get<PolygonTickerDetailsV3Response>(`/v3/reference/tickers/${encodeURIComponent(request.symbol)}`, { date: request.date });
     // Asked for a date before the ticker existed, Polygon omits `results` rather than
     // sending null, so `=== null` would hand the normaliser an undefined to walk.
     return body.results === null || body.results === undefined ? {} : { details: normalizeTickerDetails(body.results) };
@@ -286,9 +295,8 @@ export class PolygonRestClient implements PolygonStockRestClient {
     for (let date = request.endDate; dates.length < request.days; date = easternClock.shiftDate(date, -1)) {
       if (date < marketHoursCoverage.from) {
         // The legacy loop had no floor and spun forever once it ran off the table.
-        throw new DataProviderError(
-          SOURCE,
-          `only ${dates.length} of the ${request.days} trading days before ${request.endDate} are in the market-hours table, which starts at ${marketHoursCoverage.from}.`,
+        throw new InternalServiceError(
+          `Only ${dates.length} of the ${request.days} trading days before ${request.endDate} are in the market-hours table, which starts at ${marketHoursCoverage.from}. Refresh packages/marketdata/src/market-hours-data.json.`,
         );
       }
       if (marketHour(date) !== undefined) {
@@ -327,7 +335,14 @@ export class PolygonRestClient implements PolygonStockRestClient {
 
   private async aggregates(symbol: string, path: string, query: Query): Promise<Bar[]> {
     const body = await this.get<PolygonAggregateResponse>(path, query);
-    return (body.results ?? []).map((bar) => normalizeAggregateBar(symbol, bar));
+    const results = body.results ?? [];
+    // Aggregates have no cursor, so a page that comes back exactly full is a window
+    // Polygon truncated — indistinguishable, in the returned array, from a symbol that
+    // stopped trading there.
+    if (results.length >= MAX_PAGE) {
+      throw new DataProviderError(SOURCE, `returned the maximum ${MAX_PAGE} aggregates for ${path}, so the window is truncated. Ask for a shorter range.`);
+    }
+    return results.map((bar) => normalizeAggregateBar(symbol, bar));
   }
 
   /**
@@ -402,9 +417,14 @@ export class PolygonRestClient implements PolygonStockRestClient {
         return results;
       }
       if (added === 0) {
-        // A whole page of what we already have: the backoff cannot get past this
-        // timestamp, so stopping is the only thing that terminates.
-        return results;
+        // A whole page of what we already have means the cursor cannot get past this
+        // timestamp. Returning what we hold would be a partial session a caller could
+        // not tell from a complete one, which is the failure every other stop in this
+        // class refuses to make.
+        throw new DataProviderError(
+          SOURCE,
+          `returned ${entries.length} entries for ${path} that are all inside the previous page, so paging cannot advance past ${entries[entries.length - 1].sip_timestamp}. Ask for a shorter window.`,
+        );
       }
       from = BigInt(entries[entries.length - 1].sip_timestamp) - CURSOR_BACKOFF_NS;
     }
@@ -413,25 +433,27 @@ export class PolygonRestClient implements PolygonStockRestClient {
   }
 
   /**
-   * Follows `next_url`, which comes back as a full URL carrying the original filters but
-   * not the API key. The legacy client split it on `cursor=` and rebuilt the request by
-   * hand, which dropped every other filter and broke if a parameter sorted after it.
+   * Follows `next_url` as the absolute URL Polygon documents it to be, carrying only the
+   * API key, which it omits.
+   *
+   * The legacy client split the string on `cursor=` and rebuilt the request from the
+   * cursor alone. Extracting the cursor properly would fix the parsing and keep the
+   * rebuilding — and the rebuilt request still carries no `ticker`. Polygon's cursor
+   * happens to re-encode the filters today, so that works; the day it does not,
+   * `dividends({ symbol: 'AAPL' })` returns page two of every issuer's dividends and the
+   * job credits an account cash it is not owed, with nothing raised anywhere.
    */
   private async pageByCursor<R extends { readonly next_url?: string }>(path: string, query: Query): Promise<R[]> {
     const pages: R[] = [];
-    let cursor: string | undefined = undefined;
+    let next: string | undefined = undefined;
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
-      const body: R = cursor === undefined ? await this.get<R>(path, query) : await this.get<R>(path, { cursor });
+      const body: R = next === undefined ? await this.get<R>(path, query) : await this.getUrl<R>(next);
       pages.push(body);
       if (body.next_url === undefined) {
         return pages;
       }
-      const next = new URL(body.next_url).searchParams.get('cursor');
-      if (next === null) {
-        throw new DataProviderError(SOURCE, `paged ${path} to a next_url with no cursor.`);
-      }
-      cursor = next;
+      next = body.next_url;
     }
 
     throw new DataProviderError(SOURCE, `refusing to page past ${MAX_PAGES} pages of ${path}.`);
@@ -466,18 +488,34 @@ export class PolygonRestClient implements PolygonStockRestClient {
    * every date reads as closed, so a caller that trusted it would be told the market is
    * shut rather than that we do not know — which is the failure this refuses to make.
    */
+  /**
+   * `InternalServiceError`, not `DataProviderError`: no provider has been contacted when
+   * this throws, and nothing a caller sends can fix it. It is our shipped table
+   * disagreeing with the dates we are asked about, which only refreshing the file clears
+   * — and a caller branching on a 502 would retry that forever.
+   */
   private requireMarketHoursCover(date: string, what: string): void {
+    requireIsoDate(date, what);
     if (date > marketHoursCoverage.to) {
-      throw new DataProviderError(SOURCE, `cannot ${what} on ${date}: the market-hours table stops at ${marketHoursCoverage.to} and needs refreshing.`);
+      throw new InternalServiceError(
+        `Cannot ${what} on ${date}: the market-hours table stops at ${marketHoursCoverage.to}. Refresh packages/marketdata/src/market-hours-data.json.`,
+      );
     }
     if (date < marketHoursCoverage.from) {
-      throw new DataProviderError(SOURCE, `cannot ${what} on ${date}: the market-hours table starts at ${marketHoursCoverage.from}.`);
+      throw new InternalServiceError(`Cannot ${what} on ${date}: the market-hours table starts at ${marketHoursCoverage.from}.`);
     }
   }
 
   private async get<T>(path: string, query: Query): Promise<T> {
-    const response = await this.http.send({ method: 'GET', url: path, query: { ...query, apiKey: this.apiKey } });
+    return this.read<T>(path, await this.http.send({ method: 'GET', url: path, query: { ...query, apiKey: this.apiKey } }));
+  }
 
+  /** For a `next_url`, which is absolute and already carries every filter. */
+  private async getUrl<T>(url: string): Promise<T> {
+    return this.read<T>(new URL(url).pathname, await this.http.send({ method: 'GET', url, baseUrl: '', query: { apiKey: this.apiKey } }));
+  }
+
+  private read<T>(path: string, response: HttpResponse): T {
     if (response.status !== 200) {
       // The key rides in the query string, so neither the URL nor the query reaches a log.
       // `?? ''` because an empty body parses to undefined, and `JSON.stringify(undefined)`
@@ -516,6 +554,18 @@ interface SplitRatio {
   readonly before: number;
 }
 
+/**
+ * Checked before the table is consulted, because the coverage test compares strings: a
+ * typo sorts after 2024-12-31 and would tell an operator to go and refresh a data file.
+ * `easternClock.timestamp` would throw here too, but a bare `Error` is a 500 and this is
+ * a 400 — guideline 28.
+ */
+function requireIsoDate(value: string, what: string): void {
+  if (!isIsoDate(value)) {
+    throw new InvalidRequestError(`Cannot ${what}: expected an ISO YYYY-MM-DD date, got "${value}".`);
+  }
+}
+
 /** Polygon caps a page at 50,000 whatever is asked for, and a short page ends the walk. */
 function pageSize(requested: number | undefined, what: string): number {
   if (requested === undefined) {
@@ -549,9 +599,17 @@ function defaultEnd(from: DateOrTimestamp): DateOrTimestamp {
 }
 
 function startOfDay(value: DateOrTimestamp): number {
-  return typeof value === 'number' ? value : easternClock.timestamp(value, '00:00:00');
+  if (typeof value === 'number') {
+    return value;
+  }
+  requireIsoDate(value, 'read the start of the range');
+  return easternClock.timestamp(value, '00:00:00');
 }
 
 function endOfDay(value: DateOrTimestamp): number {
-  return typeof value === 'number' ? value : easternClock.timestamp(value, '23:59:59');
+  if (typeof value === 'number') {
+    return value;
+  }
+  requireIsoDate(value, 'read the end of the range');
+  return easternClock.timestamp(value, '23:59:59');
 }

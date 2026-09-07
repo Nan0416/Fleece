@@ -1,11 +1,22 @@
 import { easternClock, LoggerFactory } from '@fleece/shared';
 
-import type { Bar, Dividend, DividendFrequency, DividendType, LatestSnapshot, Quote, StockSplit, Ticker, TickerDetails, Trade } from '../equity-data-models';
+import {
+  DataProviderError,
+  type Bar,
+  type Dividend,
+  type DividendFrequency,
+  type DividendType,
+  type LatestSnapshot,
+  type Quote,
+  type StockSplit,
+  type Ticker,
+  type TickerDetails,
+  type Trade,
+} from '../equity-data-models';
 
 import type {
   PolygonAggregateBar,
   PolygonDividend,
-  PolygonDividendFrequency,
   PolygonLatestSnapshot,
   PolygonQuoteV3,
   PolygonStockSplit,
@@ -18,7 +29,7 @@ const logger = LoggerFactory.getLogger('PolygonNormalizers');
 
 const ONE_MINUTE_MS = 60_000;
 
-const DIVIDEND_FREQUENCY: Record<PolygonDividendFrequency, DividendFrequency> = {
+const DIVIDEND_FREQUENCY: Partial<Record<number, DividendFrequency>> = {
   0: 'one-time',
   1: 'annually',
   2: 'bi-annually',
@@ -53,15 +64,27 @@ function toDividendType(value: string): DividendType {
 }
 
 function toDividendFrequency(value: number): DividendFrequency {
-  const known = DIVIDEND_FREQUENCY[value === 0 || value === 1 || value === 2 || value === 4 || value === 12 ? value : 0];
-  if (value !== 0 && known === DIVIDEND_FREQUENCY[0]) {
+  // Reads the map rather than restating its keys, so adding one cannot leave a valid
+  // frequency silently mapping to 'one-time'.
+  const known: DividendFrequency | undefined = DIVIDEND_FREQUENCY[value];
+  if (known === undefined) {
     logger.warn(`Polygon reported an unrecognised dividend frequency ${value}; treating it as a one-off.`);
+    return 'one-time';
   }
   return known;
 }
 
-/** Polygon timestamps trades and quotes in nanoseconds, which does not fit a double. */
+/**
+ * Polygon timestamps trades and quotes in nanoseconds, which does not fit a double.
+ *
+ * Checked rather than assumed: `BigInt(undefined)` throws a bare `TypeError`, and a
+ * payload missing a timestamp — a thin name, a halted one, a shape change — would crash
+ * here instead of failing as the provider error every caller of this client branches on.
+ */
 export function nanosecondsToMilliseconds(timestamp: number): number {
+  if (!Number.isInteger(timestamp)) {
+    throw new DataProviderError('Polygon', `sent ${JSON.stringify(timestamp)} where a nanosecond timestamp was expected.`);
+  }
   return Number(BigInt(timestamp) / BigInt(1_000_000));
 }
 
