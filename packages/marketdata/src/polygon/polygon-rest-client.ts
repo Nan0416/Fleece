@@ -31,7 +31,7 @@ import {
   type TradesResponse,
 } from '../equity-data-models';
 import { marketHour, marketHourByIndex, marketHoursCoverage } from '../market-hours';
-import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, startOfDay } from '../request-window';
+import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, spansWholeSessions, startOfDay } from '../request-window';
 
 import {
   nanosecondTimestamp,
@@ -93,7 +93,6 @@ const MAX_PAGES = 200;
 const CURSOR_BACKOFF_NS = BigInt(1024);
 
 const TIMESPANS: ReadonlyArray<Timespan> = ['minute', 'hour', 'day', 'week', 'month', 'quarter', 'year'];
-const DAILY_OR_COARSER: ReadonlyArray<Timespan> = ['day', 'week', 'month', 'quarter', 'year'];
 
 export interface PolygonRestClientProps {
   readonly apiKey: string;
@@ -141,7 +140,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
     const to = endOfDay(request.to);
     requireForwardRange(from, to, 'bars');
 
-    if (DAILY_OR_COARSER.includes(request.timespan)) {
+    if (spansWholeSessions(request.timespan)) {
       // 50,000 days is 136 years, so one request covers any range worth asking for, and
       // market hours do not apply to a bar that spans the whole day.
       return { bars: await this.aggregates(request.symbol, `${path}/${from}/${to}`, query) };

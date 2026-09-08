@@ -60,6 +60,21 @@ describe('bars', () => {
     expect(adjusted[0].c).toBeCloseTo(124.81, 2);
   });
 
+  it.each(['week', 'month'] as const)('returns %s bars, which span whole sessions', async (timespan) => {
+    // Filtering these by regular hours emptied every one of them: a weekly bar is stamped
+    // at the start of its week, which is not a moment the market is open.
+    const { bars } = await alpaca.bars({ symbol: 'AAPL', from: '2024-10-01', to: '2024-12-20', multiplier: 1, timespan });
+
+    expect(bars.length).toBeGreaterThan(0);
+    expect(bars.every((bar) => bar.S === 'AAPL' && bar.v > 0)).toBe(true);
+  });
+
+  it('returns weekly bars past the end of the market-hours table, which they never needed', async () => {
+    const { bars } = await alpaca.bars({ symbol: 'AAPL', from: '2026-01-05', to: '2026-02-06', multiplier: 1, timespan: 'week' });
+
+    expect(bars.length).toBeGreaterThan(0);
+  });
+
   it('has nothing for a symbol that does not exist', async () => {
     expect((await alpaca.dailyBars({ symbol: 'ZZZZNOPE', from: SESSION, to: SESSION })).bars).toStrictEqual([]);
   });
@@ -142,6 +157,25 @@ describe('the two providers agree', () => {
     ]);
 
     expect(fromAlpaca.bars.map((bar) => bar.t)).toStrictEqual(fromPolygon.bars.map((bar) => bar.t));
+  });
+
+  runIfPolygon('on monthly bars, though not on weekly ones', async () => {
+    const polygon = new PolygonRestClient({ apiKey: polygonKey! });
+    const range = { symbol: 'AAPL', from: '2024-10-01', to: '2024-12-20', multiplier: 1 } as const;
+    const [alpacaMonths, polygonMonths, alpacaWeeks, polygonWeeks] = await Promise.all([
+      alpaca.bars({ ...range, timespan: 'month' }),
+      polygon.bars({ ...range, timespan: 'month' }),
+      alpaca.bars({ ...range, timespan: 'week' }),
+      polygon.bars({ ...range, timespan: 'week' }),
+    ]);
+
+    expect(alpacaMonths.bars.map((bar) => bar.c)).toStrictEqual(polygonMonths.bars.map((bar) => bar.c));
+    // Weeks are anchored differently — Alpaca on Monday, Polygon on Sunday — and Alpaca
+    // drops the partial week at the start of a range where Polygon keeps it. Asserted so
+    // that a future change to either makes a decision rather than a surprise.
+    expect(alpacaWeeks.bars.length).not.toBe(polygonWeeks.bars.length);
+    expect(easternClock.date(alpacaWeeks.bars[0].t)).toBe('2024-10-07');
+    expect(easternClock.date(polygonWeeks.bars[0].t)).toBe('2024-09-29');
   });
 
   runIfPolygon('on the daily closes of a week', async () => {

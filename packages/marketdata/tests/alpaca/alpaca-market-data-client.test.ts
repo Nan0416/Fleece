@@ -113,9 +113,21 @@ describe('bars', () => {
     expect(result).toHaveLength(2);
   });
 
-  it('never filters a daily bar, which spans the session anyway', async () => {
-    const http = new FakeHttpClient().reply(bars('AAPL', { t: utc('2024-12-19T05:00:00Z') }));
-    const { bars: result } = await client(http).dailyBars({ symbol: 'AAPL', from: SESSION, to: SESSION });
+  // Quarter and year are Polygon's; Alpaca refuses them, which its own test covers.
+  it.each(['day', 'week', 'month'] as const)('never filters a %s bar, which spans whole sessions anyway', async (timespan) => {
+    // A weekly bar is stamped at the start of its week, which is not a moment the market
+    // is open — filtering by regular hours emptied every one of them.
+    const http = new FakeHttpClient().reply(bars('AAPL', { t: utc('2024-12-15T05:00:00Z') }));
+    const { bars: result } = await client(http).bars({ symbol: 'AAPL', from: '2024-12-01', to: SESSION, multiplier: 1, timespan });
+
+    expect(result).toHaveLength(1);
+  });
+
+  it.each(['week', 'month'] as const)('does not consult the market-hours table for a %s bar', async (timespan) => {
+    // The table stops in 2024, and a bar spanning whole sessions never needed it.
+    const beyond = easternClock.shiftDate(marketHoursCoverage.to, 30);
+    const http = new FakeHttpClient().reply(bars('AAPL', { t: utc('2026-01-05T05:00:00Z') }));
+    const { bars: result } = await client(http).bars({ symbol: 'AAPL', from: beyond, to: easternClock.shiftDate(beyond, 60), multiplier: 1, timespan });
 
     expect(result).toHaveLength(1);
   });

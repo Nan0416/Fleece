@@ -10,6 +10,12 @@ export interface BarsRequest {
   readonly from: DateOrTimestamp;
   readonly to: DateOrTimestamp;
   readonly multiplier: number;
+  /**
+   * Providers do not agree on where a week starts: Alpaca buckets from Monday and drops
+   * a partial week at the start of a range, Polygon buckets from Sunday and keeps it. The
+   * same request over the same quarter is 11 weekly bars from one and 12 from the other,
+   * and neither is wrong. Day and coarser-than-week agree.
+   */
   readonly timespan: Timespan;
   /** Defaults to true for intraday timespans, and is ignored for `day` and coarser. */
   readonly marketHoursOnly?: boolean;

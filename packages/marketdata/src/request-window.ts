@@ -1,6 +1,6 @@
 import { InternalServiceError, InvalidRequestError, easternClock, isIsoDate } from '@fleece/shared';
 
-import type { Bar, DateOrTimestamp } from './equity-data-models';
+import type { Bar, DateOrTimestamp, Timespan } from './equity-data-models';
 import { marketHoursCoverage, marketState } from './market-hours';
 
 /**
@@ -71,6 +71,18 @@ export function requireForwardRange(from: number, to: number, what: string): voi
 export function requireCoveredRange(from: number, to: number, what: string): void {
   requireMarketHoursCover(easternClock.date(from), what);
   requireMarketHoursCover(easternClock.date(to), what);
+}
+
+/**
+ * A bar of a day or longer already spans the whole session, so regular hours neither
+ * apply to it nor need the table consulted — a weekly bar is stamped at the start of its
+ * week, which is not a moment the market is open, and filtering by that empties the
+ * result.
+ */
+const DAILY_OR_COARSER: ReadonlyArray<Timespan> = ['day', 'week', 'month', 'quarter', 'year'];
+
+export function spansWholeSessions(timespan: Timespan): boolean {
+  return DAILY_OR_COARSER.includes(timespan);
 }
 
 export function regularHoursOnly(bars: ReadonlyArray<Bar>): Bar[] {

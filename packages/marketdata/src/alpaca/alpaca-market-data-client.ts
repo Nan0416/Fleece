@@ -15,7 +15,7 @@ import {
   type TradesRequest,
   type TradesResponse,
 } from '../equity-data-models';
-import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, startOfDay } from '../request-window';
+import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, spansWholeSessions, startOfDay } from '../request-window';
 import { marketHour } from '../market-hours';
 
 import type { AlpacaBar, AlpacaBarsResponse, AlpacaCalendarDay, AlpacaQuote, AlpacaQuotesResponse, AlpacaTrade, AlpacaTradesResponse } from './alpaca-rest-models';
@@ -114,7 +114,8 @@ export class AlpacaMarketDataClient implements AlpacaStockRestClient {
     const from = startOfDay(request.from);
     const to = endOfDay(request.to);
     requireForwardRange(from, to, 'bars');
-    if (request.marketHoursOnly !== false && request.timespan !== 'day') {
+    const filterToRegularHours = request.marketHoursOnly !== false && !spansWholeSessions(request.timespan);
+    if (filterToRegularHours) {
       requireCoveredRange(from, to, 'filter bars to market hours');
     }
 
@@ -127,7 +128,7 @@ export class AlpacaMarketDataClient implements AlpacaStockRestClient {
     });
 
     const bars = raw.map((bar) => normalizeBar(request.symbol, bar));
-    return { bars: request.marketHoursOnly === false || request.timespan === 'day' ? bars : regularHoursOnly(bars) };
+    return { bars: filterToRegularHours ? regularHoursOnly(bars) : bars };
   }
 
   async trades(request: TradesRequest): Promise<TradesResponse> {
