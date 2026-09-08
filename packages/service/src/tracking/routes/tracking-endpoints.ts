@@ -3,7 +3,7 @@ import { Router } from 'express';
 import type { Express } from 'express';
 import { OrderTrackingFacade } from '../order-tracking-facade';
 import { parseTrackBrokerOrdersRequest } from '../utils/request-parsing';
-import { Endpoints } from './endpoints';
+import { Endpoints } from '../../http';
 
 /** All this needs of the facade. It accepts claims and nothing else. */
 export type BrokerOrderClaims = Pick<OrderTrackingFacade, 'track'>;

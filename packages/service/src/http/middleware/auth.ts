@@ -7,17 +7,21 @@ const logger = LoggerFactory.getLogger('Auth');
 const PUBLIC_PATHS = new Set(['/ping', '/health']);
 
 /**
- * Shared-token authentication, the same single token the API uses.
+ * Shared-token authentication, for whichever app installs it.
  *
- * It is a copy of `@fleece/service`'s rather than a shared package, because the two
- * services have one middleware in common and a package holding forty lines would be a
- * dependency to justify on every future change to either. The cost is that a change to
- * the scheme has to be made twice, which is why it is written the same way in both.
+ * One token, rather than the legacy's signed bearer tokens verified against public
+ * keys fetched from S3 and authorised through a remote policy service. That machinery
+ * belonged to a platform this port deliberately leaves behind; a single token is
+ * enough to stop anything else on the LAN from moving positions around. When no token
+ * is configured the middleware is not installed at all, so local development needs no
+ * setup.
  *
- * What it protects here is narrower than the API's but not small: a claim decides which
- * virtual account an order's fills are booked to, and an order's account is written
- * once. Anything that can reach this port unauthenticated can book somebody else's fills
- * to an account of its choosing.
+ * Both apps have something worth protecting, and they are different things. The API can
+ * move positions between accounts. The tracking port takes claims, and a claim decides
+ * which virtual account an order's fills are booked to — an order's account is written
+ * once, so anything that reaches that port unauthenticated can book somebody else's
+ * fills to an account of its choosing. Each app configures its own token; this only
+ * checks the one it is handed.
  */
 export function bearerTokenAuth(token: string): RequestHandler {
   return (req: Request, _res: Response, next: NextFunction): void => {

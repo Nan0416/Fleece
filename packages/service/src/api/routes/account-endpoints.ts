@@ -12,7 +12,7 @@ import { AccountService } from '../../core';
 import { Router } from 'express';
 import type { Express } from 'express';
 import { parseCreateAccountRequest, parseListAccountsQuery, parseUpdateAccountNameRequest, requireStringParam } from '../utils/request-parsing';
-import { Endpoints } from './endpoints';
+import { Endpoints } from '../../http';
 
 export interface AccountEndpointsProps {
   readonly accountService: AccountService;

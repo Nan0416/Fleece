@@ -4,7 +4,7 @@ import { UnauthenticatedError } from '@fleece/utilities';
 import http from 'node:http';
 import { DependencyFactory } from '../../../src/tracking/dependencies/dependency-factory';
 import { BrokerOrderClaims } from '../../../src/tracking/routes';
-import { TrackingService } from '../../../src/tracking/service';
+import { HttpApp } from '../../../src/http';
 import { TrackingConfig } from '../../../src/tracking/tracking-config';
 
 /**
@@ -49,7 +49,10 @@ interface Harness {
 async function serve(overrides: Partial<TrackingConfig> = {}): Promise<Harness> {
   const claims = new RecordingClaims();
   const dependencies = new DependencyFactory({ config: config(overrides), orderTracking: claims, startedAt: Date.now() }).build();
-  const app = new TrackingService(dependencies).init();
+  // The same name and body cap `TrackingServer` passes: the JSON parser's limit is part
+  // of the stack under test, so a test app assembled with a different one would be
+  // exercising a server that does not exist.
+  const app = new HttpApp({ ...dependencies, name: 'TrackingService', jsonBodyLimit: '64kb' }).init();
   const server = http.createServer(app);
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));

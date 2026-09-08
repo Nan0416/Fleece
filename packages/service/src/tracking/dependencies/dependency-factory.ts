@@ -1,17 +1,10 @@
 import { LoggerFactory } from '@fleece/utilities';
-import { ErrorRequestHandler, RequestHandler } from 'express';
-import { bearerTokenAuth, errorHandler, requestLogger } from '../middleware';
-import { BrokerOrderClaims, Endpoints, HealthEndpoints, TrackingEndpoints } from '../routes';
+import { RequestHandler } from 'express';
+import { bearerTokenAuth, Dependencies, Endpoints, errorHandler, HealthEndpoints, requestLogger, serviceVersion } from '../../http';
+import { BrokerOrderClaims, TrackingEndpoints } from '../routes';
 import { TrackingConfig } from '../tracking-config';
-import { trackingServiceVersion } from '../utils/version';
 
 const logger = LoggerFactory.getLogger('DependencyFactory');
-
-export interface Dependencies {
-  readonly middleware: ReadonlyArray<RequestHandler>;
-  readonly endpoints: ReadonlyArray<Endpoints>;
-  readonly errorHandler: ErrorRequestHandler;
-}
 
 export interface DependencyFactoryProps {
   readonly config: TrackingConfig;
@@ -43,7 +36,7 @@ export class DependencyFactory {
       logger.warn('Authentication is disabled. Set FLEECE_TRACKING_TOKEN to require a bearer token on /track.');
     }
 
-    const endpoints: Endpoints[] = [new HealthEndpoints({ version: trackingServiceVersion(), startedAt: this.props.startedAt }), new TrackingEndpoints({ orderTracking })];
+    const endpoints: Endpoints[] = [new HealthEndpoints({ version: serviceVersion(), startedAt: this.props.startedAt }), new TrackingEndpoints({ orderTracking })];
 
     return { middleware, endpoints, errorHandler };
   }

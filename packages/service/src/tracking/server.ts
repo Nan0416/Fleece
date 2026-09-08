@@ -3,7 +3,7 @@ import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import { DependencyFactory } from './dependencies/dependency-factory';
 import { BrokerOrderClaims } from './routes';
-import { TrackingService } from './service';
+import { HttpApp } from '../http';
 import { TrackingConfig } from './tracking-config';
 
 const logger = LoggerFactory.getLogger('TrackingServer');
@@ -28,10 +28,12 @@ export class TrackingServer {
   static async start(props: TrackingServerProps): Promise<TrackingServer> {
     const { config } = props;
     const dependencies = new DependencyFactory(props).build();
-    const app = new TrackingService({
-      middleware: dependencies.middleware,
-      endpoints: dependencies.endpoints,
-      errorHandler: dependencies.errorHandler,
+    const app = new HttpApp({
+      ...dependencies,
+      name: 'TrackingService',
+      // A claim is a short array of ids. The cap is well above the largest one the
+      // parser will accept and well below anything that could buffer meaningful memory.
+      jsonBodyLimit: '64kb',
     }).init();
 
     const httpServer = http.createServer(app);

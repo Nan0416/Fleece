@@ -4,7 +4,7 @@ import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import { Pool } from 'pg';
 import { DependencyFactory } from './dependencies/dependency-factory';
-import { Service } from './service';
+import { HttpApp } from '../http';
 import { ServiceConfig } from './stage-config';
 
 const logger = LoggerFactory.getLogger('FleeceServer');
@@ -30,10 +30,13 @@ export class FleeceServer {
     }
 
     const dependencies = new DependencyFactory({ config, pool, startedAt }).build();
-    const app = new Service({
-      middleware: dependencies.middleware,
-      endpoints: dependencies.endpoints,
-      errorHandler: dependencies.errorHandler,
+    const app = new HttpApp({
+      ...dependencies,
+      name: 'Service',
+      // Request bodies here are small; a cap keeps a malformed client from buffering
+      // arbitrary memory.
+      jsonBodyLimit: '256kb',
+      urlencoded: true,
     }).init();
 
     const httpServer = http.createServer(app);

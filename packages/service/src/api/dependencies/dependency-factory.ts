@@ -1,19 +1,12 @@
 import { LoggerFactory } from '@fleece/utilities';
 import { createLedgerServices } from '../../core';
-import { ErrorRequestHandler, RequestHandler } from 'express';
+import { RequestHandler } from 'express';
 import { Pool } from 'pg';
-import { bearerTokenAuth, corsMiddleware, errorHandler, requestLogger } from '../middleware';
-import { AccountEndpoints, BrokerOrderEndpoints, DividendEndpoints, Endpoints, HealthEndpoints, LedgerEndpoints } from '../routes';
+import { bearerTokenAuth, corsMiddleware, Dependencies, Endpoints, errorHandler, HealthEndpoints, requestLogger, serviceVersion } from '../../http';
+import { AccountEndpoints, BrokerOrderEndpoints, DividendEndpoints, LedgerEndpoints } from '../routes';
 import { ServiceConfig } from '../stage-config';
-import { serviceVersion } from '../utils/version';
 
 const logger = LoggerFactory.getLogger('DependencyFactory');
-
-export interface Dependencies {
-  readonly middleware: ReadonlyArray<RequestHandler>;
-  readonly endpoints: ReadonlyArray<Endpoints>;
-  readonly errorHandler: ErrorRequestHandler;
-}
 
 export interface DependencyFactoryProps {
   readonly config: ServiceConfig;

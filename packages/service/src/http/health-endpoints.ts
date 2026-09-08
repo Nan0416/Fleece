@@ -11,6 +11,12 @@ export interface HealthEndpointsProps {
 /**
  * Unauthenticated, so a load balancer or `curl` can tell a service that is up from
  * one that is merely refusing them.
+ *
+ * It reports that the *process* is up, which for the tracking app is only half the
+ * story: its websocket feeds can be disconnected while the port still answers. That is
+ * deliberate — a health check that failed whenever Alpaca dropped a socket would take
+ * the service out of rotation for something reconnecting on its own — and it is why the
+ * feed logs loudly instead.
  */
 export class HealthEndpoints implements Endpoints {
   private readonly router: Router;

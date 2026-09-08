@@ -2,6 +2,7 @@
  * The ledger and the three processes that write to it.
  *
  *     core/               the ledger: services hold the rules, data talks to Postgres
+ *     http/               the plumbing the two Express apps are assembled from
  *     api/                the HTTP API over it            → dist/api/main.js
  *     tracking/           broker events in, claims in     → dist/tracking/main.js
  *     corporate-actions/  the dividend job, one run       → dist/corporate-actions/main.js
@@ -12,11 +13,10 @@
  * nothing parses arguments to choose between them.
  *
  * `core/` is star-exported because it is what a consumer outside this package wants —
- * the ledger without the routes. `api/` and `tracking/` are named instead: they are two
- * Express apps of the same shape and collide on nine names (`errorHandler`,
- * `requestLogger`, `Endpoints`, `Dependencies` and friends), so a star export of both
- * would be an ambiguity error. Inside the package each app reaches the others' pieces
- * by relative path, which is what those names are for.
+ * the ledger without the routes. `api/` and `tracking/` are named instead: what the two
+ * apps have in common lives in `http/`, and what is left still collides on
+ * `DependencyFactory` and its props — two genuinely different object graphs that happen
+ * to share a name — so a star export of both would be an ambiguity error.
  */
 export * from './core';
 export * from './corporate-actions';

@@ -54,10 +54,13 @@ and most of what follows exists because of that.
    `find . -type d -path '*node_modules/typescript'`: one path.
 4. **Layers**: in `service/src/core`, `services` answer requests and hold the rules,
    `data` talks to Postgres. In `service/src/api`, `routes` parse and delegate. A route
-   never touches a DAO. `api/` and `tracking/` are two Express apps of the same shape
-   and reach each other's pieces by relative path, never through the package barrel —
-   they collide on nine names, all of it HTTP plumbing, which is why that barrel names
-   the two servers' entry points instead of star-exporting them.
+   never touches a DAO. `api/` and `tracking/` are two Express apps of the same shape,
+   and what they have in common — the assembler, the error handler, the request log, the
+   auth scheme, the health check, the `Endpoints` interface — is `http/`, held once. What
+   stays with each app is what actually differs: its `server.ts`, its `dependencies/` and
+   its `utils/request-parsing.ts`. Duplication inside one package has no boundary to
+   justify it, which is why nine copied files became one folder the moment these four
+   packages became one.
 
 ## The ledger
 

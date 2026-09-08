@@ -21,7 +21,7 @@ import {
   parseTransferPositionRequest,
   requireStringParam,
 } from '../utils/request-parsing';
-import { Endpoints } from './endpoints';
+import { Endpoints } from '../../http';
 
 export interface LedgerEndpointsProps {
   readonly ledgerService: LedgerService;

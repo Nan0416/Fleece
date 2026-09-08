@@ -15,7 +15,7 @@ An npm-workspaces monorepo, six packages under `packages/` (plus `playground`):
 | `client` | Typed client for the Fleece HTTP API |
 | `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price. `src/alpaca/` is the wire — Alpaca's REST and WebSocket clients, wire models, the correlation codec, equities and options, single-leg and spreads |
 | `marketdata` | The market data model, two REST clients over it — Polygon (stock bars, trades, quotes, snapshots, reference data) and Alpaca (the same for stocks, plus option chains, option bars and trades, the exchange calendar, and the condition and exchange dictionaries) — and the US market-hours table. Options are Alpaca-only: Polygon's are a separate subscription. The Alpaca one here is market data; `@fleece/broker` is the trading API |
-| `service` | The ledger and the three processes that write to it, a folder each: `core/` (the ledger — account facade, data access, schema migrations; the only writer), `api/` (the HTTP API over it), `tracking/` (turns broker order events into ledger entries, and takes claims about whose an order is), `corporate-actions/` (records the dividends each account is owed) |
+| `service` | The ledger and the three processes that write to it, a folder each: `core/` (the ledger — account facade, data access, schema migrations; the only writer), `http/` (the plumbing both Express apps are assembled from), `api/` (the HTTP API over it), `tracking/` (turns broker order events into ledger entries, and takes claims about whose an order is), `corporate-actions/` (records the dividends each account is owed) |
 
 Dependencies point one way: `service` → `broker` → `client` → `models` → `utilities`;
 `service` → `marketdata` → `utilities`. Nothing imports upward, and `utilities` imports
@@ -36,6 +36,8 @@ them because L3 runs with or without it.
 
 Inside `service/src/core`: `services` answer requests and hold the rules → `data` talks
 to Postgres. Inside `service/src/api`: `routes` parse and delegate to a `core` service.
+`service/src/http` holds what the API and the tracking app assemble themselves from —
+the app builder, the middleware, the health check — so neither keeps its own copy.
 
 Schema lives in `packages/service/migrations/` as numbered SQL files, applied on startup.
 Never edit one that has shipped; add the next number.
