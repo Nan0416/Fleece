@@ -31,6 +31,7 @@ import {
   type TradesResponse,
 } from '../equity-data-models';
 import { marketHour, marketHourByIndex, marketHoursCoverage } from '../market-hours';
+import { adjustPrice, splitRatios, type SplitRatio } from '../split-adjustment';
 import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, spansWholeSessions, startOfDay } from '../request-window';
 
 import {
@@ -167,10 +168,10 @@ export class PolygonRestClient implements PolygonStockRestClient {
     // waiting for every page before asking for it serialises two independent calls.
     const [raw, ratios] = await Promise.all([
       this.pageByTimestamp<PolygonTradeV3, PolygonTradesResponseV3>(`/v3/trades/${encodeURIComponent(request.symbol)}`, window),
-      window.adjustForSplit === true ? this.splitRatios(request.symbol) : Promise.resolve([]),
+      window.adjustForSplit === true ? this.ratiosFor(request.symbol) : Promise.resolve([]),
     ]);
     const trades = raw.map((trade) => normalizeTrade(request.symbol, trade));
-    return { trades: ratios.length === 0 ? trades : trades.map((trade) => ({ ...trade, p: adjust(trade.p, trade.t, ratios) })) };
+    return { trades: ratios.length === 0 ? trades : trades.map((trade) => ({ ...trade, p: adjustPrice(trade.p, trade.t, ratios) })) };
   }
 
   async quotes(request: QuotesRequest): Promise<QuotesResponse> {
@@ -180,10 +181,10 @@ export class PolygonRestClient implements PolygonStockRestClient {
     }
     const [raw, ratios] = await Promise.all([
       this.pageByTimestamp<PolygonQuoteV3, PolygonQuotesResponseV3>(`/v3/quotes/${encodeURIComponent(request.symbol)}`, window),
-      window.adjustForSplit === true ? this.splitRatios(request.symbol) : Promise.resolve([]),
+      window.adjustForSplit === true ? this.ratiosFor(request.symbol) : Promise.resolve([]),
     ]);
     const quotes = raw.map((quote) => normalizeQuote(request.symbol, quote));
-    return { quotes: ratios.length === 0 ? quotes : quotes.map((quote) => ({ ...quote, ap: adjust(quote.ap, quote.t, ratios), bp: adjust(quote.bp, quote.t, ratios) })) };
+    return { quotes: ratios.length === 0 ? quotes : quotes.map((quote) => ({ ...quote, ap: adjustPrice(quote.ap, quote.t, ratios), bp: adjustPrice(quote.bp, quote.t, ratios) })) };
   }
 
   /**
@@ -477,14 +478,8 @@ export class PolygonRestClient implements PolygonStockRestClient {
     throw new DataProviderError(SOURCE, `refusing to page past ${MAX_PAGES} pages of ${path}.`);
   }
 
-  private async splitRatios(symbol: string): Promise<ReadonlyArray<SplitRatio>> {
-    const { splits } = await this.stockSplits({ symbol });
-    return splits.map((split) => ({
-      // A 1-for-4 split makes a share worth a quarter of what it was, so a price before
-      // it is multiplied by from/to to be comparable with prices after.
-      ratio: split.splitFrom / split.splitTo,
-      before: easternClock.timestamp(split.executionDate, '00:00:00'),
-    }));
+  private async ratiosFor(symbol: string): Promise<ReadonlyArray<SplitRatio>> {
+    return splitRatios((await this.stockSplits({ symbol })).splits);
   }
 
   private currentSession(): CurrentSession | undefined {
@@ -553,11 +548,6 @@ interface CurrentSession {
   readonly previousSessionStart: number;
 }
 
-interface SplitRatio {
-  readonly ratio: number;
-  readonly before: number;
-}
-
 /** Polygon caps a page at 50,000 whatever is asked for, and a short page ends the walk. */
 function pageSize(requested: number | undefined, what: string): number {
   if (requested === undefined) {
@@ -608,10 +598,6 @@ function isSnapshot(snapshot: PolygonLatestSnapshot | undefined): snapshot is Po
     snapshot.day !== undefined &&
     snapshot.prevDay !== undefined
   );
-}
-
-function adjust(price: number, timestamp: number, ratios: ReadonlyArray<SplitRatio>): number {
-  return ratios.reduce((adjusted, split) => (timestamp < split.before ? adjusted * split.ratio : adjusted), price);
 }
 
 function defaultEnd(from: DateOrTimestamp): DateOrTimestamp {

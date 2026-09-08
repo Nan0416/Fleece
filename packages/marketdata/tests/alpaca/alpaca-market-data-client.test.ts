@@ -219,6 +219,44 @@ describe('trades and quotes', () => {
     expect(result).toStrictEqual([{ S: 'AAPL', bx: 'U', bp: 249.9, bs: 3, ax: 'Q', ap: 250.1, as: 2, t: at(SESSION, '10:00:00'), c: ['R'], z: 'C' }]);
   });
 
+  it('restates a price recorded before a split when asked, and leaves a later one alone', async () => {
+    // Alpaca's trade endpoint refuses an `adjustment` parameter, so this is arithmetic
+    // done here — and it used to be dropped, returning raw prints as though adjusted.
+    const http = new FakeHttpClient().reply(trades('AAPL', { t: utc('2020-08-28T14:00:00Z'), p: 503.5 }), corporateActions({ forward: [{ date: '2020-08-31', from: 1, to: 4 }] }));
+    const { trades: result } = await client(http).trades({
+      symbol: 'AAPL',
+      from: Date.parse('2020-08-28T14:00:00Z'),
+      to: Date.parse('2020-08-28T14:00:01Z'),
+      adjustForSplit: true,
+    });
+
+    expect(result[0].p).toBeCloseTo(125.875, 4);
+  });
+
+  it('restates both sides of a quote across a split', async () => {
+    const http = new FakeHttpClient().reply(
+      quotes('AAPL', { t: utc('2020-08-28T14:00:00Z'), bid: 400, ask: 404 }),
+      corporateActions({ forward: [{ date: '2020-08-31', from: 1, to: 4 }] }),
+    );
+    const { quotes: result } = await client(http).quotes({
+      symbol: 'AAPL',
+      from: Date.parse('2020-08-28T14:00:00Z'),
+      to: Date.parse('2020-08-28T14:00:01Z'),
+      adjustForSplit: true,
+    });
+
+    expect(result[0].bp).toBeCloseTo(100, 6);
+    expect(result[0].ap).toBeCloseTo(101, 6);
+  });
+
+  it('does not ask for splits when no adjustment was requested', async () => {
+    const http = new FakeHttpClient().reply(trades('AAPL', { t: utc('2024-12-19T15:00:00Z'), p: 250 }));
+    const { trades: result } = await client(http).trades({ symbol: 'AAPL', date: SESSION });
+
+    expect(result[0].p).toBe(250);
+    expect(http.requests.map((request) => request.url)).toStrictEqual(['/v2/stocks/trades']);
+  });
+
   it('refuses a timestamp it cannot read rather than dating a trade to NaN', async () => {
     const http = new FakeHttpClient().reply({ trades: { AAPL: [{ t: 'yesterday', x: 'Q', p: 1, s: 1, i: 1, z: 'C' }] } });
     const send = client(http).trades({ symbol: 'AAPL', date: SESSION });

@@ -99,6 +99,17 @@ describe('trades and quotes', () => {
     expect(paged.map((trade) => trade.t)).toStrictEqual(single.map((trade) => trade.t));
   });
 
+  it('restates prints from before a split when asked', async () => {
+    // AAPL split four-for-one on 2020-08-31; the endpoint serves the prints as they
+    // happened, so an adjusted price is arithmetic over the splits the client fetches.
+    const beforeSplit = Date.parse('2020-08-28T14:00:00Z');
+    const { trades: raw } = await alpaca.trades({ symbol: 'AAPL', from: beforeSplit, to: beforeSplit + 1_000 });
+    const { trades: adjusted } = await alpaca.trades({ symbol: 'AAPL', from: beforeSplit, to: beforeSplit + 1_000, adjustForSplit: true });
+
+    expect(raw[0].p).toBeCloseTo(503.5, 2);
+    expect(adjusted[0].p).toBeCloseTo(raw[0].p / 4, 4);
+  });
+
   it('returns quotes with both sides of the book', async () => {
     const { quotes } = await alpaca.quotes({ symbol: 'AAPL', from, to: easternClock.timestamp(SESSION, '10:00:01') });
 
@@ -201,6 +212,15 @@ describe('the two providers agree', () => {
     expect(alpacaWeeks.bars.length).not.toBe(polygonWeeks.bars.length);
     expect(easternClock.date(alpacaWeeks.bars[0].t)).toBe('2024-10-07');
     expect(easternClock.date(polygonWeeks.bars[0].t)).toBe('2024-09-29');
+  });
+
+  runIfPolygon('on a split-adjusted print, which neither provider adjusts for us', async () => {
+    const polygon = new PolygonRestClient({ apiKey: polygonKey! });
+    const beforeSplit = Date.parse('2020-08-28T14:00:00Z');
+    const window = { symbol: 'AAPL', from: beforeSplit, to: beforeSplit + 1_000, adjustForSplit: true } as const;
+    const [fromAlpaca, fromPolygon] = await Promise.all([alpaca.trades(window), polygon.trades(window)]);
+
+    expect(fromAlpaca.trades[0].p).toBeCloseTo(fromPolygon.trades[0].p, 6);
   });
 
   runIfPolygon('on the splits they both hold, though Alpaca holds fewer', async () => {

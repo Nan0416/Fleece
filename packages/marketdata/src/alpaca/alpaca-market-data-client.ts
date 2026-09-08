@@ -17,6 +17,7 @@ import {
   type TradesRequest,
   type TradesResponse,
 } from '../equity-data-models';
+import { adjustPrice, splitRatios, type SplitRatio } from '../split-adjustment';
 import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, spansWholeSessions, startOfDay } from '../request-window';
 import { marketHour } from '../market-hours';
 
@@ -151,8 +152,13 @@ export class AlpacaMarketDataClient implements AlpacaStockRestClient {
     if (window === undefined) {
       return { trades: [] };
     }
-    const raw = await this.page<AlpacaTrade, AlpacaTradesResponse>('/v2/stocks/trades', request.symbol, (body) => body.trades, window);
-    return { trades: raw.map((trade) => normalizeTrade(request.symbol, trade)) };
+    // Started together: the split table depends on the symbol, not on the trades.
+    const [raw, ratios] = await Promise.all([
+      this.page<AlpacaTrade, AlpacaTradesResponse>('/v2/stocks/trades', request.symbol, (body) => body.trades, window),
+      this.ratiosFor(request.symbol, request.adjustForSplit),
+    ]);
+    const trades = raw.map((trade) => normalizeTrade(request.symbol, trade));
+    return { trades: ratios.length === 0 ? trades : trades.map((trade) => ({ ...trade, p: adjustPrice(trade.p, trade.t, ratios) })) };
   }
 
   async quotes(request: QuotesRequest): Promise<QuotesResponse> {
@@ -160,8 +166,28 @@ export class AlpacaMarketDataClient implements AlpacaStockRestClient {
     if (window === undefined) {
       return { quotes: [] };
     }
-    const raw = await this.page<AlpacaQuote, AlpacaQuotesResponse>('/v2/stocks/quotes', request.symbol, (body) => body.quotes, window);
-    return { quotes: raw.map((quote) => normalizeQuote(request.symbol, quote)) };
+    const [raw, ratios] = await Promise.all([
+      this.page<AlpacaQuote, AlpacaQuotesResponse>('/v2/stocks/quotes', request.symbol, (body) => body.quotes, window),
+      this.ratiosFor(request.symbol, request.adjustForSplit),
+    ]);
+    const quotes = raw.map((quote) => normalizeQuote(request.symbol, quote));
+    return { quotes: ratios.length === 0 ? quotes : quotes.map((quote) => ({ ...quote, ap: adjustPrice(quote.ap, quote.t, ratios), bp: adjustPrice(quote.bp, quote.t, ratios) })) };
+  }
+
+  /**
+   * Alpaca's trade and quote endpoints refuse an `adjustment` parameter — they serve the
+   * prints as they happened — so an adjusted price is arithmetic done here, from the
+   * splits the same client can fetch.
+   *
+   * Which inherits that history's depth: those corporate actions begin around 2016, so a
+   * print from before an earlier split is restated by the splits Alpaca knows and no
+   * others. Polygon holds the longer record and is the one to ask for a long history.
+   */
+  private async ratiosFor(symbol: string, adjustForSplit: boolean | undefined): Promise<ReadonlyArray<SplitRatio>> {
+    if (adjustForSplit !== true) {
+      return [];
+    }
+    return splitRatios((await this.stockSplits({ symbol })).splits);
   }
 
   /**
