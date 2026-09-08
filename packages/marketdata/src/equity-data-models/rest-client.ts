@@ -219,6 +219,12 @@ export interface PolygonStockRestClient extends StockRestClient {
   snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse>;
   tickers(request: TickersRequest): Promise<TickersResponse>;
   tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse>;
+  /**
+   * Polygon only, deliberately. Alpaca serves cash dividends too, but sends no
+   * declaration date, frequency or currency — and `declaration_date` is `NOT NULL` on the
+   * ledger's `dividend` table and read straight out of this type by the corporate-action
+   * job. Supplying one from elsewhere would be inventing a date the ledger then stores.
+   */
   dividends(request: DividendsRequest): Promise<DividendsResponse>;
   historicalBars(request: HistoricalBarsRequest): Promise<HistoricalBarsResponse>;
 }
