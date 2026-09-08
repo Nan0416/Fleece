@@ -172,6 +172,11 @@ export interface StockRestClient {
   dailyBars(request: DailyBarsRequest): Promise<BarsResponse>;
   trades(request: TradesRequest): Promise<TradesResponse>;
   quotes(request: QuotesRequest): Promise<QuotesResponse>;
+  /**
+   * How far back a provider's split history reaches is its own business: Polygon has
+   * AAPL's 1987 split, Alpaca's corporate actions begin around 2016.
+   */
+  stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
 }
 
 /** A trading day as the exchange calendar records it, and as the session table stores it. */
@@ -214,7 +219,6 @@ export interface PolygonStockRestClient extends StockRestClient {
   snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse>;
   tickers(request: TickersRequest): Promise<TickersResponse>;
   tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse>;
-  stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
   dividends(request: DividendsRequest): Promise<DividendsResponse>;
   historicalBars(request: HistoricalBarsRequest): Promise<HistoricalBarsResponse>;
 }

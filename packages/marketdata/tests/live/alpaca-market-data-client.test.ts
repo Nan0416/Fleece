@@ -107,6 +107,31 @@ describe('trades and quotes', () => {
   });
 });
 
+describe('stockSplits', () => {
+  it("returns AAPL's 2020 four-for-one, the same way Polygon states it", async () => {
+    const { splits } = await alpaca.stockSplits({ symbol: 'AAPL' });
+
+    expect(splits).toContainEqual({ ticker: 'AAPL', executionDate: '2020-08-31', splitFrom: 1, splitTo: 4 });
+  });
+
+  it('returns a reverse split with its rates the same way round', async () => {
+    const { splits } = await alpaca.stockSplits({ symbol: 'GE' });
+
+    expect(splits).toContainEqual({ ticker: 'GE', executionDate: '2021-08-02', splitFrom: 8, splitTo: 1 });
+  });
+
+  it('narrows to a single execution date', async () => {
+    const { splits } = await alpaca.stockSplits({ symbol: 'AAPL', executionDate: '2020-08-31' });
+
+    expect(splits).toHaveLength(1);
+    expect(splits[0].executionDate).toBe('2020-08-31');
+  });
+
+  it('has nothing for a symbol that never split', async () => {
+    expect((await alpaca.stockSplits({ symbol: 'ZZZZNOPE' })).splits).toStrictEqual([]);
+  });
+});
+
 describe('marketHours', () => {
   it('returns the trading days in the range, skipping the holiday', async () => {
     const { sessions } = await alpaca.marketHours({ fromDate: '2024-12-23', toDate: '2024-12-27' });
@@ -176,6 +201,21 @@ describe('the two providers agree', () => {
     expect(alpacaWeeks.bars.length).not.toBe(polygonWeeks.bars.length);
     expect(easternClock.date(alpacaWeeks.bars[0].t)).toBe('2024-10-07');
     expect(easternClock.date(polygonWeeks.bars[0].t)).toBe('2024-09-29');
+  });
+
+  runIfPolygon('on the splits they both hold, though Alpaca holds fewer', async () => {
+    const polygon = new PolygonRestClient({ apiKey: polygonKey! });
+    const [fromAlpaca, fromPolygon] = await Promise.all([alpaca.stockSplits({ symbol: 'AAPL' }), polygon.stockSplits({ symbol: 'AAPL' })]);
+
+    // Every split Alpaca reports, Polygon reports identically.
+    for (const split of fromAlpaca.splits) {
+      expect(fromPolygon.splits).toContainEqual(split);
+    }
+    // Polygon reaches back to 1987; Alpaca's corporate actions begin around 2016, so the
+    // one to reconstruct a long price history from is Polygon.
+    expect(fromPolygon.splits.length).toBeGreaterThan(fromAlpaca.splits.length);
+    expect(fromPolygon.splits.some((split) => split.executionDate < '2016-01-01')).toBe(true);
+    expect(fromAlpaca.splits.every((split) => split.executionDate >= '2016-01-01')).toBe(true);
   });
 
   runIfPolygon('on the daily closes of a week', async () => {

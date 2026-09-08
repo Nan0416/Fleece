@@ -1,8 +1,8 @@
 import { easternClock } from '@fleece/shared';
 
-import { DataProviderError, type Bar, type MarketSession, type Quote, type Trade } from '../equity-data-models';
+import { DataProviderError, type Bar, type MarketSession, type Quote, type StockSplit, type Trade } from '../equity-data-models';
 
-import type { AlpacaBar, AlpacaCalendarDay, AlpacaQuote, AlpacaTrade } from './alpaca-rest-models';
+import type { AlpacaBar, AlpacaCalendarDay, AlpacaQuote, AlpacaSplit, AlpacaTrade } from './alpaca-rest-models';
 
 const SOURCE = 'Alpaca';
 
@@ -20,6 +20,10 @@ export function parseTimestamp(value: string): number {
     throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} where an RFC 3339 timestamp was expected.`);
   }
   return parsed;
+}
+
+export function normalizeSplit(split: AlpacaSplit): StockSplit {
+  return { ticker: split.symbol, executionDate: split.ex_date, splitFrom: split.old_rate, splitTo: split.new_rate };
 }
 
 export function normalizeBar(symbol: string, bar: AlpacaBar): Bar {

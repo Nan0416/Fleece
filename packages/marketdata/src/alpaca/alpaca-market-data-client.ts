@@ -1,4 +1,4 @@
-import { FetchHttpClient, InvalidRequestError, LoggerFactory, type HttpClient, type HttpHeaders, type Query } from '@fleece/shared';
+import { FetchHttpClient, InvalidRequestError, LoggerFactory, easternClock, type HttpClient, type HttpHeaders, type Query } from '@fleece/shared';
 
 import {
   DataProviderError,
@@ -11,6 +11,8 @@ import {
   type MinuteBarsRequest,
   type QuotesRequest,
   type QuotesResponse,
+  type StockSplitsRequest,
+  type StockSplitsResponse,
   type Timespan,
   type TradesRequest,
   type TradesResponse,
@@ -18,8 +20,18 @@ import {
 import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, spansWholeSessions, startOfDay } from '../request-window';
 import { marketHour } from '../market-hours';
 
-import type { AlpacaBar, AlpacaBarsResponse, AlpacaCalendarDay, AlpacaQuote, AlpacaQuotesResponse, AlpacaTrade, AlpacaTradesResponse } from './alpaca-rest-models';
-import { normalizeBar, normalizeQuote, normalizeSession, normalizeTrade } from './normalizers';
+import type {
+  AlpacaBar,
+  AlpacaBarsResponse,
+  AlpacaCalendarDay,
+  AlpacaCorporateActions,
+  AlpacaCorporateActionsResponse,
+  AlpacaQuote,
+  AlpacaQuotesResponse,
+  AlpacaTrade,
+  AlpacaTradesResponse,
+} from './alpaca-rest-models';
+import { normalizeBar, normalizeQuote, normalizeSession, normalizeSplit, normalizeTrade } from './normalizers';
 
 const logger = LoggerFactory.getLogger('AlpacaMarketDataClient');
 
@@ -50,6 +62,9 @@ const MAX_PAGE = 10_000;
 
 /** A stop, so a broken page token cannot spin forever against a paid API. */
 const MAX_PAGES = 500;
+
+/** Alpaca's corporate-action history does not reach further back than this. */
+const EARLIEST_CORPORATE_ACTION = '2000-01-01';
 
 /**
  * Which multipliers Alpaca aggregates, per unit. Checked here rather than left to a 422,
@@ -150,6 +165,22 @@ export class AlpacaMarketDataClient implements AlpacaStockRestClient {
   }
 
   /**
+   * Forward and reverse splits together, oldest first, as one list — the endpoint returns
+   * them under separate keys and the difference is only which way the rates run.
+   *
+   * The window matters here in a way it does not for Polygon. Alpaca answers with today
+   * alone when given no range, so this asks for everything it holds; and what it holds
+   * begins around 2016, where Polygon has AAPL's 1987 split. A caller reconstructing a
+   * long price history wants Polygon.
+   */
+  async stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse> {
+    const range = this.corporateActionRange(request.executionDate);
+    const actions = await this.corporateActions(request.symbol, 'forward_split,reverse_split', range);
+    const splits = actions.flatMap((page) => [...(page.forward_splits ?? []), ...(page.reverse_splits ?? [])]).map((split) => normalizeSplit(split));
+    return { splits: splits.sort((left, right) => left.executionDate.localeCompare(right.executionDate)) };
+  }
+
+  /**
    * The exchange calendar, which is what the session table in `market-hours.ts` is made
    * of. Trading days only: a weekend or a holiday is absent from the answer.
    */
@@ -188,6 +219,41 @@ export class AlpacaMarketDataClient implements AlpacaStockRestClient {
     const to = request.to ?? Date.now();
     requireForwardRange(request.from, to, what);
     return { start: new Date(request.from).toISOString(), end: new Date(to).toISOString(), limit: pageSize(request.itemsPerRequest, what) };
+  }
+
+  private corporateActionRange(executionDate: string | undefined): { readonly start: string; readonly end: string } {
+    if (executionDate !== undefined) {
+      requireIsoDate(executionDate, 'filter corporate actions to an execution date');
+      return { start: executionDate, end: executionDate };
+    }
+    // Given no range Alpaca answers for today only, so "everything" has to be asked for.
+    // The far end runs ahead because a split is announced before it happens.
+    return { start: EARLIEST_CORPORATE_ACTION, end: easternClock.nextDate(easternClock.date(), 366) };
+  }
+
+  private async corporateActions(symbol: string, types: string, range: { readonly start: string; readonly end: string }): Promise<AlpacaCorporateActions[]> {
+    const pages: AlpacaCorporateActions[] = [];
+    let pageToken: string | undefined = undefined;
+
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const body = await this.get<AlpacaCorporateActionsResponse>('/v1/corporate-actions', {
+        symbols: symbol,
+        types,
+        start: range.start,
+        end: range.end,
+        limit: 1000,
+        page_token: pageToken,
+      });
+      pages.push(body.corporate_actions ?? {});
+
+      const next = readPageToken(body);
+      if (next === undefined || next.length === 0) {
+        return pages;
+      }
+      pageToken = next;
+    }
+
+    throw new DataProviderError(SOURCE, `has more than ${MAX_PAGES} pages of corporate actions for ${symbol}. Ask for a shorter range.`);
   }
 
   private async page<T, R>(path: string, symbol: string, read: (body: R) => Record<string, ReadonlyArray<T> | null> | null | undefined, query: Query): Promise<T[]> {

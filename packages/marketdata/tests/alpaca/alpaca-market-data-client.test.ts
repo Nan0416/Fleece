@@ -5,7 +5,7 @@ import { DataProviderError } from '../../src/equity-data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { FakeHttpClient } from '../fake-http-client';
 
-import { bars, calendar, quotes, trades, withPageToken } from './fake-responses';
+import { bars, calendar, corporateActions, quotes, trades, withPageToken } from './fake-responses';
 
 const SESSION = '2024-12-19';
 const at = (date: string, time: string): number => easternClock.timestamp(date, time);
@@ -225,6 +225,58 @@ describe('trades and quotes', () => {
 
     await expect(send).rejects.toThrow(DataProviderError);
     await expect(send).rejects.toThrow(/RFC 3339 timestamp/);
+  });
+});
+
+describe('stockSplits', () => {
+  it('returns forward and reverse splits as one list, oldest first', async () => {
+    // The endpoint keys them separately and the only difference is which way the rates
+    // run, which is not a distinction the caller makes.
+    const http = new FakeHttpClient().reply(corporateActions({ forward: [{ date: '2020-08-31', from: 1, to: 4 }], reverse: [{ date: '2016-05-02', from: 8, to: 1 }] }));
+    const { splits } = await client(http).stockSplits({ symbol: 'AAPL' });
+
+    expect(splits).toStrictEqual([
+      { ticker: 'AAPL', executionDate: '2016-05-02', splitFrom: 8, splitTo: 1 },
+      { ticker: 'AAPL', executionDate: '2020-08-31', splitFrom: 1, splitTo: 4 },
+    ]);
+  });
+
+  it('asks for a range, because with none Alpaca answers for today alone', async () => {
+    const http = new FakeHttpClient().reply(corporateActions({}));
+    await client(http).stockSplits({ symbol: 'AAPL' });
+
+    expect(http.lastRequest.query['types']).toBe('forward_split,reverse_split');
+    expect(http.lastRequest.query['start']).toBe('2000-01-01');
+    // Ahead of today, because a split is announced before it happens.
+    expect(http.lastRequest.query['end'] > easternClock.date()).toBe(true);
+  });
+
+  it('narrows to one execution date when given one', async () => {
+    const http = new FakeHttpClient().reply(corporateActions({ forward: [{ date: '2020-08-31', from: 1, to: 4 }] }));
+    await client(http).stockSplits({ symbol: 'AAPL', executionDate: '2020-08-31' });
+
+    expect(http.lastRequest.query['start']).toBe('2020-08-31');
+    expect(http.lastRequest.query['end']).toBe('2020-08-31');
+  });
+
+  it('refuses an execution date that is not a real calendar date', async () => {
+    await expect(client(new FakeHttpClient()).stockSplits({ symbol: 'AAPL', executionDate: '2020-02-30' })).rejects.toThrow(InvalidRequestError);
+  });
+
+  it('reports no splits rather than throwing when a symbol has none', async () => {
+    const http = new FakeHttpClient().reply({ corporate_actions: {} });
+    expect((await client(http).stockSplits({ symbol: 'AAPL' })).splits).toStrictEqual([]);
+  });
+
+  it('follows the page token across pages', async () => {
+    const http = new FakeHttpClient().reply(
+      withPageToken(corporateActions({ forward: [{ date: '2016-06-01', from: 1, to: 2 }] }), 'page-2'),
+      withPageToken(corporateActions({ forward: [{ date: '2020-08-31', from: 1, to: 4 }] }), null),
+    );
+    const { splits } = await client(http).stockSplits({ symbol: 'AAPL' });
+
+    expect(splits.map((split) => split.executionDate)).toStrictEqual(['2016-06-01', '2020-08-31']);
+    expect(http.requests[1].query['page_token']).toBe('page-2');
   });
 });
 

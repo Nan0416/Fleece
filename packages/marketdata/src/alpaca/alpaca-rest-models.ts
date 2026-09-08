@@ -71,3 +71,42 @@ export interface AlpacaCalendarDay {
   readonly session_close: string;
   readonly settlement_date?: string;
 }
+
+/**
+ * A split, forward or reverse. The rates read the same way round as Polygon's: a 1-for-4
+ * forward split is `old_rate: 1, new_rate: 4`, and GE's reverse is `old_rate: 8,
+ * new_rate: 1`.
+ */
+export interface AlpacaSplit {
+  readonly symbol: string;
+  readonly ex_date: string;
+  readonly old_rate: number;
+  readonly new_rate: number;
+  readonly record_date?: string;
+  readonly payable_date?: string;
+  readonly process_date?: string;
+}
+
+export interface AlpacaCashDividend {
+  readonly symbol: string;
+  readonly ex_date: string;
+  readonly rate: number;
+  /** Alpaca's only statement about the kind of dividend this is. */
+  readonly special: boolean;
+  readonly foreign: boolean;
+  readonly record_date?: string;
+  readonly payable_date?: string;
+  readonly process_date?: string;
+}
+
+/** Keyed by kind rather than by symbol, unlike every other multi-item response. */
+export interface AlpacaCorporateActions {
+  readonly forward_splits?: ReadonlyArray<AlpacaSplit> | null;
+  readonly reverse_splits?: ReadonlyArray<AlpacaSplit> | null;
+  readonly cash_dividends?: ReadonlyArray<AlpacaCashDividend> | null;
+}
+
+export interface AlpacaCorporateActionsResponse {
+  readonly corporate_actions?: AlpacaCorporateActions | null;
+  readonly next_page_token?: string | null;
+}

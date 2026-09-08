@@ -26,3 +26,24 @@ export function calendar(...days: ReadonlyArray<{ date: string; open?: string; c
     settlement_date: day.date,
   }));
 }
+
+export function corporateActions(actions: {
+  forward?: ReadonlyArray<{ date: string; from: number; to: number }>;
+  reverse?: ReadonlyArray<{ date: string; from: number; to: number }>;
+}): unknown {
+  const split = (symbol: string) => (entry: { date: string; from: number; to: number }) => ({
+    symbol,
+    ex_date: entry.date,
+    old_rate: entry.from,
+    new_rate: entry.to,
+    record_date: entry.date,
+    payable_date: entry.date,
+    process_date: entry.date,
+  });
+  return {
+    corporate_actions: {
+      ...(actions.forward === undefined ? {} : { forward_splits: actions.forward.map(split('AAPL')) }),
+      ...(actions.reverse === undefined ? {} : { reverse_splits: actions.reverse.map(split('AAPL')) }),
+    },
+  };
+}
