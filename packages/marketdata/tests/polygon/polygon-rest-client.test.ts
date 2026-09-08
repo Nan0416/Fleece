@@ -135,9 +135,17 @@ describe('bars', () => {
     expect(bars).toHaveLength(2);
   });
 
-  it('never filters a daily bar, which spans the whole session anyway', async () => {
+  it.each(['day', 'week', 'month', 'quarter', 'year'] as const)('never filters a %s bar, which spans whole sessions anyway', async (timespan) => {
     const http = new FakeHttpClient().reply(aggregates({ t: at(SESSION, '00:00:00') }));
-    const { bars } = await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' });
+    const { bars } = await client(http).bars({ symbol: 'AAPL', from: '2024-12-01', to: SESSION, multiplier: 1, timespan });
+
+    expect(bars).toHaveLength(1);
+  });
+
+  it.each(['week', 'month'] as const)('does not consult the market-hours table for a %s bar', async (timespan) => {
+    const beyond = easternClock.shiftDate(marketHoursCoverage.to, 30);
+    const http = new FakeHttpClient().reply(aggregates({ t: at(SESSION, '00:00:00') }));
+    const { bars } = await client(http).bars({ symbol: 'AAPL', from: beyond, to: easternClock.shiftDate(beyond, 60), multiplier: 1, timespan });
 
     expect(bars).toHaveLength(1);
   });

@@ -10,6 +10,12 @@ export interface BarsRequest {
   readonly from: DateOrTimestamp;
   readonly to: DateOrTimestamp;
   readonly multiplier: number;
+  /**
+   * Providers do not agree on where a week starts: Alpaca buckets from Monday and drops
+   * a partial week at the start of a range, Polygon buckets from Sunday and keeps it. The
+   * same request over the same quarter is 11 weekly bars from one and 12 from the other,
+   * and neither is wrong. Day and coarser-than-week agree.
+   */
   readonly timespan: Timespan;
   /** Defaults to true for intraday timespans, and is ignored for `day` and coarser. */
   readonly marketHoursOnly?: boolean;
@@ -159,20 +165,66 @@ export interface HistoricalBarsResponse {
   readonly days: ReadonlyMap<string, ReadonlyArray<Bar>>;
 }
 
+/** What every provider serves: prices over a window. */
 export interface StockRestClient {
   bars(request: BarsRequest): Promise<BarsResponse>;
   minuteBars(request: MinuteBarsRequest): Promise<BarsResponse>;
   dailyBars(request: DailyBarsRequest): Promise<BarsResponse>;
   trades(request: TradesRequest): Promise<TradesResponse>;
   quotes(request: QuotesRequest): Promise<QuotesResponse>;
-  snapshot(request: SnapshotRequest): Promise<SnapshotResponse>;
-  snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse>;
+  /**
+   * How far back a provider's split history reaches is its own business: Polygon has
+   * AAPL's 1987 split, Alpaca's corporate actions begin around 2016.
+   */
+  stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
+}
+
+/** A trading day as the exchange calendar records it, and as the session table stores it. */
+export interface MarketSession {
+  /** Eastern calendar date, ISO `YYYY-MM-DD`. */
+  readonly date: string;
+  /** `HH:mm` Eastern, usually 09:30. */
+  readonly open: string;
+  /** `HH:mm` Eastern — 13:00 on a half day. */
+  readonly close: string;
+  readonly openAt: number;
+  readonly closeAt: number;
+  readonly preMarketOpenAt: number;
+  readonly afterMarketCloseAt: number;
+}
+
+export interface MarketHoursRequest {
+  /** Inclusive, ISO `YYYY-MM-DD`. */
+  readonly fromDate: string;
+  /** Inclusive, ISO `YYYY-MM-DD`. */
+  readonly toDate: string;
+}
+
+export interface MarketHoursResponse {
+  /** Trading days only, ascending. A weekend or a holiday is absent, not empty. */
+  readonly sessions: ReadonlyArray<MarketSession>;
+}
+
+/**
+ * Alpaca additionally serves the exchange calendar, which is where the session table in
+ * `market-hours.ts` comes from — including the after-hours close that varies between
+ * half days, which no rule derives.
+ */
+export interface AlpacaStockRestClient extends StockRestClient {
+  marketHours(request: MarketHoursRequest): Promise<MarketHoursResponse>;
 }
 
 export interface PolygonStockRestClient extends StockRestClient {
+  snapshot(request: SnapshotRequest): Promise<SnapshotResponse>;
+  snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse>;
   tickers(request: TickersRequest): Promise<TickersResponse>;
   tickerDetails(request: TickerDetailsRequest): Promise<TickerDetailsResponse>;
-  stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
+  /**
+   * Polygon only, deliberately. Alpaca serves cash dividends too, but sends no
+   * declaration date, frequency or currency — and `declaration_date` is `NOT NULL` on the
+   * ledger's `dividend` table and read straight out of this type by the corporate-action
+   * job. Supplying one from elsewhere would be inventing a date the ledger then stores.
+   */
   dividends(request: DividendsRequest): Promise<DividendsResponse>;
   historicalBars(request: HistoricalBarsRequest): Promise<HistoricalBarsResponse>;
 }

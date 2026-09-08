@@ -1,16 +1,15 @@
 import { easternClock } from '@fleece/shared';
 
+import type { MarketSession } from './equity-data-models';
+
 import rawMarketHours from './market-hours-data.json';
 
-export interface MarketHour {
+/**
+ * A stored session, which is a calendar session plus where it sits in the table — so
+ * whatever refreshes the file produces exactly what the file holds.
+ */
+export interface MarketHour extends MarketSession {
   readonly index: number;
-  readonly date: string;
-  readonly open: string;
-  readonly close: string;
-  readonly openAt: number;
-  readonly closeAt: number;
-  readonly preMarketOpenAt: number;
-  readonly afterMarketCloseAt: number;
 }
 
 export type MarketState = 'closed' | 'pre_market' | 'open' | 'after_market';
