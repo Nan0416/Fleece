@@ -2,6 +2,9 @@
  * The equity data model, ported from `@qnquant/equity-data-models` with its field names
  * intact: a `Bar` is `{S, o, h, l, c, v, t}` here as it is on Alpaca's and Polygon's
  * WebSocket feeds, because these types are what a feed hands a strategy tick by tick.
+ *
+ * `Bar` and `Quote` serve options too; what options need beyond them is in
+ * `option-types.ts`.
  */
 
 export type AlpacaSource = 'a';

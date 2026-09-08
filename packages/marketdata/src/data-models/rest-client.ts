@@ -1,4 +1,5 @@
 import type { Bar, Dividend, LatestSnapshot, Quote, StockSplit, Ticker, TickerDetails, TickerType, Trade } from './types';
+import type { OptionBarsRequest, OptionBarsResponse, OptionChainRequest, OptionChainResponse, OptionTradesRequest, OptionTradesResponse } from './option-rest-client';
 
 export type Timespan = 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year';
 
@@ -205,13 +206,62 @@ export interface MarketHoursResponse {
   readonly sessions: ReadonlyArray<MarketSession>;
 }
 
+export type MarketDataMarket = 'stocks' | 'options';
+
+export type TickType = 'trade' | 'quote';
+
+/** Which consolidated tape a symbol reports on: A is NYSE-listed, B regional, C Nasdaq. */
+export type Tape = 'A' | 'B' | 'C';
+
 /**
- * Alpaca additionally serves the exchange calendar, which is where the session table in
- * `market-hours.ts` comes from — including the after-hours close that varies between
- * half days, which no rule derives.
+ * What a condition character on a trade or a quote means.
+ *
+ * These are what decides whether a print is one that counts. An odd lot does not update
+ * the consolidated last, an average-price trade is not a market print, a non-firm quote
+ * is not a price anyone has to honour, and a multi-leg option print is one leg's share of
+ * a spread rather than a price for that contract. None of that is visible in the numbers.
  */
-export interface AlpacaStockRestClient extends StockRestClient {
+export interface ConditionsRequest {
+  readonly market: MarketDataMarket;
+  readonly tickType: TickType;
+  /** Required for stocks, whose codes differ by tape. Not taken for options. */
+  readonly tape?: Tape;
+}
+
+/** Keyed by the character as it arrives in a trade's or a quote's `c`. */
+export interface ConditionsResponse {
+  readonly conditions: ReadonlyMap<string, string>;
+}
+
+export interface ExchangesRequest {
+  readonly market: MarketDataMarket;
+}
+
+/** Keyed by the code as it arrives in a trade's `x` or a quote's `bx`/`ax`. */
+export interface ExchangesResponse {
+  readonly exchanges: ReadonlyMap<string, string>;
+}
+
+/**
+ * Everything Alpaca serves: the stock endpoints above, the exchange calendar, options,
+ * and the dictionaries that say what a code on a print means.
+ *
+ * Options are here rather than in a provider-neutral interface because Polygon's option
+ * data is a subscription this system does not hold, so there is no second implementation
+ * for them to agree with.
+ */
+export interface AlpacaMarketDataRestClient extends StockRestClient {
+  /**
+   * The exchange calendar, which is where the session table in `market-hours.ts` comes
+   * from — including the after-hours close that varies between half days, which no rule
+   * derives.
+   */
   marketHours(request: MarketHoursRequest): Promise<MarketHoursResponse>;
+  optionChain(request: OptionChainRequest): Promise<OptionChainResponse>;
+  optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse>;
+  optionTrades(request: OptionTradesRequest): Promise<OptionTradesResponse>;
+  conditions(request: ConditionsRequest): Promise<ConditionsResponse>;
+  exchanges(request: ExchangesRequest): Promise<ExchangesResponse>;
 }
 
 export interface PolygonStockRestClient extends StockRestClient {

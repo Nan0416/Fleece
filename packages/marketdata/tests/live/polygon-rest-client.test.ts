@@ -1,6 +1,6 @@
 import { easternClock } from '@fleece/shared';
 
-import { DataProviderError } from '../../src/equity-data-models';
+import { DataProviderError } from '../../src/data-models';
 import { PolygonRestClient } from '../../src/polygon';
 
 /**

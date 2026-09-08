@@ -1,6 +1,6 @@
 import { InternalServiceError, InvalidRequestError, easternClock, isIsoDate } from '@fleece/shared';
 
-import type { Bar, DateOrTimestamp, Timespan } from './equity-data-models';
+import type { Bar, DateOrTimestamp, Timespan } from './data-models';
 import { marketHoursCoverage, marketState } from './market-hours';
 
 /**

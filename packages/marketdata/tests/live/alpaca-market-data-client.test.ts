@@ -1,7 +1,7 @@
 import { easternClock } from '@fleece/shared';
 
 import { AlpacaMarketDataClient } from '../../src/alpaca';
-import { DataProviderError } from '../../src/equity-data-models';
+import { DataProviderError } from '../../src/data-models';
 import { marketHour } from '../../src/market-hours';
 import { PolygonRestClient } from '../../src/polygon';
 

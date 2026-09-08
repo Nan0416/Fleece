@@ -1,6 +1,6 @@
 import { easternClock, InternalServiceError, InvalidRequestError, type HttpClient } from '@fleece/shared';
 
-import { DataProviderError } from '../../src/equity-data-models';
+import { DataProviderError } from '../../src/data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { PolygonRestClient } from '../../src/polygon';
 

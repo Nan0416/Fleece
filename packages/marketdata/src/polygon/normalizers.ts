@@ -12,7 +12,7 @@ import {
   type Ticker,
   type TickerDetails,
   type Trade,
-} from '../equity-data-models';
+} from '../data-models';
 
 import type {
   PolygonAggregateBar,

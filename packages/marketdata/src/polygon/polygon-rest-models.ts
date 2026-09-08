@@ -1,6 +1,6 @@
 /** Polygon's wire shapes, snake_case as they arrive. Normalised in `normalizers.ts`. */
 
-import type { Exchange, TickerType } from '../equity-data-models';
+import type { Exchange, TickerType } from '../data-models';
 
 /**
  * Bar

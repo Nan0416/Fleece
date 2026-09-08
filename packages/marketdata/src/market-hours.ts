@@ -1,6 +1,6 @@
 import { easternClock } from '@fleece/shared';
 
-import type { MarketSession } from './equity-data-models';
+import type { MarketSession } from './data-models';
 
 import rawMarketHours from './market-hours-data.json';
 

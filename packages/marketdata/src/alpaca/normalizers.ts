@@ -1,6 +1,6 @@
 import { easternClock } from '@fleece/shared';
 
-import { DataProviderError, type Bar, type MarketSession, type Quote, type StockSplit, type Trade } from '../equity-data-models';
+import { DataProviderError, type Bar, type MarketSession, type Quote, type StockSplit, type Trade } from '../data-models';
 
 import type { AlpacaBar, AlpacaCalendarDay, AlpacaQuote, AlpacaSplit, AlpacaTrade } from './alpaca-rest-models';
 
