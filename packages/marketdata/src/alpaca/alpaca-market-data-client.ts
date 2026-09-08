@@ -151,7 +151,7 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
   }
 
   async dailyBars(request: DailyBarsRequest): Promise<BarsResponse> {
-    return await this.bars({ ...request, to: request.to ?? Date.now(), multiplier: 1, timespan: 'day', marketHoursOnly: false });
+    return await this.bars({ ...request, to: request.to ?? Date.now(), multiplier: 1, timespan: 'day' });
   }
 
   async bars(request: BarsRequest): Promise<BarsResponse> {
