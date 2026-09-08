@@ -91,7 +91,7 @@ describe('marketState', () => {
   });
 
   it('reads closed for any date the table does not cover', () => {
-    expect(marketState(at('2025-06-16T15:30:00Z'))).toBe('closed');
+    expect(marketState(easternClock.timestamp(easternClock.shiftDate(marketHoursCoverage.to, 30), '10:30:00'))).toBe('closed');
     expect(marketState(at('1998-06-16T15:30:00Z'))).toBe('closed');
   });
 });
@@ -149,10 +149,13 @@ describe('marketHourByIndex', () => {
 
 describe('the table itself', () => {
   it('reports the range it covers, so a caller can tell closed from unknown', () => {
+    // Derived from the table rather than written down: refreshing the file moves the far
+    // end, and a literal here would fail for the one reason that is not a regression.
     expect(marketHoursCoverage.from).toBe('2001-01-02');
-    expect(marketHoursCoverage.to).toBe('2024-12-31');
     expect(isTradingDay(marketHoursCoverage.from)).toBe(true);
     expect(isTradingDay(marketHoursCoverage.to)).toBe(true);
+    expect(marketHoursCoverage.to > marketHoursCoverage.from).toBe(true);
+    expect(marketHour(easternClock.shiftDate(marketHoursCoverage.to, 1))).toBeUndefined();
   });
 
   it('opens before it closes, every session', () => {
@@ -165,7 +168,7 @@ describe('the table itself', () => {
       index += 1;
       session = marketHourByIndex(index);
     }
-    expect(index).toBe(6037);
+    expect(marketHourByIndex(index - 1)?.date).toBe(marketHoursCoverage.to);
   });
 
   it('agrees with the clock on every stored boundary', () => {

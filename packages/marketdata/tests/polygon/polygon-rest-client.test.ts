@@ -164,7 +164,7 @@ describe('bars', () => {
 
     // Ours, not Polygon's: nothing was asked of them, and no caller can fix it.
     await expect(send).rejects.toThrow(InternalServiceError);
-    await expect(send).rejects.toThrow(/market-hours table stops at 2024-12-31/);
+    await expect(send).rejects.toThrow(new RegExp(`market-hours table stops at ${marketHoursCoverage.to}`));
     expect(http.requests).toHaveLength(0);
   });
 
@@ -369,7 +369,7 @@ describe('trades', () => {
     const http = new FakeHttpClient();
     const send = client(http).trades({ symbol: 'AAPL', date: past });
 
-    await expect(send).rejects.toThrow(/market-hours table stops at 2024-12-31/);
+    await expect(send).rejects.toThrow(new RegExp(`market-hours table stops at ${marketHoursCoverage.to}`));
     expect(http.requests).toHaveLength(0);
   });
 
@@ -438,7 +438,7 @@ describe('snapshot', () => {
     jest.spyOn(Date, 'now').mockReturnValue(easternClock.timestamp(easternClock.shiftDate(marketHoursCoverage.to, 30), '10:00:00'));
     try {
       const http = new FakeHttpClient();
-      await expect(client(http).snapshot({ symbol: 'AAPL' })).rejects.toThrow(/market-hours table stops at 2024-12-31/);
+      await expect(client(http).snapshot({ symbol: 'AAPL' })).rejects.toThrow(new RegExp(`market-hours table stops at ${marketHoursCoverage.to}`));
       expect(http.requests).toHaveLength(0);
     } finally {
       jest.restoreAllMocks();
