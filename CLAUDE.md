@@ -16,7 +16,7 @@ An npm-workspaces monorepo, nine packages under `packages/`:
 | `client` | Typed client for that API |
 | `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
 | `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price |
-| `marketdata` | The equity data model, two REST clients over it — Polygon (bars, trades, quotes, snapshots, reference data) and Alpaca (bars, trades, quotes, the exchange calendar) — and the US market-hours table. The Alpaca one here is market data; `@fleece/alpaca` is the trading API |
+| `marketdata` | The market data model, two REST clients over it — Polygon (stock bars, trades, quotes, snapshots, reference data) and Alpaca (the same for stocks, plus option chains, option bars and trades, the exchange calendar, and the condition and exchange dictionaries) — and the US market-hours table. Options are Alpaca-only: Polygon's are a separate subscription. The Alpaca one here is market data; `@fleece/alpaca` is the trading API |
 | `tracking-service` | Turns broker order events into ledger entries, and takes claims about whose an order is |
 | `corporate-actions` | Records the dividends each account is owed |
 

@@ -110,3 +110,68 @@ export interface AlpacaCorporateActionsResponse {
   readonly corporate_actions?: AlpacaCorporateActions | null;
   readonly next_page_token?: string | null;
 }
+
+/**
+ * An option trade carries less than an equity one: OPRA reports no trade id and no tape,
+ * and the condition is a single character where an equity trade sends an array.
+ */
+export interface AlpacaOptionTrade {
+  readonly t: AlpacaTimestamp;
+  /** Exchange code, a letter. */
+  readonly x: string;
+  readonly p: number;
+  /** Contracts. */
+  readonly s: number;
+  readonly c?: string | null;
+}
+
+/** Same shape as `AlpacaQuote` but for the single-character condition. */
+export interface AlpacaOptionQuote {
+  readonly t: AlpacaTimestamp;
+  readonly ax: string;
+  readonly ap: number;
+  readonly as: number;
+  readonly bx: string;
+  readonly bp: number;
+  readonly bs: number;
+  readonly c?: string | null;
+}
+
+export interface AlpacaGreeks {
+  readonly delta: number;
+  readonly gamma: number;
+  readonly theta: number;
+  readonly vega: number;
+  readonly rho: number;
+}
+
+/**
+ * Every section is optional. Alpaca omits `prevDailyBar` for a contract that did not
+ * trade the day before, and omits the greeks and the implied volatility wherever it could
+ * not solve them.
+ */
+export interface AlpacaOptionSnapshot {
+  readonly dailyBar?: AlpacaBar | null;
+  readonly minuteBar?: AlpacaBar | null;
+  readonly prevDailyBar?: AlpacaBar | null;
+  readonly latestTrade?: AlpacaOptionTrade | null;
+  readonly latestQuote?: AlpacaOptionQuote | null;
+  readonly greeks?: AlpacaGreeks | null;
+  readonly impliedVolatility?: number | null;
+}
+
+/** Keyed by contract symbol, and in the order the chain is paged in. */
+export interface AlpacaOptionSnapshotsResponse {
+  readonly snapshots?: Record<string, AlpacaOptionSnapshot | null> | null;
+  readonly next_page_token?: string | null;
+}
+
+export interface AlpacaOptionBarsResponse {
+  readonly bars?: Record<string, ReadonlyArray<AlpacaBar> | null> | null;
+  readonly next_page_token?: string | null;
+}
+
+export interface AlpacaOptionTradesResponse {
+  readonly trades?: Record<string, ReadonlyArray<AlpacaOptionTrade> | null> | null;
+  readonly next_page_token?: string | null;
+}

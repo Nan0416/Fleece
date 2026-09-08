@@ -257,3 +257,154 @@ describe('failure', () => {
     await expect(send).rejects.toThrow(/returned 40/);
   });
 });
+
+interface TradedContract {
+  readonly symbol: string;
+  /** A settled session this contract traded in — never today's, which is still open. */
+  readonly date: string;
+}
+
+/**
+ * A contract picked from the live chain rather than written down: an OCC symbol names a
+ * date, so a hardcoded one stops existing.
+ *
+ * The session comes from the snapshot's own daily bar rather than from today, and a bar
+ * dated today is skipped. Today's is still being aggregated: a print landing between the
+ * trades response and the bars response would make them disagree, and this suite's whole
+ * point is that when they disagree it means the normalisation is wrong.
+ */
+async function aSettledContract(): Promise<TradedContract> {
+  const today = easternClock.date();
+  const { contracts } = await alpaca.optionChain({ underlying: 'AAPL', type: 'call', limit: 500 });
+
+  for (const contract of contracts) {
+    const bar = contract.db;
+    if (bar === undefined || bar.v <= 0) {
+      continue;
+    }
+    const date = easternClock.date(bar.t);
+    if (date !== today) {
+      return { symbol: contract.S, date };
+    }
+  }
+  throw new Error('No AAPL call in the chain has a daily bar from a settled session; the option suite needs one.');
+}
+
+describe('the option chain', () => {
+  it('answers with contracts on the underlying asked for, each taken apart', async () => {
+    const { contracts } = await alpaca.optionChain({ underlying: 'AAPL', limit: 50 });
+
+    expect(contracts.length).toBeGreaterThan(0);
+    expect(contracts.every((contract) => contract.contract.underlying === 'AAPL')).toBe(true);
+    expect(contracts.every((contract) => contract.contract.strike > 0 && contract.S === contract.contract.symbol)).toBe(true);
+  });
+
+  it('honours the filters rather than answering with the whole chain', async () => {
+    const { contracts } = await alpaca.optionChain({ underlying: 'AAPL', type: 'put', strikeFrom: 150, strikeTo: 250, limit: 100 });
+
+    expect(contracts.length).toBeGreaterThan(0);
+    expect(contracts.every((contract) => contract.contract.type === 'put')).toBe(true);
+    expect(contracts.every((contract) => contract.contract.strike >= 150 && contract.contract.strike <= 250)).toBe(true);
+  });
+
+  it('pages a chain too large for one answer, and the cursor moves', async () => {
+    const first = await alpaca.optionChain({ underlying: 'SPY', limit: 100 });
+    expect(first.resumeFrom).toBeDefined();
+
+    const second = await alpaca.optionChain({ underlying: 'SPY', limit: 100, startAfter: first.resumeFrom });
+    const overlap = new Set(first.contracts.map((contract) => contract.S));
+
+    expect(second.contracts.length).toBeGreaterThan(0);
+    expect(second.contracts.some((contract) => overlap.has(contract.S))).toBe(false);
+  });
+
+  it('solves the greeks for some contracts and not others, and says which', async () => {
+    const { contracts } = await alpaca.optionChain({ underlying: 'AAPL', limit: 500 });
+    const withGreeks = contracts.filter((contract) => contract.greeks !== undefined);
+
+    expect(withGreeks.length).toBeGreaterThan(0);
+    expect(withGreeks.length).toBeLessThan(contracts.length);
+    expect(withGreeks.every((contract) => typeof contract.iv === 'number' && contract.greeks !== undefined && Number.isFinite(contract.greeks.delta))).toBe(true);
+  });
+});
+
+describe('option history', () => {
+  let contract: TradedContract;
+
+  beforeAll(async () => {
+    contract = await aSettledContract();
+  });
+
+  it('returns daily bars for a contract, in order and within the day', async () => {
+    const { symbol, date } = contract;
+    const { bars } = await alpaca.optionBars({ symbol, from: easternClock.shiftDate(date, -30), to: date, multiplier: 1, timespan: 'day' });
+
+    expect(bars.length).toBeGreaterThan(0);
+    expect(bars.every((bar) => bar.S === symbol && bar.l <= bar.o && bar.o <= bar.h && bar.v > 0)).toBe(true);
+    expect(bars.map((bar) => bar.t)).toStrictEqual([...bars.map((bar) => bar.t)].sort((left, right) => left - right));
+  });
+
+  it('returns prints with a condition and an exchange, and no trade id', async () => {
+    const { symbol, date } = contract;
+    const { trades } = await alpaca.optionTrades({ symbol, date });
+
+    expect(trades.length).toBeGreaterThan(0);
+    expect(trades.every((trade) => trade.p > 0 && trade.s > 0 && trade.x.length > 0)).toBe(true);
+    expect(trades.every((trade) => trade.c === undefined || trade.c.length === 1)).toBe(true);
+    expect(Object.keys(trades[0])).not.toContain('i');
+  });
+
+  it("agrees with its own daily bar on the day's volume", async () => {
+    const { symbol, date } = contract;
+    const [{ trades }, { bars }] = await Promise.all([alpaca.optionTrades({ symbol, date }), alpaca.optionBars({ symbol, from: date, to: date, multiplier: 1, timespan: 'day' })]);
+
+    expect(bars).toHaveLength(1);
+    expect(trades.reduce((total, trade) => total + trade.s, 0)).toBe(bars[0].v);
+  });
+});
+
+describe('the condition and exchange dictionaries', () => {
+  it('still names the option trade conditions the model documents', async () => {
+    // A guard, not a description: `OptionTrade.c` explains what `f`, `g` and the cancel
+    // codes mean, and this fails if Alpaca renames or drops one of them.
+    const { conditions } = await alpaca.conditions({ market: 'options', tickType: 'trade' });
+
+    expect(conditions.get('f')).toMatch(/Multi Leg/);
+    expect(conditions.get('g')).toMatch(/Multi Leg/);
+    // By OPRA mnemonic rather than by the word: Alpaca's description of `A` is
+    // "CANC - Transaction previously reported", which never says cancelled.
+    for (const [code, mnemonic] of [
+      ['A', 'CANC'],
+      ['C', 'CNCL'],
+      ['E', 'CNCO'],
+      ['G', 'CNOL'],
+    ]) {
+      expect(conditions.get(code)).toMatch(new RegExp(`^${mnemonic} `));
+    }
+  });
+
+  it('names the stock trade conditions per tape', async () => {
+    const { conditions } = await alpaca.conditions({ market: 'stocks', tickType: 'trade', tape: 'C' });
+
+    expect(conditions.get('@')).toBe('Regular Sale');
+    expect(conditions.get('I')).toMatch(/Odd Lot/);
+  });
+
+  it('names option quote conditions, including the ones that are not firm', async () => {
+    const { conditions } = await alpaca.conditions({ market: 'options', tickType: 'quote' });
+
+    expect(conditions.get('F')).toMatch(/Non-Firm/i);
+    expect(conditions.get('T')).toMatch(/Halted/i);
+  });
+
+  it.each(['stocks', 'options'] as const)('names the %s exchanges a print can come from', async (market) => {
+    const { exchanges } = await alpaca.exchanges({ market });
+
+    expect(exchanges.size).toBeGreaterThan(10);
+    expect([...exchanges.values()].every((name) => name.length > 0)).toBe(true);
+  });
+
+  it('refuses a stocks conditions request with no tape rather than sending one', async () => {
+    await expect(alpaca.conditions({ market: 'stocks', tickType: 'trade' })).rejects.toThrow(/needs one/);
+  });
+});
