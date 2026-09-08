@@ -123,7 +123,7 @@ describe('bars', () => {
     expect(result).toHaveLength(1);
   });
 
-  it.each(['week', 'month'] as const)('does not consult the market-hours table for a %s bar', async (timespan) => {
+  it.each(['day', 'week', 'month'] as const)('does not consult the market-hours table for a %s bar', async (timespan) => {
     // The table stops in 2024, and a bar spanning whole sessions never needed it.
     const beyond = easternClock.shiftDate(marketHoursCoverage.to, 30);
     const http = new FakeHttpClient().reply(bars('AAPL', { t: utc('2026-01-05T05:00:00Z') }));
