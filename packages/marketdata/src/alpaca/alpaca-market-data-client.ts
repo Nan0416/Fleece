@@ -10,7 +10,18 @@ import {
   type MinuteBarsRequest,
   type QuotesRequest,
   type QuotesResponse,
-  type StockRestClient,
+  type AlpacaMarketDataRestClient,
+  type ConditionsRequest,
+  type ConditionsResponse,
+  type ExchangesRequest,
+  type ExchangesResponse,
+  type OptionBarsRequest,
+  type OptionBarsResponse,
+  type OptionChainRequest,
+  type OptionChainResponse,
+  type OptionSnapshot,
+  type OptionTradesRequest,
+  type OptionTradesResponse,
   type StockSplitsRequest,
   type StockSplitsResponse,
   type Timespan,
@@ -20,6 +31,7 @@ import {
 import { adjustPrice, splitRatios, type SplitRatio } from '../split-adjustment';
 import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, spansWholeSessions, startOfDay } from '../request-window';
 import { marketHour } from '../market-hours';
+import { parseOccSymbol, requireOccSymbol } from '../occ-symbol';
 
 import type {
   AlpacaBar,
@@ -27,12 +39,16 @@ import type {
   AlpacaCalendarDay,
   AlpacaCorporateActions,
   AlpacaCorporateActionsResponse,
+  AlpacaOptionBarsResponse,
+  AlpacaOptionSnapshotsResponse,
+  AlpacaOptionTrade,
+  AlpacaOptionTradesResponse,
   AlpacaQuote,
   AlpacaQuotesResponse,
   AlpacaTrade,
   AlpacaTradesResponse,
 } from './alpaca-rest-models';
-import { normalizeBar, normalizeQuote, normalizeSession, normalizeSplit, normalizeTrade } from './normalizers';
+import { normalizeBar, normalizeOptionSnapshot, normalizeOptionTrade, normalizeQuote, normalizeSession, normalizeSplit, normalizeTrade } from './normalizers';
 
 const logger = LoggerFactory.getLogger('AlpacaMarketDataClient');
 
@@ -64,22 +80,32 @@ const MAX_PAGE = 10_000;
 /** A stop, so a broken page token cannot spin forever against a paid API. */
 const MAX_PAGES = 500;
 
+/** A chain page is capped lower than a bar or trade page. */
+const MAX_CHAIN_PAGE = 1_000;
+
 /** Alpaca's corporate-action history does not reach further back than this. */
 const EARLIEST_CORPORATE_ACTION = '2000-01-01';
 
 /**
- * Which multipliers Alpaca aggregates, per unit. Checked here rather than left to a 422,
- * because "unprocessable entity" does not say that `2Day` is the problem.
+ * Which multipliers Alpaca aggregates, per unit, for stocks and options alike. Checked
+ * here rather than left to a 400, because "invalid query parameter" does not say that
+ * `2Day` is the problem.
+ *
+ * Monthly takes 1, 2, 3, 6 and 12. The documentation lists 4 as well and the API rejects
+ * it — `the following monthly aggregates are supported: 1, 2, 3, 6, 12` — on both the
+ * stock and the option endpoint.
  */
 const TIMEFRAMES: Partial<Record<Timespan, { readonly unit: string; readonly allows: (multiplier: number) => boolean; readonly limit: string }>> = {
   minute: { unit: 'Min', allows: (multiplier) => multiplier >= 1 && multiplier <= 59, limit: '1 to 59' },
   hour: { unit: 'Hour', allows: (multiplier) => multiplier >= 1 && multiplier <= 23, limit: '1 to 23' },
   day: { unit: 'Day', allows: (multiplier) => multiplier === 1, limit: 'only 1' },
   week: { unit: 'Week', allows: (multiplier) => multiplier === 1, limit: 'only 1' },
-  month: { unit: 'Month', allows: (multiplier) => [1, 2, 3, 4, 6, 12].includes(multiplier), limit: '1, 2, 3, 4, 6 or 12' },
+  month: { unit: 'Month', allows: (multiplier) => [1, 2, 3, 6, 12].includes(multiplier), limit: '1, 2, 3, 6 or 12' },
 };
 
 export type AlpacaFeed = 'sip' | 'iex' | 'otc';
+
+export type AlpacaOptionFeed = 'opra' | 'indicative';
 
 export interface AlpacaMarketDataClientProps {
   readonly apiKey: string;
@@ -90,6 +116,14 @@ export interface AlpacaMarketDataClientProps {
    * subscription fails loudly rather than silently returning a tenth of the market.
    */
   readonly feed?: AlpacaFeed;
+  /**
+   * `opra` is the consolidated options tape and needs a subscription; `indicative` is
+   * Alpaca's own synthetic quote, and it is not the same number — one contract quoted
+   * 113.95/116.85 on opra and 112.66/118.93 on indicative at the same instant. Defaults
+   * to `opra` for the reason `sip` is the stock default. Snapshots only: the historical
+   * option endpoints reject a feed.
+   */
+  readonly optionFeed?: AlpacaOptionFeed;
   readonly dataBaseUrl?: string;
   /** Where the calendar is read from. Defaults to paper; a live key needs the live host. */
   readonly tradingBaseUrl?: string;
@@ -97,15 +131,17 @@ export interface AlpacaMarketDataClientProps {
   readonly httpClient?: HttpClient;
 }
 
-export class AlpacaMarketDataClient implements StockRestClient {
+export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
   private readonly headers: HttpHeaders;
   private readonly feed: AlpacaFeed;
+  private readonly optionFeed: AlpacaOptionFeed;
   private readonly tradingBaseUrl: string;
   private readonly http: HttpClient;
 
   constructor(props: AlpacaMarketDataClientProps) {
     this.headers = { 'APCA-API-KEY-ID': props.apiKey, 'APCA-API-SECRET-KEY': props.secretKey };
     this.feed = props.feed ?? 'sip';
+    this.optionFeed = props.optionFeed ?? 'opra';
     this.tradingBaseUrl = props.tradingBaseUrl ?? ALPACA_TRADING_PAPER_URL;
     this.http = props.httpClient ?? new FetchHttpClient({ baseUrl: props.dataBaseUrl ?? ALPACA_DATA_URL, timeoutMs: props.timeoutMs ?? DEFAULT_TIMEOUT_MS });
   }
@@ -119,13 +155,7 @@ export class AlpacaMarketDataClient implements StockRestClient {
   }
 
   async bars(request: BarsRequest): Promise<BarsResponse> {
-    const timeframe = TIMEFRAMES[request.timespan];
-    if (timeframe === undefined) {
-      throw new InvalidRequestError(`Alpaca does not aggregate by ${request.timespan}. Use one of [${Object.keys(TIMEFRAMES).join(', ')}].`);
-    }
-    if (!timeframe.allows(request.multiplier)) {
-      throw new InvalidRequestError(`Alpaca takes ${timeframe.limit} for a ${request.timespan} timeframe, not ${request.multiplier}.`);
-    }
+    const timeframe = resolveTimeframe(request.timespan, request.multiplier);
 
     const from = startOfDay(request.from);
     const to = endOfDay(request.to);
@@ -136,7 +166,8 @@ export class AlpacaMarketDataClient implements StockRestClient {
     }
 
     const raw = await this.page<AlpacaBar, AlpacaBarsResponse>('/v2/stocks/bars', request.symbol, (body) => body.bars, {
-      timeframe: `${request.multiplier}${timeframe.unit}`,
+      feed: this.feed,
+      timeframe,
       // `raw` is the tape as it printed; `split` restates earlier prices in today's shares.
       adjustment: request.adjustForSplit === true ? 'split' : 'raw',
       start: new Date(from).toISOString(),
@@ -154,7 +185,7 @@ export class AlpacaMarketDataClient implements StockRestClient {
     }
     // Started together: the split table depends on the symbol, not on the trades.
     const [raw, ratios] = await Promise.all([
-      this.page<AlpacaTrade, AlpacaTradesResponse>('/v2/stocks/trades', request.symbol, (body) => body.trades, window),
+      this.page<AlpacaTrade, AlpacaTradesResponse>('/v2/stocks/trades', request.symbol, (body) => body.trades, { ...window, feed: this.feed }),
       this.ratiosFor(request.symbol, request.adjustForSplit),
     ]);
     const trades = raw.map((trade) => normalizeTrade(request.symbol, trade));
@@ -167,7 +198,7 @@ export class AlpacaMarketDataClient implements StockRestClient {
       return { quotes: [] };
     }
     const [raw, ratios] = await Promise.all([
-      this.page<AlpacaQuote, AlpacaQuotesResponse>('/v2/stocks/quotes', request.symbol, (body) => body.quotes, window),
+      this.page<AlpacaQuote, AlpacaQuotesResponse>('/v2/stocks/quotes', request.symbol, (body) => body.quotes, { ...window, feed: this.feed }),
       this.ratiosFor(request.symbol, request.adjustForSplit),
     ]);
     const quotes = raw.map((quote) => normalizeQuote(request.symbol, quote));
@@ -222,6 +253,99 @@ export class AlpacaMarketDataClient implements StockRestClient {
       throw new DataProviderError(SOURCE, 'returned a calendar that is not a list of days.');
     }
     return { sessions: body.map((day) => normalizeSession(day)) };
+  }
+
+  /**
+   * One page of an underlying's chain, and a cursor when there is more.
+   *
+   * Not walked to the end on the caller's behalf: a full AAPL chain is around 3,100
+   * contracts and SPY's around 12,000, so which slice is wanted is a question only the
+   * caller can answer. The filters are how they answer it.
+   */
+  async optionChain(request: OptionChainRequest): Promise<OptionChainResponse> {
+    const body = await this.get<AlpacaOptionSnapshotsResponse>(`/v1beta1/options/snapshots/${encodeURIComponent(request.underlying)}`, {
+      feed: this.optionFeed,
+      type: request.type,
+      limit: chainPageSize(request.limit),
+      page_token: request.startAfter,
+      ...expirationRange(request),
+      ...strikeRange(request),
+    });
+
+    const contracts: OptionSnapshot[] = [];
+    // Insertion order, which is the order the chain pages in — an OCC symbol starts with
+    // a letter, so none of these keys is the integer-like kind that would be reordered.
+    for (const [symbol, snapshot] of Object.entries(body.snapshots ?? {})) {
+      if (snapshot === null) {
+        continue;
+      }
+      const contract = parseOccSymbol(symbol);
+      if (contract === undefined) {
+        throw new DataProviderError(SOURCE, `returned ${JSON.stringify(symbol)} in ${request.underlying}'s chain, which is not an OCC contract symbol.`);
+      }
+      contracts.push(normalizeOptionSnapshot(contract, snapshot));
+    }
+
+    const next = readPageToken(body);
+    return { contracts, resumeFrom: next === undefined || next.length === 0 ? undefined : next };
+  }
+
+  /**
+   * No `adjustment` and no `feed`: the option endpoints reject both. A split re-issues an
+   * option rather than restating it, and the historical option data has one tape.
+   */
+  async optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse> {
+    const contract = requireOccSymbol(request.symbol, 'fetch bars');
+    const timeframe = resolveTimeframe(request.timespan, request.multiplier);
+    const from = startOfDay(request.from);
+    const to = endOfDay(request.to);
+    requireForwardRange(from, to, 'option bars');
+
+    const raw = await this.page<AlpacaBar, AlpacaOptionBarsResponse>('/v1beta1/options/bars', contract.symbol, (body) => body.bars, {
+      timeframe,
+      start: new Date(from).toISOString(),
+      end: new Date(to).toISOString(),
+    });
+    return { bars: raw.map((bar) => normalizeBar(contract.symbol, bar)) };
+  }
+
+  async optionTrades(request: OptionTradesRequest): Promise<OptionTradesResponse> {
+    const contract = requireOccSymbol(request.symbol, 'fetch trades');
+    const window = this.resolveWindow(request, 'option trades');
+    if (window === undefined) {
+      return { trades: [] };
+    }
+
+    const raw = await this.page<AlpacaOptionTrade, AlpacaOptionTradesResponse>('/v1beta1/options/trades', contract.symbol, (body) => body.trades, window);
+    return { trades: raw.map((trade) => normalizeOptionTrade(contract.symbol, trade)) };
+  }
+
+  /**
+   * What a condition character on a trade or a quote means, as the provider states it.
+   *
+   * The descriptions are the record, not the rule: nothing in "MLET - Multi Leg
+   * autoelectronic trade" tells code that such a print is one leg's share of a spread
+   * rather than a price for the contract. Deciding that is a caller's job, and this is
+   * what it decides against.
+   */
+  async conditions(request: ConditionsRequest): Promise<ConditionsResponse> {
+    if (request.market === 'stocks' && request.tape === undefined) {
+      throw new InvalidRequestError('Stock condition codes differ by tape, so this request needs one: A for NYSE-listed, B for the regional exchanges, C for Nasdaq.');
+    }
+    if (request.market === 'options' && request.tape !== undefined) {
+      throw new InvalidRequestError('Option condition codes are the same across exchanges, so an options request does not take a tape.');
+    }
+
+    const path = request.market === 'stocks' ? `/v2/stocks/meta/conditions/${request.tickType}` : `/v1beta1/options/meta/conditions/${request.tickType}`;
+    const body = await this.get<Record<string, unknown>>(path, { tape: request.tape });
+    return { conditions: dictionary(body, `${request.market} ${request.tickType} conditions`) };
+  }
+
+  /** What an exchange code on a trade or a quote means. */
+  async exchanges(request: ExchangesRequest): Promise<ExchangesResponse> {
+    const path = request.market === 'stocks' ? '/v2/stocks/meta/exchanges' : '/v1beta1/options/meta/exchanges';
+    const body = await this.get<Record<string, unknown>>(path, {});
+    return { exchanges: dictionary(body, `${request.market} exchanges`) };
   }
 
   /**
@@ -287,7 +411,7 @@ export class AlpacaMarketDataClient implements StockRestClient {
     let pageToken: string | undefined = undefined;
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
-      const body: R = await this.get<R>(path, { ...query, symbols: symbol, feed: this.feed, page_token: pageToken });
+      const body: R = await this.get<R>(path, { ...query, symbols: symbol, page_token: pageToken });
       const bySymbol = read(body) ?? {};
       results.push(...(bySymbol[symbol] ?? []));
 
@@ -335,4 +459,71 @@ function pageSize(requested: number | undefined, what: string): number {
     throw new InvalidRequestError(`A ${what} request needs at least one item per request, got ${requested}.`);
   }
   return Math.min(Math.round(requested), MAX_PAGE);
+}
+
+function resolveTimeframe(timespan: Timespan, multiplier: number): string {
+  const timeframe = TIMEFRAMES[timespan];
+  if (timeframe === undefined) {
+    throw new InvalidRequestError(`Alpaca does not aggregate by ${timespan}. Use one of [${Object.keys(TIMEFRAMES).join(', ')}].`);
+  }
+  if (!timeframe.allows(multiplier)) {
+    throw new InvalidRequestError(`Alpaca takes ${timeframe.limit} for a ${timespan} timeframe, not ${multiplier}.`);
+  }
+  return `${multiplier}${timeframe.unit}`;
+}
+
+function expirationRange(request: OptionChainRequest): Query {
+  const { expirationFrom, expirationTo } = request;
+  if (expirationFrom !== undefined) {
+    requireIsoDate(expirationFrom, 'read the start of the expiration range');
+  }
+  if (expirationTo !== undefined) {
+    requireIsoDate(expirationTo, 'read the end of the expiration range');
+  }
+  if (expirationFrom !== undefined && expirationTo !== undefined && expirationFrom > expirationTo) {
+    throw new InvalidRequestError(`An expiration range must start before it ends, got ${expirationFrom} to ${expirationTo}.`);
+  }
+  return { expiration_date_gte: expirationFrom, expiration_date_lte: expirationTo };
+}
+
+function strikeRange(request: OptionChainRequest): Query {
+  const { strikeFrom, strikeTo } = request;
+  requireStrike(strikeFrom, 'strikeFrom');
+  requireStrike(strikeTo, 'strikeTo');
+  if (strikeFrom !== undefined && strikeTo !== undefined && strikeFrom > strikeTo) {
+    throw new InvalidRequestError(`A strike range must start below where it ends, got ${strikeFrom} to ${strikeTo}.`);
+  }
+  return { strike_price_gte: strikeFrom, strike_price_lte: strikeTo };
+}
+
+function requireStrike(strike: number | undefined, field: string): void {
+  if (strike !== undefined && (!Number.isFinite(strike) || strike <= 0)) {
+    throw new InvalidRequestError(`A chain's ${field} must be a strike in dollars above zero, got ${strike}.`);
+  }
+}
+
+/** Alpaca caps a chain page at 1,000, where a bar or trade page goes to 10,000. */
+function chainPageSize(requested: number | undefined): number {
+  if (requested === undefined) {
+    return MAX_CHAIN_PAGE;
+  }
+  if (!Number.isFinite(requested) || requested < 1) {
+    throw new InvalidRequestError(`A chain request needs at least one contract per page, got ${requested}.`);
+  }
+  return Math.min(Math.round(requested), MAX_CHAIN_PAGE);
+}
+
+/**
+ * The metadata endpoints answer with a flat code-to-description object rather than the
+ * keyed collections everything else uses, so it is read as one rather than paged.
+ */
+function dictionary(body: Record<string, unknown>, what: string): ReadonlyMap<string, string> {
+  const entries = new Map<string, string>();
+  for (const [code, description] of Object.entries(body)) {
+    if (typeof description !== 'string') {
+      throw new DataProviderError(SOURCE, `returned ${what} in which ${JSON.stringify(code)} maps to something that is not a description.`);
+    }
+    entries.set(code, description);
+  }
+  return entries;
 }

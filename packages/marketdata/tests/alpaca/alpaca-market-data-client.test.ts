@@ -5,7 +5,7 @@ import { DataProviderError } from '../../src/data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { FakeHttpClient } from '../fake-http-client';
 
-import { bars, calendar, corporateActions, quotes, trades, withPageToken } from './fake-responses';
+import { bars, calendar, conditionDictionary, corporateActions, optionBars, optionSnapshots, optionTrades, quotes, trades, withPageToken } from './fake-responses';
 
 const SESSION = '2024-12-19';
 const at = (date: string, time: string): number => easternClock.timestamp(date, time);
@@ -394,5 +394,276 @@ describe('marketHours', () => {
   it('refuses a session time it cannot read', async () => {
     const http = new FakeHttpClient().reply([{ date: '2024-12-23', open: '09:30', close: '16:00', session_open: '4am', session_close: '2000' }]);
     await expect(client(http).marketHours({ fromDate: '2024-12-23', toDate: '2024-12-23' })).rejects.toThrow(/four-digit HHmm session time/);
+  });
+});
+
+const CONTRACT = 'AAPL260918C00230000';
+const PUT = 'AAPL260918P00230000';
+
+describe('an option chain', () => {
+  it('asks for the underlying by path, since the endpoint is keyed by it rather than by symbols', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await client(http).optionChain({ underlying: 'AAPL' });
+
+    expect(http.lastRequest.url).toBe('/v1beta1/options/snapshots/AAPL');
+    expect(http.lastRequest.query['symbols']).toBeUndefined();
+  });
+
+  it('asks for the consolidated options tape by default', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await client(http).optionChain({ underlying: 'AAPL' });
+
+    expect(http.lastRequest.query['feed']).toBe('opra');
+  });
+
+  it("takes Alpaca's synthetic quote when one is asked for", async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await new AlpacaMarketDataClient({ apiKey: 'key', secretKey: 'secret', optionFeed: 'indicative', httpClient: http }).optionChain({ underlying: 'AAPL' });
+
+    expect(http.lastRequest.query['feed']).toBe('indicative');
+  });
+
+  it('sends the expiration and strike filters under the names Alpaca reads', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await client(http).optionChain({ underlying: 'AAPL', type: 'call', expirationFrom: '2026-09-01', expirationTo: '2026-10-30', strikeFrom: 200, strikeTo: 260 });
+
+    expect(http.lastRequest.query).toMatchObject({
+      type: 'call',
+      expiration_date_gte: '2026-09-01',
+      expiration_date_lte: '2026-10-30',
+      strike_price_gte: '200',
+      strike_price_lte: '260',
+    });
+  });
+
+  it('asks for a full page by default, and caps one asked for above the maximum', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await client(http).optionChain({ underlying: 'AAPL' });
+    expect(http.lastRequest.query['limit']).toBe('1000');
+
+    await client(http).optionChain({ underlying: 'AAPL', limit: 5000 });
+    expect(http.lastRequest.query['limit']).toBe('1000');
+  });
+
+  it('takes apart every contract symbol, which is the only place a strike or an expiry appears', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }, { symbol: PUT }));
+    const { contracts } = await client(http).optionChain({ underlying: 'AAPL' });
+
+    expect(contracts.map((contract) => contract.contract)).toEqual([
+      { symbol: CONTRACT, underlying: 'AAPL', expiration: '2026-09-18', type: 'call', strike: 230, strikeMils: 230000 },
+      { symbol: PUT, underlying: 'AAPL', expiration: '2026-09-18', type: 'put', strike: 230, strikeMils: 230000 },
+    ]);
+  });
+
+  it('keeps the order the chain paged in, which is what the cursor continues from', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: PUT }, { symbol: CONTRACT }));
+    const { contracts } = await client(http).optionChain({ underlying: 'AAPL' });
+
+    expect(contracts.map((contract) => contract.S)).toEqual([PUT, CONTRACT]);
+  });
+
+  it('hands back a cursor rather than walking a chain of thousands itself', async () => {
+    const http = new FakeHttpClient().reply(withPageToken(optionSnapshots({ symbol: CONTRACT }), 'QUFQTA=='));
+    const { contracts, resumeFrom } = await client(http).optionChain({ underlying: 'AAPL' });
+
+    expect(contracts).toHaveLength(1);
+    expect(resumeFrom).toBe('QUFQTA==');
+    expect(http.requests).toHaveLength(1);
+  });
+
+  it('resumes from where a previous page stopped', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await client(http).optionChain({ underlying: 'AAPL', startAfter: 'QUFQTA==' });
+
+    expect(http.lastRequest.query['page_token']).toBe('QUFQTA==');
+  });
+
+  it.each([null, ''])('reports a %p page token as the end of the listing', async (token) => {
+    const http = new FakeHttpClient().reply(withPageToken(optionSnapshots({ symbol: CONTRACT }), token));
+    const { resumeFrom } = await client(http).optionChain({ underlying: 'AAPL' });
+
+    expect(resumeFrom).toBeUndefined();
+  });
+
+  it('leaves a section Alpaca did not send absent rather than inventing one', async () => {
+    // Around four contracts in ten of a large chain have no greeks, and a contract that
+    // did not trade yesterday has no previous daily bar.
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT, greeks: false, prevDailyBar: false }));
+    const [contract] = (await client(http).optionChain({ underlying: 'AAPL' })).contracts;
+
+    expect(contract.greeks).toBeUndefined();
+    expect(contract.iv).toBeUndefined();
+    expect(contract.pdb).toBeUndefined();
+    expect(contract.db).toBeDefined();
+    expect(contract.lq).toBeDefined();
+  });
+
+  it('carries the greeks and the implied volatility when they are solved', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    const [contract] = (await client(http).optionChain({ underlying: 'AAPL' })).contracts;
+
+    expect(contract.greeks).toEqual({ delta: 0.5, gamma: 0.02, theta: -0.03, vega: 0.04, rho: 0.01 });
+    expect(contract.iv).toBe(0.69);
+  });
+
+  it('reports a symbol it cannot take apart, rather than serving a contract with no strike', async () => {
+    const http = new FakeHttpClient().reply({ snapshots: { NOTANOCCSYMBOL: {} } });
+    const send = client(http).optionChain({ underlying: 'AAPL' });
+
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/not an OCC contract symbol/);
+  });
+
+  it('rejects an expiration range that runs backwards', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await expect(client(http).optionChain({ underlying: 'AAPL', expirationFrom: '2026-10-30', expirationTo: '2026-09-01' })).rejects.toThrow(InvalidRequestError);
+  });
+
+  it('rejects an expiration that is not a real date', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await expect(client(http).optionChain({ underlying: 'AAPL', expirationFrom: '2026-02-30' })).rejects.toThrow(InvalidRequestError);
+  });
+
+  it.each([
+    ['a strike range that runs backwards', { strikeFrom: 260, strikeTo: 200 }],
+    ['a strike of zero', { strikeFrom: 0 }],
+    ['a negative strike', { strikeTo: -5 }],
+  ])('rejects %s', async (_name, filters) => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await expect(client(http).optionChain({ underlying: 'AAPL', ...filters })).rejects.toThrow(InvalidRequestError);
+  });
+});
+
+describe('option bars', () => {
+  const range = { symbol: CONTRACT, from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' as const };
+
+  it('sends neither an adjustment nor a feed, both of which the endpoint refuses', async () => {
+    const http = new FakeHttpClient().reply(optionBars(CONTRACT, { t: utc('2024-12-19T05:00:00Z') }));
+    await client(http).optionBars(range);
+
+    expect(http.lastRequest.url).toBe('/v1beta1/options/bars');
+    expect(http.lastRequest.query['adjustment']).toBeUndefined();
+    expect(http.lastRequest.query['feed']).toBeUndefined();
+  });
+
+  it('refuses a symbol that is not a contract, before spending a request on it', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).optionBars({ ...range, symbol: 'AAPL' })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('refuses a monthly multiplier of 4, which the documentation lists and the API rejects', async () => {
+    const http = new FakeHttpClient();
+    const send = client(http).optionBars({ ...range, timespan: 'month', multiplier: 4 });
+
+    await expect(send).rejects.toThrow(InvalidRequestError);
+    await expect(send).rejects.toThrow(/1, 2, 3, 6 or 12/);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it.each([1, 2, 3, 6, 12])('takes a monthly multiplier of %i', async (multiplier) => {
+    const http = new FakeHttpClient().reply(optionBars(CONTRACT));
+    await client(http).optionBars({ ...range, timespan: 'month', multiplier });
+
+    expect(http.lastRequest.query['timeframe']).toBe(`${multiplier}Month`);
+  });
+
+  it('follows the page token to the end of the window', async () => {
+    const http = new FakeHttpClient().reply(
+      withPageToken(optionBars(CONTRACT, { t: utc('2024-12-19T05:00:00Z') }), 'next'),
+      withPageToken(optionBars(CONTRACT, { t: utc('2024-12-20T05:00:00Z') }), null),
+    );
+    const { bars: got } = await client(http).optionBars({ ...range, to: '2024-12-20' });
+
+    expect(got).toHaveLength(2);
+    expect(http.requests[1].query['page_token']).toBe('next');
+  });
+});
+
+describe('option trades', () => {
+  it('carries no trade id and no tape, which OPRA does not report', async () => {
+    const http = new FakeHttpClient().reply(optionTrades(CONTRACT, { t: utc('2024-12-19T15:34:44.382785953Z'), p: 91.6 }));
+    const { trades: got } = await client(http).optionTrades({ symbol: CONTRACT, date: SESSION });
+
+    expect(got).toEqual([{ S: CONTRACT, x: 'C', p: 91.6, s: 1, t: Date.parse('2024-12-19T15:34:44.382Z'), c: ['f'] }]);
+  });
+
+  it("wraps OPRA's single condition character in a list, so a print reads the same as an equity one", async () => {
+    const http = new FakeHttpClient().reply(optionTrades(CONTRACT, { t: utc('2024-12-19T15:34:44Z'), p: 91.6, c: 'g' }));
+    const { trades: got } = await client(http).optionTrades({ symbol: CONTRACT, date: SESSION });
+
+    expect(got[0].c).toEqual(['g']);
+  });
+
+  it('reads a whole day as the session, open to after-hours close', async () => {
+    const http = new FakeHttpClient().reply(optionTrades(CONTRACT));
+    await client(http).optionTrades({ symbol: CONTRACT, date: SESSION });
+
+    expect(http.lastRequest.query['start']).toBe(new Date(at(SESSION, '04:00:00')).toISOString());
+    expect(http.lastRequest.query['end']).toBe(new Date(at(SESSION, '20:00:00')).toISOString());
+  });
+
+  it('answers with nothing for a day the market did not trade, without asking', async () => {
+    const http = new FakeHttpClient();
+    const { trades: got } = await client(http).optionTrades({ symbol: CONTRACT, date: '2024-12-25' });
+
+    expect(got).toEqual([]);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('refuses a symbol that is not a contract', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).optionTrades({ symbol: 'AAPL', date: SESSION })).rejects.toThrow(InvalidRequestError);
+  });
+});
+
+describe('the condition and exchange dictionaries', () => {
+  it('reads stock conditions from the tape they belong to', async () => {
+    const http = new FakeHttpClient().reply(conditionDictionary({ '@': 'Regular Sale', I: 'Odd Lot Trade' }));
+    const { conditions } = await client(http).conditions({ market: 'stocks', tickType: 'trade', tape: 'C' });
+
+    expect(http.lastRequest.url).toBe('/v2/stocks/meta/conditions/trade');
+    expect(http.lastRequest.query['tape']).toBe('C');
+    expect(conditions.get('I')).toBe('Odd Lot Trade');
+  });
+
+  it('refuses a stock conditions request with no tape, which the endpoint requires', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).conditions({ market: 'stocks', tickType: 'trade' })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('refuses a tape on an options request rather than sending one the endpoint rejects', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).conditions({ market: 'options', tickType: 'trade', tape: 'A' })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('reads option conditions, where the multi-leg codes live', async () => {
+    const http = new FakeHttpClient().reply(conditionDictionary({ f: 'MLET - Multi Leg autoelectronic trade', g: 'MLAT - Multi Leg Auction' }));
+    const { conditions } = await client(http).conditions({ market: 'options', tickType: 'trade' });
+
+    expect(http.lastRequest.url).toBe('/v1beta1/options/meta/conditions/trade');
+    expect(http.lastRequest.query['tape']).toBeUndefined();
+    expect(conditions.get('f')).toBe('MLET - Multi Leg autoelectronic trade');
+  });
+
+  it.each([
+    ['stocks', '/v2/stocks/meta/exchanges'],
+    ['options', '/v1beta1/options/meta/exchanges'],
+  ] as const)('reads %s exchanges from their own path', async (market, path) => {
+    const http = new FakeHttpClient().reply(conditionDictionary({ C: 'CBOE' }));
+    const { exchanges } = await client(http).exchanges({ market });
+
+    expect(http.lastRequest.url).toBe(path);
+    expect(exchanges.get('C')).toBe('CBOE');
+  });
+
+  it('reports a description that is not a string, rather than a map with a number in it', async () => {
+    const http = new FakeHttpClient().reply({ '@': 42 });
+    const send = client(http).conditions({ market: 'options', tickType: 'trade' });
+
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/not a description/);
   });
 });

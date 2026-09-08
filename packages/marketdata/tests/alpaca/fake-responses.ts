@@ -47,3 +47,39 @@ export function corporateActions(actions: {
     },
   };
 }
+
+export function optionBars(symbol: string, ...entries: ReadonlyArray<{ t: string; c?: number }>): unknown {
+  return { bars: { [symbol]: entries.map((entry) => ({ t: entry.t, o: 1, h: 3, l: 0.5, c: entry.c ?? 2, v: 100, n: 10, vw: 1.5 })) } };
+}
+
+/** An option print: no trade id, no tape, and one condition character rather than a list. */
+export function optionTrades(symbol: string, ...entries: ReadonlyArray<{ t: string; p: number; c?: string; s?: number }>): unknown {
+  return { trades: { [symbol]: entries.map((entry) => ({ t: entry.t, x: 'C', p: entry.p, s: entry.s ?? 1, c: entry.c ?? 'f' })) } };
+}
+
+export interface FakeContract {
+  readonly symbol: string;
+  readonly price?: number;
+  readonly greeks?: boolean;
+  readonly prevDailyBar?: boolean;
+}
+
+export function optionSnapshots(...contracts: ReadonlyArray<FakeContract>): unknown {
+  const snapshots: Record<string, unknown> = {};
+  for (const contract of contracts) {
+    const price = contract.price ?? 1.25;
+    snapshots[contract.symbol] = {
+      dailyBar: { t: '2024-12-19T05:00:00Z', o: price, h: price, l: price, c: price, v: 5, n: 2, vw: price },
+      minuteBar: { t: '2024-12-19T15:30:00Z', o: price, h: price, l: price, c: price, v: 1, n: 1, vw: price },
+      ...(contract.prevDailyBar === false ? {} : { prevDailyBar: { t: '2024-12-18T05:00:00Z', o: price, h: price, l: price, c: price, v: 3, n: 1, vw: price } }),
+      latestTrade: { t: '2024-12-19T15:34:44.382785953Z', x: 'C', p: price, s: 1, c: 'g' },
+      latestQuote: { t: '2024-12-19T15:34:45.1Z', ax: 'S', ap: price + 0.1, as: 13, bx: 'S', bp: price - 0.1, bs: 11, c: 'A' },
+      ...(contract.greeks === false ? {} : { greeks: { delta: 0.5, gamma: 0.02, theta: -0.03, vega: 0.04, rho: 0.01 }, impliedVolatility: 0.69 }),
+    };
+  }
+  return { snapshots };
+}
+
+export function conditionDictionary(entries: Record<string, string>): unknown {
+  return entries;
+}
