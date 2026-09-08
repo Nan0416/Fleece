@@ -343,10 +343,7 @@ describe('option history', () => {
 
   it("agrees with its own daily bar on the day's volume", async () => {
     const { symbol, date } = await aTradedContract();
-    const [{ trades }, { bars }] = await Promise.all([
-      alpaca.optionTrades({ symbol, date }),
-      alpaca.optionBars({ symbol, from: date, to: date, multiplier: 1, timespan: 'day' }),
-    ]);
+    const [{ trades }, { bars }] = await Promise.all([alpaca.optionTrades({ symbol, date }), alpaca.optionBars({ symbol, from: date, to: date, multiplier: 1, timespan: 'day' })]);
 
     expect(bars).toHaveLength(1);
     expect(trades.reduce((total, trade) => total + trade.s, 0)).toBe(bars[0].v);
