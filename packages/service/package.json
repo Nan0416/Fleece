@@ -2,7 +2,7 @@
   "name": "@fleece/service",
   "version": "1.0.0",
   "private": true,
-  "description": "The Fleece HTTP API over the account ledger.",
+  "description": "The account ledger and the three processes that write to it: the HTTP API, the order-tracking service and the dividend job.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
@@ -10,13 +10,18 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@fleece/core": "1.0.0",
+    "@fleece/broker": "1.0.0",
+    "@fleece/marketdata": "1.0.0",
     "@fleece/shared": "1.0.0",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "nanoid": "^3.3.11",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@fleece/client": "1.0.0",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
     "typescript": "^5.7.3"
   },
   "license": "MIT"

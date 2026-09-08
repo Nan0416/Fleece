@@ -1,5 +1,4 @@
-import { createPool, migrate, PgLedgerDao } from '@fleece/core';
-import { FleeceServer } from '@fleece/service';
+import { createPool, FleeceServer, migrate, PgLedgerDao } from '@fleece/service';
 import { Decimal, NotFoundError } from '@fleece/shared';
 import path from 'node:path';
 import { Pool } from 'pg';
@@ -40,7 +39,7 @@ describeIntegration('FleeceClient against a running service', () => {
     const separator = TEST_DATABASE_URL.includes('?') ? '&' : '?';
     const databaseUrl = `${TEST_DATABASE_URL}${separator}options=-c%20search_path%3Dtest_fleece_client`;
     pool = createPool({ connectionString: databaseUrl });
-    await migrate(pool, path.resolve(__dirname, '..', '..', '..', 'core', 'migrations'));
+    await migrate(pool, path.resolve(__dirname, '..', '..', '..', 'service', 'migrations'));
 
     // Port 0 would be tidier, but the config takes a fixed port and the client needs to
     // know it; 3187 is out of the way of the 3100 default.

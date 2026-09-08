@@ -82,7 +82,8 @@ import { HttpClient, HttpClientProps } from './http-client';
  *
  * This covers the read and management surface only. Applying fills, recording dividends
  * and recording broker orders are not here because they are not HTTP endpoints: the
- * injector and the corporate-action job hold `@fleece/core` directly.
+ * tracking process and the corporate-action job run in the same package as the ledger
+ * and hold it directly.
  */
 export class FleeceClient {
   private readonly http: HttpClient;
