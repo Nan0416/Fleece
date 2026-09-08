@@ -23,6 +23,7 @@ npm start               # migrates on the way up
 | `npm test` | Unit tests; integration suites skip without a database |
 | `npm run test:ci` | What CI runs: no cache, and writes `jest-results.json` |
 | `npm run test:live` | The suites that call a real data provider; needs `POLYGON_KEY` in `.env` |
+| `npx ts-node packages/marketdata/src/refresh-market-hours.ts` | Rewrites `market-hours-data.json` from Alpaca's calendar; needs the Alpaca keys in `.env` |
 | `npm run lint` / `lint:fix` | ESLint |
 | `npm run format:lint` / `format:fix` | Prettier |
 | `npm run clean` | Remove `dist/` and build info |
