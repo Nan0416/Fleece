@@ -58,7 +58,7 @@ with `order_class: "mleg"`, an empty `symbol` and `asset_class` on the parent, a
 real instruments on the legs — and the parent's `side` is `""` here but `"buy"` on the
 websocket for the same order, which is the reason nothing signs a spread from it.
 
-`packages/alpaca/tests/mleg-alpaca-orders.ts` reproduces the filled case field for
+`packages/broker/tests/alpaca/mleg-alpaca-orders.ts` reproduces the filled case field for
 field as a fixture, because `playground` is outside the build and the product cannot
 import from it. Keep the two in step: if Alpaca changes this shape, these files are the
 evidence, and they are tedious to reproduce — a rejection and an end-of-day expiry each

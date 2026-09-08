@@ -43,8 +43,8 @@ account is one the injector books to the catch-all account, so L1 refuses one.
 `reservationId` is an *input* here: this layer takes no hold and knows nothing about what
 one would cost.
 
-**L2 — a second answer to the same question.** It sends `PUT /track` to
-`@fleece/tracking-service`, holding `@fleece/client`'s `TrackingClient` directly — no
+**L2 — a second answer to the same question.** It sends `PUT /track` to the tracking
+process, holding `@fleece/client`'s `TrackingClient` directly — no
 port, no adapter, no do-nothing implementation. A process with no tracking service leaves
 the layer out, which is what having layers is for. For orders placed
 through this package it adds little today: the converter gives every nested leg its

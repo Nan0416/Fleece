@@ -10,7 +10,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     rules: {
-      // Guideline: never cast with `as` — use the assertion helpers in @fleece/shared.
+      // Guideline: never cast with `as` — use the assertion helpers in @fleece/utilities.
       '@typescript-eslint/consistent-type-assertions': ['error', { assertionStyle: 'never' }],
       // Guideline: always brace `if` bodies.
       curly: ['error', 'all'],
