@@ -132,7 +132,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
    * the session so far.
    */
   async dailyBars(request: DailyBarsRequest): Promise<BarsResponse> {
-    return await this.bars({ ...request, to: request.to ?? defaultEnd(request.from), multiplier: 1, timespan: 'day', marketHoursOnly: false });
+    return await this.bars({ ...request, to: request.to ?? defaultEnd(request.from), multiplier: 1, timespan: 'day' });
   }
 
   async bars(request: BarsRequest): Promise<BarsResponse> {
@@ -516,12 +516,6 @@ export class PolygonRestClient implements PolygonStockRestClient {
     const previous = marketHourByIndex(session.index - 1);
     return { previousSessionStart: previous === undefined ? 0 : easternClock.timestamp(previous.date, '00:00:00') };
   }
-
-  /**
-   * The market-hours table is a fixed list ending at its last recorded session. Past that
-   * every date reads as closed, so a caller that trusted it would be told the market is
-   * shut rather than that we do not know — which is the failure this refuses to make.
-   */
 
   private async get<T>(path: string, query: Query): Promise<T> {
     return this.read<T>(path, await this.http.send({ method: 'GET', url: path, query: { ...query, apiKey: this.apiKey } }));
