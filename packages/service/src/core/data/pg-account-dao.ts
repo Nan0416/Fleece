@@ -1,4 +1,5 @@
-import { Account, ConflictError } from '@fleece/shared';
+import { Account } from '@fleece/models';
+import { ConflictError } from '@fleece/utilities';
 import { Pool } from 'pg';
 import {
   AccountDao,

@@ -12,7 +12,8 @@
   "dependencies": {
     "@fleece/broker": "1.0.0",
     "@fleece/marketdata": "1.0.0",
-    "@fleece/shared": "1.0.0",
+    "@fleece/models": "1.0.0",
+    "@fleece/utilities": "1.0.0",
     "express": "^5.1.0",
     "nanoid": "^3.3.11",
     "pg": "^8.13.1"

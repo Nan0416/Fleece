@@ -23,7 +23,7 @@ import {
   OrderEventHandler,
 } from '../src/alpaca';
 import { TrackingClient } from '@fleece/client';
-import { TrackBrokerOrdersRequest, TrackBrokerOrdersResponse } from '@fleece/shared';
+import { TrackBrokerOrdersRequest, TrackBrokerOrdersResponse } from '@fleece/models';
 
 export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   return {

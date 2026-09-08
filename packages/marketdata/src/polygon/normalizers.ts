@@ -1,4 +1,4 @@
-import { easternClock, LoggerFactory } from '@fleece/shared';
+import { easternClock, LoggerFactory } from '@fleece/utilities';
 
 import {
   DataProviderError,

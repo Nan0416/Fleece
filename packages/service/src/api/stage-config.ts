@@ -1,4 +1,4 @@
-import { getenv, getenvInteger, getenvList, getenvOneOf } from '@fleece/shared';
+import { getenv, getenvInteger, getenvList, getenvOneOf } from '@fleece/utilities';
 
 export type Stage = 'beta' | 'prod';
 export const STAGES: ReadonlyArray<Stage> = ['beta', 'prod'];

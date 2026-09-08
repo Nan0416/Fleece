@@ -1,4 +1,4 @@
-import { LinearBackoff, LoggerFactory } from '@fleece/shared';
+import { LinearBackoff, LoggerFactory } from '@fleece/utilities';
 import WebSocket from 'ws';
 import { AlpacaWsClient, AlpacaWsClientStatus, AuthorizationStatus, DisconnectHandler, OrderEventHandler } from './alpaca-ws-client';
 import { websocketUrl } from './constants';

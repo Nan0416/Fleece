@@ -1,4 +1,4 @@
-import { InvalidRequestError } from '@fleece/shared';
+import { InvalidRequestError } from '@fleece/utilities';
 import { parseTrackBrokerOrdersRequest } from '../../../src/tracking/utils/request-parsing';
 
 describe('parseTrackBrokerOrdersRequest', () => {

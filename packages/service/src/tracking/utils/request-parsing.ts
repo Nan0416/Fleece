@@ -1,4 +1,5 @@
-import { assertNonEmptyString, assertRecord, InvalidRequestError, TrackBrokerOrdersRequest } from '@fleece/shared';
+import { TrackBrokerOrdersRequest } from '@fleece/models';
+import { assertNonEmptyString, assertRecord, InvalidRequestError } from '@fleece/utilities';
 
 /**
  * How many orders one claim may name.

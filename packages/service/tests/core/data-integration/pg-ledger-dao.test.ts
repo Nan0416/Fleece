@@ -1,4 +1,5 @@
-import { AssetClass, Decimal } from '@fleece/shared';
+import { AssetClass } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 import { Pool } from 'pg';
 import { PgLedgerDao } from '../../../src/core/data/pg-ledger-dao';
 import { createAccount, createBrokerOrder, createTestPool, describeIntegration, truncateAll } from './test-database';

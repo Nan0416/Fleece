@@ -1,4 +1,18 @@
 import {
+  AssetClass,
+  CreateAccountRequest,
+  ListBrokerOrdersRequest,
+  ListDividendsRequest,
+  ListHistoricalPositionsRequest,
+  ListPositionsRequest,
+  ListTransactionsRequest,
+  SortDirection,
+  StockSplitRequest,
+  TimeWindowPage,
+  TransferPositionRequest,
+  UpdateAccountNameRequest,
+} from '@fleece/models';
+import {
   assertInteger,
   assertNonEmptyString,
   assertOneOf,
@@ -6,22 +20,10 @@ import {
   assertOptionalString,
   assertPositiveDecimal,
   assertRecord,
-  AssetClass,
-  CreateAccountRequest,
   InvalidRequestError,
-  ListBrokerOrdersRequest,
-  ListDividendsRequest,
-  ListHistoricalPositionsRequest,
-  ListPositionsRequest,
-  ListTransactionsRequest,
   parseOptionalBooleanParam,
   parseOptionalIntegerParam,
-  SortDirection,
-  StockSplitRequest,
-  TimeWindowPage,
-  TransferPositionRequest,
-  UpdateAccountNameRequest,
-} from '@fleece/shared';
+} from '@fleece/utilities';
 
 const ACCOUNT_TYPES = ['live', 'paper', 'mirror'] as const;
 const ACCOUNT_STATUSES = ['active', 'inactive'] as const;

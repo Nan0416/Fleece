@@ -1,4 +1,5 @@
-import { Dividend, easternClock, isIsoDate, InvalidRequestError, ListDividendsRequest, ListDividendsResponse, LoggerFactory, NotFoundError, Decimal } from '@fleece/shared';
+import { Dividend, ListDividendsRequest, ListDividendsResponse } from '@fleece/models';
+import { easternClock, isIsoDate, InvalidRequestError, LoggerFactory, NotFoundError, Decimal } from '@fleece/utilities';
 import { AccountDao } from '../data/account-dao';
 import { DividendDao } from '../data/dividend-dao';
 

@@ -1,4 +1,4 @@
-import { Account, AccountStatus, AccountType } from '@fleece/shared';
+import { Account, AccountStatus, AccountType } from '@fleece/models';
 
 export interface CreateAccountInput {
   readonly accountId: string;

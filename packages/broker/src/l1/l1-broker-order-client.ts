@@ -1,5 +1,5 @@
 import { AlpacaRestClient, encodeAlpacaOrderCorrelation } from '../alpaca';
-import { InvalidRequestError, LoggerFactory } from '@fleece/shared';
+import { InvalidRequestError, LoggerFactory } from '@fleece/utilities';
 import {
   BrokerOrderClient,
   CreateLimitOrderInput,

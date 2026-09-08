@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import { DependencyFactory } from './dependencies/dependency-factory';

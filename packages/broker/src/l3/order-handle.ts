@@ -1,4 +1,5 @@
-import { BrokerOrderEvent, eventToString, isTerminalStatus, LoggerFactory } from '@fleece/shared';
+import { BrokerOrderEvent, eventToString, isTerminalStatus } from '@fleece/models';
+import { LoggerFactory } from '@fleece/utilities';
 import { BrokerOrderClient } from '../l1/broker-order-client';
 import { SingleOrderObj } from './order-obj';
 import { SingleOrderEventHandler } from './requests';

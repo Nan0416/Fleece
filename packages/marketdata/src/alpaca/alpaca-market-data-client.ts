@@ -1,4 +1,4 @@
-import { FetchHttpClient, InvalidRequestError, LoggerFactory, easternClock, type HttpClient, type HttpHeaders, type Query } from '@fleece/shared';
+import { FetchHttpClient, InvalidRequestError, LoggerFactory, easternClock, type HttpClient, type HttpHeaders, type Query } from '@fleece/utilities';
 
 import {
   DataProviderError,

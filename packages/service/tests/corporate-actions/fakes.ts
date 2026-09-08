@@ -1,4 +1,5 @@
-import { Account, Decimal, HistoricalPosition, Position } from '@fleece/shared';
+import { Account, HistoricalPosition, Position } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 import { Dividend, DividendsRequest, DividendsResponse, PolygonRestClient, StockSplitsResponse } from '@fleece/marketdata';
 
 export class FakeAccountService {

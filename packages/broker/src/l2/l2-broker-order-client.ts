@@ -1,6 +1,6 @@
 import { AlpacaOrder } from '../alpaca';
 import { TrackingClient } from '@fleece/client';
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { BrokerOrderClient, CreateLimitOrderInput, CreateMarketOrderInput, CreateMultiLegOrderInput, CreateOtoOrderInput, CreatedOrder } from '../l1/broker-order-client';
 
 const logger = LoggerFactory.getLogger('L2BrokerOrderClient');

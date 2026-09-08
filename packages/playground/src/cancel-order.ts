@@ -11,7 +11,7 @@
  * its own — see the comments in `main`.
  */
 import { HttpAlpacaRestClient } from '@fleece/broker';
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { liveAccountInfo, paperAccountInfo } from './credentials';
 
 const logger = LoggerFactory.getLogger('CancelOrder');

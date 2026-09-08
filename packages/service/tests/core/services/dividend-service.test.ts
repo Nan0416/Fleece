@@ -1,4 +1,4 @@
-import { Decimal, InvalidRequestError } from '@fleece/shared';
+import { Decimal, InvalidRequestError } from '@fleece/utilities';
 
 import type {
   DividendDao,

@@ -1,4 +1,4 @@
-import type { HttpClient, HttpRequest, HttpResponse } from '@fleece/shared';
+import type { HttpClient, HttpRequest, HttpResponse } from '@fleece/utilities';
 
 export interface RecordedRequest {
   readonly url: string;

@@ -1,5 +1,6 @@
 import { convertAlpacaOrderToBrokerOrderEvents, AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaWsClient } from '@fleece/broker';
-import { BrokerOrderEvent, LoggerFactory } from '@fleece/shared';
+import { BrokerOrderEvent } from '@fleece/models';
+import { LoggerFactory } from '@fleece/utilities';
 import { OrderTrackingFacade } from './order-tracking-facade';
 
 const logger = LoggerFactory.getLogger('AlpacaInjector');

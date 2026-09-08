@@ -1,4 +1,4 @@
-import { TrackBrokerOrdersResponse } from '@fleece/shared';
+import { TrackBrokerOrdersResponse } from '@fleece/models';
 import { Router } from 'express';
 import type { Express } from 'express';
 import { OrderTrackingFacade } from '../order-tracking-facade';

@@ -1,6 +1,6 @@
 import { AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaRestClient, AlpacaWsClient } from './alpaca';
 import { TrackingClient } from '@fleece/client';
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { BrokerOrderClient } from './l1';
 import { L1BrokerOrderClient } from './l1';
 import { L2BrokerOrderClient } from './l2';

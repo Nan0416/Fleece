@@ -1,4 +1,4 @@
-import { InternalServiceError, InvalidRequestError, easternClock, isIsoDate } from '@fleece/shared';
+import { InternalServiceError, InvalidRequestError, easternClock, isIsoDate } from '@fleece/utilities';
 
 import type { Bar, DateOrTimestamp, Timespan } from './data-models';
 import { marketHoursCoverage, marketState } from './market-hours';

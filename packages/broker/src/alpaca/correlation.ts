@@ -1,4 +1,4 @@
-import { InvalidRequestError } from '@fleece/shared';
+import { InvalidRequestError } from '@fleece/utilities';
 
 /**
  * Alpaca's `client_order_id` is the only field we control that comes back on every

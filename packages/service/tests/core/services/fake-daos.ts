@@ -1,4 +1,4 @@
-import { Account } from '@fleece/shared';
+import { Account } from '@fleece/models';
 import { AccountDao, CreateAccountInput, ListAccountsInput } from '../../../src/core/data/account-dao';
 
 /** Fakes that store what they are given, implementing the rules a caller depends on. */

@@ -1,5 +1,5 @@
 import { createPool, FleeceServer, migrate, PgLedgerDao } from '@fleece/service';
-import { Decimal, NotFoundError } from '@fleece/shared';
+import { Decimal, NotFoundError } from '@fleece/utilities';
 import path from 'node:path';
 import { Pool } from 'pg';
 import { FleeceClient } from '../../src/fleece-client';

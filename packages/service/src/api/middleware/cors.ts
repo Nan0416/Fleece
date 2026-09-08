@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { NextFunction, Request, RequestHandler, Response } from 'express';
 
 const logger = LoggerFactory.getLogger('Cors');

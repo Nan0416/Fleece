@@ -10,7 +10,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @fleece/shared && npm run build -w @fleece/client -w @fleece/marketdata && npm run build -w @fleece/broker && npm run build -w @fleece/service",
+    "build": "npm run build -w @fleece/utilities && npm run build -w @fleece/models && npm run build -w @fleece/client -w @fleece/marketdata && npm run build -w @fleece/broker && npm run build -w @fleece/service",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
     "start": "npm run build && node packages/service/dist/api/main.js",
     "start:tracking-service": "npm run build && node packages/service/dist/tracking/main.js",

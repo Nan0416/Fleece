@@ -1,4 +1,4 @@
-import { easternClock } from '@fleece/shared';
+import { easternClock } from '@fleece/utilities';
 
 import type { MarketSession } from './data-models';
 

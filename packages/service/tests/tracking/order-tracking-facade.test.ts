@@ -1,4 +1,5 @@
-import { BrokerOrderStatus, Decimal, MarketBrokerOrderEvent } from '@fleece/shared';
+import { BrokerOrderStatus, MarketBrokerOrderEvent } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 import { LedgerService, BrokerOrderService } from '../../src/core';
 import { BrokerOrderEventJob, OrderTrackingFacade } from '../../src/tracking/order-tracking-facade';
 import { FakeBrokerOrderService, FakeLedgerService } from './fake-ledger';

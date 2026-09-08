@@ -1,4 +1,5 @@
-import { AssetClass, BrokerOrderRecord, Decimal } from '@fleece/shared';
+import { AssetClass, BrokerOrderRecord } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 import { Pool } from 'pg';
 import { PgBrokerOrderDao } from '../../../src/core/data/pg-broker-order-dao';
 import { UpsertBrokerOrderInput } from '../../../src/core/data/broker-order-dao';

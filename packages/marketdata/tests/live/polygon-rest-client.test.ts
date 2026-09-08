@@ -1,4 +1,4 @@
-import { easternClock } from '@fleece/shared';
+import { easternClock } from '@fleece/utilities';
 
 import { DataProviderError } from '../../src/data-models';
 import { marketState } from '../../src/market-hours';

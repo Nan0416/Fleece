@@ -1,6 +1,6 @@
 import { createLedgerServices, createPool } from '../core';
 import { PolygonRestClient } from '@fleece/marketdata';
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { CorporateActionProcessor, ProcessCorporateActionsResponse } from './corporate-action-processor';
 import { CorporateActionsConfig } from './corporate-actions-config';
 

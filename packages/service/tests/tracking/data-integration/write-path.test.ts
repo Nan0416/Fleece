@@ -1,6 +1,6 @@
 import { AlpacaAccountIdentifier, AlpacaOrder, convertAlpacaOrderToBrokerOrderEvents } from '@fleece/broker';
 import { createLedgerServices, createPool, migrate } from '../../../src/core';
-import { Decimal } from '@fleece/shared';
+import { Decimal } from '@fleece/utilities';
 import path from 'node:path';
 import { Pool } from 'pg';
 import { OrderTrackingFacade } from '../../../src/tracking/order-tracking-facade';

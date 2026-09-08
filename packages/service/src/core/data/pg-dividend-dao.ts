@@ -1,4 +1,4 @@
-import { Dividend } from '@fleece/shared';
+import { Dividend } from '@fleece/models';
 import { Pool } from 'pg';
 import { DividendDao, GetDividendInput, GetDividendOutput, ListDividendsInput, ListDividendsOutput, UpsertDividendInput, UpsertDividendOutput } from './dividend-dao';
 import { toDecimal, toDividendStatus } from './row-parsers';

@@ -1,4 +1,4 @@
-import { LoggerFactory, sleep } from '@fleece/shared';
+import { LoggerFactory, sleep } from '@fleece/utilities';
 
 const logger = LoggerFactory.getLogger('AlpacaRateLimiter');
 

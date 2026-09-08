@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { loadTrackingConfig } from './tracking-config';
 import { TrackingServiceRuntime } from './tracking-service-runtime';
 

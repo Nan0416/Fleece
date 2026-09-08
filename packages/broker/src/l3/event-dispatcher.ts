@@ -1,4 +1,5 @@
-import { BrokerOrderEvent, LoggerFactory } from '@fleece/shared';
+import { BrokerOrderEvent } from '@fleece/models';
+import { LoggerFactory } from '@fleece/utilities';
 
 const logger = LoggerFactory.getLogger('EventDispatcher');
 

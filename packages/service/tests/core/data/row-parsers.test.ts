@@ -1,4 +1,4 @@
-import { InternalServiceError } from '@fleece/shared';
+import { InternalServiceError } from '@fleece/utilities';
 import { toAccountStatus, toAccountType, toAssetClass, toBroker, toBrokerOrderClass, toDecimal, toDividendStatus, toOptionalDecimal } from '../../../src/core/data/row-parsers';
 
 describe('row parsers', () => {

@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Pool } from 'pg';

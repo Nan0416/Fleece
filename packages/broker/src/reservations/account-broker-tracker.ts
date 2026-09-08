@@ -1,4 +1,5 @@
-import { BrokerOrderEvent, Decimal, eventToString, LoggerFactory } from '@fleece/shared';
+import { BrokerOrderEvent, eventToString } from '@fleece/models';
+import { Decimal, LoggerFactory } from '@fleece/utilities';
 import { BuyingPowerLedger } from './buying-power';
 import { BrokerPosition, BrokerTracker, ReservationRequest, TestResult } from './trackers';
 import { SymbolPositionTracker } from './symbol-position-tracker';

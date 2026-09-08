@@ -1,4 +1,4 @@
-import { PingResponse } from '@fleece/shared';
+import { PingResponse } from '@fleece/models';
 import { Router } from 'express';
 import type { Express } from 'express';
 import { Endpoints } from './endpoints';

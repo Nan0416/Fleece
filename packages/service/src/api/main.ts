@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { FleeceServer } from './server';
 import { loadServiceConfig } from './stage-config';
 

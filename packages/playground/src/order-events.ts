@@ -16,7 +16,7 @@
  * `order.status` carries most of the same information.
  */
 import { AlpacaOrder, WsAlpacaWsClient } from '@fleece/broker';
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { AccountInfo, liveAccountInfo, paperAccountInfo } from './credentials';
 
 const logger = LoggerFactory.getLogger('OrderEvents');

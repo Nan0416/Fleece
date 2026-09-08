@@ -1,5 +1,5 @@
 import { decodeAlpacaOrderCorrelation, encodeAlpacaOrderCorrelation } from '../../src/alpaca/correlation';
-import { InvalidRequestError } from '@fleece/shared';
+import { InvalidRequestError } from '@fleece/utilities';
 
 describe('Alpaca order correlation', () => {
   it('round-trips every field', () => {

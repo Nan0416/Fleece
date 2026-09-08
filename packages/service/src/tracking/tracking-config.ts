@@ -1,4 +1,4 @@
-import { getenv, getenvBoolean, getenvInteger, LoggerFactory } from '@fleece/shared';
+import { getenv, getenvBoolean, getenvInteger, LoggerFactory } from '@fleece/utilities';
 import { AlpacaAccountIdentifier, AlpacaCredentials } from '@fleece/broker';
 
 const logger = LoggerFactory.getLogger('TrackingConfig');

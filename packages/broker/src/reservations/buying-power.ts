@@ -1,4 +1,4 @@
-import { Decimal } from '@fleece/shared';
+import { Decimal } from '@fleece/utilities';
 
 /**
  * The account-wide buying power that per-symbol trackers draw on.

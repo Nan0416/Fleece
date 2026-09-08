@@ -1,4 +1,5 @@
-import { assertInteger, assertNonEmptyString, assertOneOf, assertRecord, PingRequest, PingResponse, TrackBrokerOrdersRequest, TrackBrokerOrdersResponse } from '@fleece/shared';
+import { PingRequest, PingResponse, TrackBrokerOrdersRequest, TrackBrokerOrdersResponse } from '@fleece/models';
+import { assertInteger, assertNonEmptyString, assertOneOf, assertRecord } from '@fleece/utilities';
 import { HttpClient, HttpClientProps } from './http-client';
 
 /**

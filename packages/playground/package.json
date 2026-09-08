@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@fleece/broker": "1.0.0",
-    "@fleece/shared": "1.0.0"
+    "@fleece/utilities": "1.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

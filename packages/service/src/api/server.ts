@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { createPool, migrate } from '../core';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';

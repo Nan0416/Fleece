@@ -1,4 +1,4 @@
-import { getenv } from '@fleece/shared';
+import { getenv } from '@fleece/utilities';
 
 export interface CorporateActionsConfig {
   readonly databaseUrl: string;

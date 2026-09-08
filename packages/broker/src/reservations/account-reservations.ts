@@ -1,5 +1,6 @@
 import { AlpacaAccountIdentifier, AlpacaOrder, alpacaOrderAssetClass, AlpacaRestClient } from '../alpaca';
-import { BrokerOrderEvent, Decimal, defaultContractMultiplier, LoggerFactory } from '@fleece/shared';
+import { BrokerOrderEvent, defaultContractMultiplier } from '@fleece/models';
+import { Decimal, LoggerFactory } from '@fleece/utilities';
 import { BrokerUnavailableError } from '../errors';
 import { BrokerPosition, PendingOrder, ReservationRequest } from './trackers';
 import { AccountBrokerTracker } from './account-broker-tracker';

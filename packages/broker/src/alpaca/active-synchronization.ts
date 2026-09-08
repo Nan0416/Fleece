@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { AlpacaRestClient } from './alpaca-rest-client';
 
 /**

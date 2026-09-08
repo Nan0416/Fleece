@@ -1,5 +1,6 @@
 import { TrackingClient } from '@fleece/client';
-import { TrackBrokerOrdersRequest, UnauthenticatedError } from '@fleece/shared';
+import { TrackBrokerOrdersRequest } from '@fleece/models';
+import { UnauthenticatedError } from '@fleece/utilities';
 import http from 'node:http';
 import { DependencyFactory } from '../../../src/tracking/dependencies/dependency-factory';
 import { BrokerOrderClaims } from '../../../src/tracking/routes';

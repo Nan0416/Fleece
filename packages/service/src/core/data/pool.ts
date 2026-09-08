@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { Pool, PoolConfig } from 'pg';
 
 const logger = LoggerFactory.getLogger('Database');

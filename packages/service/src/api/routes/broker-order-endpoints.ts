@@ -5,7 +5,7 @@ import {
   ListBrokerOrderLegsResponse,
   ListBrokerOrderRecordsResponse,
   ListBrokerOrdersResponse,
-} from '@fleece/shared';
+} from '@fleece/models';
 import { BrokerOrderService, LedgerService } from '../../core';
 import { Router } from 'express';
 import type { Express } from 'express';

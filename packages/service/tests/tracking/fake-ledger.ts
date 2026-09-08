@@ -1,4 +1,5 @@
-import { AssetClass, BrokerOrder, BrokerOrderRecord, Decimal } from '@fleece/shared';
+import { AssetClass, BrokerOrder, BrokerOrderRecord } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 import { RecordBrokerOrderRequest } from '../../src/core';
 
 /**

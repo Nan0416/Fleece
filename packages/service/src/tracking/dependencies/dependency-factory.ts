@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { ErrorRequestHandler, RequestHandler } from 'express';
 import { bearerTokenAuth, errorHandler, requestLogger } from '../middleware';
 import { BrokerOrderClaims, Endpoints, HealthEndpoints, TrackingEndpoints } from '../routes';

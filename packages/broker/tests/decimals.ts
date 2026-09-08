@@ -1,4 +1,4 @@
-import { Decimal } from '@fleece/shared';
+import { Decimal } from '@fleece/utilities';
 
 /** Terse enough to keep a table of cases readable. */
 export function d(value: string | number): Decimal {

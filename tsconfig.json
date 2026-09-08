@@ -4,7 +4,8 @@
   // through the referenced project that owns it rather than guessing.
   "files": [],
   "references": [
-    { "path": "./packages/shared" },
+    { "path": "./packages/utilities" },
+    { "path": "./packages/models" },
     { "path": "./packages/client" },
     { "path": "./packages/marketdata" },
     { "path": "./packages/broker" },

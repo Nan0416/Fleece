@@ -8,11 +8,10 @@ import {
   BrokerOrderTimeInForce,
   BrokerOrderType,
   BrokerPositionIntent,
-  Decimal,
   DividendStatus,
-  InternalServiceError,
   isAssetClass,
-} from '@fleece/shared';
+} from '@fleece/models';
+import { Decimal, InternalServiceError } from '@fleece/utilities';
 
 /**
  * Narrowing for values read back out of Postgres.

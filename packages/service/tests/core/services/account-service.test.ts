@@ -1,4 +1,4 @@
-import { ConflictError, ForbiddenError, InvalidRequestError, NotFoundError } from '@fleece/shared';
+import { ConflictError, ForbiddenError, InvalidRequestError, NotFoundError } from '@fleece/utilities';
 import { AccountService } from '../../../src/core/services/account-service';
 import { FakeAccountDao } from './fake-daos';
 

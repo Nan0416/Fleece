@@ -1,7 +1,7 @@
 import { DividendService, LedgerService } from '../core';
 import { AccountService } from '../core';
 import { PolygonRestClient } from '@fleece/marketdata';
-import { easternClock, LoggerFactory, Decimal } from '@fleece/shared';
+import { easternClock, LoggerFactory, Decimal } from '@fleece/utilities';
 
 const logger = LoggerFactory.getLogger('CorporateActionProcessor');
 

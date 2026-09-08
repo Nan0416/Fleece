@@ -1,4 +1,4 @@
-import { BrokerOrderEvent } from '@fleece/shared';
+import { BrokerOrderEvent } from '@fleece/models';
 import { MultiLegOrderHandle, OrderLegHandle } from '../../src/l3/multi-leg-order-handle';
 import { OrderCanceller } from '../../src/l3/order-handle';
 import { brokerEvent } from '../broker-events';

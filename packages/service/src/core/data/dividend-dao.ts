@@ -1,4 +1,5 @@
-import { Decimal, Dividend } from '@fleece/shared';
+import { Dividend } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 
 export interface DividendIdentifier {
   readonly accountId: string;

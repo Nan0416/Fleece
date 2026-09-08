@@ -1,4 +1,4 @@
-import { InternalServiceError, InvalidRequestError, LoggerFactory, ServiceUnreachableError } from '@fleece/shared';
+import { InternalServiceError, InvalidRequestError, LoggerFactory, ServiceUnreachableError } from '@fleece/utilities';
 import {
   AlpacaRestClient,
   CancelOrderInput,

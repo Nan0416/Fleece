@@ -10,7 +10,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@fleece/shared": "1.0.0"
+    "@fleece/utilities": "1.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

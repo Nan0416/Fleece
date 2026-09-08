@@ -1,4 +1,4 @@
-import { LoggerFactory, UnauthenticatedError } from '@fleece/shared';
+import { LoggerFactory, UnauthenticatedError } from '@fleece/utilities';
 import { NextFunction, Request, RequestHandler, Response } from 'express';
 
 const logger = LoggerFactory.getLogger('Auth');

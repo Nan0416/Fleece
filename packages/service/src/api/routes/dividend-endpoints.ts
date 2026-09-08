@@ -1,4 +1,4 @@
-import { ListDividendsResponse } from '@fleece/shared';
+import { ListDividendsResponse } from '@fleece/models';
 import { DividendService } from '../../core';
 import { Router } from 'express';
 import type { Express } from 'express';

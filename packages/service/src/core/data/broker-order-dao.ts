@@ -8,9 +8,9 @@ import {
   BrokerOrderTimeInForce,
   BrokerOrderType,
   BrokerPositionIntent,
-  Decimal,
   SortDirection,
-} from '@fleece/shared';
+} from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 
 /**
  * One order at one broker, and the raw events behind it.

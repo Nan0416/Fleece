@@ -1,4 +1,4 @@
-import { easternClock, InternalServiceError, InvalidRequestError } from '@fleece/shared';
+import { easternClock, InternalServiceError, InvalidRequestError } from '@fleece/utilities';
 
 import { AlpacaMarketDataClient, ALPACA_TRADING_LIVE_URL, ALPACA_TRADING_PAPER_URL } from '../../src/alpaca';
 import { DataProviderError } from '../../src/data-models';

@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { createLedgerServices } from '../../core';
 import { ErrorRequestHandler, RequestHandler } from 'express';
 import { Pool } from 'pg';

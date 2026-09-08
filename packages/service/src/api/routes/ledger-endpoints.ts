@@ -8,7 +8,7 @@ import {
   ListTransactionsResponse,
   StockSplitResponse,
   TransferPositionResponse,
-} from '@fleece/shared';
+} from '@fleece/models';
 import { LedgerService } from '../../core';
 import { Router } from 'express';
 import type { Express } from 'express';

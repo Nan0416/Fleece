@@ -1,4 +1,5 @@
-import { BrokerOrder, BrokerOrderRecord, Decimal, InternalServiceError } from '@fleece/shared';
+import { BrokerOrder, BrokerOrderRecord } from '@fleece/models';
+import { Decimal, InternalServiceError } from '@fleece/utilities';
 import { Pool } from 'pg';
 import {
   BrokerOrderDao,

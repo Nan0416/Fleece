@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import { loadCorporateActionsConfig } from './corporate-actions-config';
 import { runCorporateActions } from './corporate-actions-runtime';
 

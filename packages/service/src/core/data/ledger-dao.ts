@@ -1,4 +1,5 @@
-import { AssetClass, BrokerOrderRecord, Decimal, HistoricalPosition, OrderFillProgress, Position, Profit, SortDirection, Transaction } from '@fleece/shared';
+import { AssetClass, BrokerOrderRecord, HistoricalPosition, OrderFillProgress, Position, Profit, SortDirection, Transaction } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 
 /**
  * Position, profit, the transaction log and each order's fill progress are one DAO

@@ -1,4 +1,5 @@
-import { BrokerOrderEvent, InternalServiceError } from '@fleece/shared';
+import { BrokerOrderEvent } from '@fleece/models';
+import { InternalServiceError } from '@fleece/utilities';
 import { convertAlpacaOrderToBrokerOrderEvents } from '../../src/alpaca/order-converter';
 import { AlpacaAccountIdentifier, AlpacaOrder } from '../../src/alpaca/models';
 import { alpacaOrder } from './alpaca-orders';

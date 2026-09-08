@@ -1,5 +1,6 @@
 import { AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaRestClient, AlpacaWsClient, convertAlpacaOrderToBrokerOrderEvents } from '../alpaca';
-import { BrokerOrderEvent, Decimal, InvalidRequestError, LoggerFactory } from '@fleece/shared';
+import { BrokerOrderEvent } from '@fleece/models';
+import { Decimal, InvalidRequestError, LoggerFactory } from '@fleece/utilities';
 import { Asset, Broker } from './broker';
 import { BrokerUnavailableError } from '../errors';
 import { MultiLegOrderObj, OtoOrderObj, SingleOrderObj } from './order-obj';

@@ -8,21 +8,18 @@ import {
   BrokerOrderTimeInForce,
   BrokerOrderType,
   BrokerPositionIntent,
-  Decimal,
   DeleteBrokerOrderRequest,
   DeleteBrokerOrderResponse,
   GetBrokerOrderRequest,
   GetBrokerOrderResponse,
-  InvalidRequestError,
   ListBrokerOrderLegsRequest,
   ListBrokerOrderLegsResponse,
   ListBrokerOrderRecordsRequest,
   ListBrokerOrderRecordsResponse,
   ListBrokerOrdersRequest,
   ListBrokerOrdersResponse,
-  LoggerFactory,
-  NotFoundError,
-} from '@fleece/shared';
+} from '@fleece/models';
+import { Decimal, InvalidRequestError, LoggerFactory, NotFoundError } from '@fleece/utilities';
 import { AccountDao } from '../data/account-dao';
 import { BrokerOrderDao } from '../data/broker-order-dao';
 

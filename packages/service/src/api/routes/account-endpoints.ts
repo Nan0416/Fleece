@@ -5,10 +5,9 @@ import {
   DeleteAccountResponse,
   GetAccountResponse,
   ListAccountsResponse,
-  parseOptionalBooleanParam,
-  assertRecord,
   UpdateAccountNameResponse,
-} from '@fleece/shared';
+} from '@fleece/models';
+import { parseOptionalBooleanParam, assertRecord } from '@fleece/utilities';
 import { AccountService } from '../../core';
 import { Router } from 'express';
 import type { Express } from 'express';

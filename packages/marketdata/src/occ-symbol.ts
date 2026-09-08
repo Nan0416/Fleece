@@ -1,4 +1,4 @@
-import { InvalidRequestError, isIsoDate } from '@fleece/shared';
+import { InvalidRequestError, isIsoDate } from '@fleece/utilities';
 
 import type { OccSymbol } from './data-models';
 
@@ -13,7 +13,7 @@ import type { OccSymbol } from './data-models';
  * That digit is how OCC writes an **adjusted** contract, one a split, a spinoff or a
  * special dividend re-issued, and it is why Alpaca validates against `\d{6,7}` rather
  * than `\d{6}`. An adjusted contract does not deliver 100 shares, which this system
- * models in `@fleece/shared`'s asset classes and prices for in `@fleece/broker`, so
+ * models in `@fleece/models`'s asset classes and prices for in `@fleece/broker`, so
  * refusing to read one would be refusing to read exactly the contract that needs care.
  */
 const OCC = /^([A-Z]{1,5})(\d?)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;

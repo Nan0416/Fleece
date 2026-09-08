@@ -4,13 +4,12 @@ import {
   BrokerOrderEvent,
   BrokerOrderSide,
   BrokerPositionIntent,
-  Decimal,
-  InternalServiceError,
   LimitBrokerOrderEvent,
   MarketBrokerOrderEvent,
   StopBrokerOrderEvent,
   StopLimitBrokerOrderEvent,
-} from '@fleece/shared';
+} from '@fleece/models';
+import { Decimal, InternalServiceError } from '@fleece/utilities';
 import { AlpacaOrderCorrelation, decodeAlpacaOrderCorrelation } from './correlation';
 import { AlpacaAccountIdentifier, AlpacaOrder } from './models';
 

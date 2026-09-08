@@ -2,27 +2,20 @@ import {
   Account,
   ActivateAccountRequest,
   ActivateAccountResponse,
-  assertAccountId,
-  assertAccountName,
-  ConflictError,
   CreateAccountRequest,
   CreateAccountResponse,
   DeactivateAccountRequest,
   DeactivateAccountResponse,
   DeleteAccountRequest,
   DeleteAccountResponse,
-  ForbiddenError,
-  generateAccountId,
   GetAccountRequest,
   GetAccountResponse,
-  InternalServiceError,
   ListAccountsRequest,
   ListAccountsResponse,
-  LoggerFactory,
-  NotFoundError,
   UpdateAccountNameRequest,
   UpdateAccountNameResponse,
-} from '@fleece/shared';
+} from '@fleece/models';
+import { assertAccountId, assertAccountName, ConflictError, ForbiddenError, generateAccountId, InternalServiceError, LoggerFactory, NotFoundError } from '@fleece/utilities';
 import { AccountDao } from '../data/account-dao';
 
 const logger = LoggerFactory.getLogger('AccountService');

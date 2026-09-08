@@ -1,4 +1,4 @@
-import { LoggerFactory } from '@fleece/shared';
+import { LoggerFactory } from '@fleece/utilities';
 import express, { ErrorRequestHandler, RequestHandler } from 'express';
 import { Endpoints } from './routes/endpoints';
 

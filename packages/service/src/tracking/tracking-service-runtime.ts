@@ -1,6 +1,7 @@
 import { AlpacaActiveSynchronization, HttpAlpacaRestClient, WsAlpacaWsClient } from '@fleece/broker';
 import { createLedgerServices, createPool, migrate } from '../core';
-import { Broker, LoggerFactory } from '@fleece/shared';
+import { Broker } from '@fleece/models';
+import { LoggerFactory } from '@fleece/utilities';
 import { Pool } from 'pg';
 import { AlpacaFeed, AlpacaInjector } from './alpaca-injector';
 import { OrderTrackingFacade } from './order-tracking-facade';

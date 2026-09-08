@@ -1,4 +1,4 @@
-import { AppError, ErrorResponse, LoggerFactory } from '@fleece/shared';
+import { AppError, ErrorResponse, LoggerFactory } from '@fleece/utilities';
 import { NextFunction, Request, Response } from 'express';
 
 const logger = LoggerFactory.getLogger('ErrorHandler');
