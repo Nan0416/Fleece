@@ -1,4 +1,4 @@
-import { AlpacaAccountIdentifier, AlpacaOrder, alpacaOrderAssetClass, AlpacaRestClient } from '@fleece/alpaca';
+import { AlpacaAccountIdentifier, AlpacaOrder, alpacaOrderAssetClass, AlpacaRestClient } from '../alpaca';
 import { BrokerOrderEvent, Decimal, defaultContractMultiplier, LoggerFactory } from '@fleece/shared';
 import { BrokerUnavailableError } from '../errors';
 import { BrokerPosition, PendingOrder, ReservationRequest } from './trackers';

@@ -1,4 +1,4 @@
-import { AlpacaAccountIdentifier, AlpacaOrder, convertAlpacaOrderToBrokerOrderEvents } from '@fleece/alpaca';
+import { AlpacaAccountIdentifier, AlpacaOrder, convertAlpacaOrderToBrokerOrderEvents } from '@fleece/broker';
 import { createLedgerServices, createPool, migrate } from '@fleece/core';
 import { Decimal } from '@fleece/shared';
 import path from 'node:path';

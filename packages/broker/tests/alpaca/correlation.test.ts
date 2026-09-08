@@ -1,4 +1,4 @@
-import { decodeAlpacaOrderCorrelation, encodeAlpacaOrderCorrelation } from '../src/correlation';
+import { decodeAlpacaOrderCorrelation, encodeAlpacaOrderCorrelation } from '../../src/alpaca/correlation';
 import { InvalidRequestError } from '@fleece/shared';
 
 describe('Alpaca order correlation', () => {

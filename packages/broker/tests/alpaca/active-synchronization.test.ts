@@ -1,7 +1,7 @@
-import { AlpacaActiveSynchronization } from '../src/active-synchronization';
-import { GetOrderInput, GetOrderOutput } from '../src/alpaca-rest-client';
-import { AlpacaOrderReader } from '../src/active-synchronization';
-import { AlpacaOrder } from '../src/models';
+import { AlpacaActiveSynchronization } from '../../src/alpaca/active-synchronization';
+import { GetOrderInput, GetOrderOutput } from '../../src/alpaca/alpaca-rest-client';
+import { AlpacaOrderReader } from '../../src/alpaca/active-synchronization';
+import { AlpacaOrder } from '../../src/alpaca/models';
 import { alpacaOrder } from './alpaca-orders';
 
 const account = { accountId: 'PAPER001', live: false };

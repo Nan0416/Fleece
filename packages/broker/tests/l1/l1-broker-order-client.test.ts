@@ -1,4 +1,4 @@
-import { decodeAlpacaOrderCorrelation } from '@fleece/alpaca';
+import { decodeAlpacaOrderCorrelation } from '../../src/alpaca';
 import { InvalidRequestError } from '@fleece/shared';
 import { L1BrokerOrderClient } from '../../src/l1/l1-broker-order-client';
 import { FakeAlpacaRestClient } from '../fake-alpaca';

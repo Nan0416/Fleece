@@ -1,4 +1,4 @@
-import { AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaWsClient, OrderEventHandler } from '@fleece/alpaca';
+import { AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaWsClient, OrderEventHandler } from '@fleece/broker';
 import { AlpacaInjector } from '../src/alpaca-injector';
 import { BrokerOrderEventJob, OrderTrackingFacade } from '../src/order-tracking-facade';
 import { alpacaOrder, mlegOrder } from './alpaca-orders';

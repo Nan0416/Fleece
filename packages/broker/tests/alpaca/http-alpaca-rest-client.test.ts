@@ -1,5 +1,5 @@
 import { InvalidRequestError } from '@fleece/shared';
-import { HttpAlpacaRestClient } from '../src/http-alpaca-rest-client';
+import { HttpAlpacaRestClient } from '../../src/alpaca/http-alpaca-rest-client';
 import { mlegAlpacaOrder } from './mleg-alpaca-orders';
 
 /**

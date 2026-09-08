@@ -1,4 +1,4 @@
-import { AlpacaActiveSynchronization, HttpAlpacaRestClient, WsAlpacaWsClient } from '@fleece/alpaca';
+import { AlpacaActiveSynchronization, HttpAlpacaRestClient, WsAlpacaWsClient } from '@fleece/broker';
 import { createLedgerServices, createPool, migrate } from '@fleece/core';
 import { Broker, LoggerFactory } from '@fleece/shared';
 import path from 'node:path';

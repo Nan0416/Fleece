@@ -21,7 +21,7 @@ import {
   ListOrdersOutput,
   ListPositionsOutput,
   OrderEventHandler,
-} from '@fleece/alpaca';
+} from '../src/alpaca';
 import { TrackingClient } from '@fleece/client';
 import { TrackBrokerOrdersRequest, TrackBrokerOrdersResponse } from '@fleece/shared';
 

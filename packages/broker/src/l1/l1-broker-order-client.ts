@@ -1,4 +1,4 @@
-import { AlpacaRestClient, encodeAlpacaOrderCorrelation } from '@fleece/alpaca';
+import { AlpacaRestClient, encodeAlpacaOrderCorrelation } from '../alpaca';
 import { InvalidRequestError, LoggerFactory } from '@fleece/shared';
 import {
   BrokerOrderClient,

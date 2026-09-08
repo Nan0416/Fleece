@@ -1,5 +1,5 @@
 import { getenv, getenvBoolean, getenvInteger, LoggerFactory } from '@fleece/shared';
-import { AlpacaAccountIdentifier, AlpacaCredentials } from '@fleece/alpaca';
+import { AlpacaAccountIdentifier, AlpacaCredentials } from '@fleece/broker';
 
 const logger = LoggerFactory.getLogger('TrackingConfig');
 

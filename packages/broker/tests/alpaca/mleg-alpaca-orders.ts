@@ -1,4 +1,4 @@
-import { AlpacaOrder, AlpacaPositionIntent } from '../src/models';
+import { AlpacaOrder, AlpacaPositionIntent } from '../../src/alpaca/models';
 
 /**
  * A two-leg AMZN call spread, in the shape Alpaca really sends.

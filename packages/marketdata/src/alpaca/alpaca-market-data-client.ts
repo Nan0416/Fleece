@@ -64,7 +64,7 @@ const SOURCE = 'Alpaca';
  * is identical on both, so the safer host costs nothing, and it means a paper key never
  * reaches the live one. A live key needs `tradingBaseUrl` set to `ALPACA_TRADING_LIVE_URL`.
  *
- * Spelled out here rather than imported from `@fleece/alpaca`: that package is the trading
+ * Spelled out here rather than imported from `@fleece/broker`: that package is the trading
  * API, and market data depending on it would point an arrow the dependency graph does not
  * have.
  */

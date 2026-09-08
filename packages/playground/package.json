@@ -10,7 +10,7 @@
     "cancel-order": "npm run build && node dist/cancel-order.js"
   },
   "dependencies": {
-    "@fleece/alpaca": "1.0.0",
+    "@fleece/broker": "1.0.0",
     "@fleece/shared": "1.0.0"
   },
   "devDependencies": {

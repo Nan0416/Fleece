@@ -6,7 +6,6 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/client" },
-    { "path": "./packages/alpaca" },
     { "path": "./packages/marketdata" },
     { "path": "./packages/broker" },
     { "path": "./packages/core" },

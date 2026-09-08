@@ -1,4 +1,4 @@
-import { AlpacaOrder } from '@fleece/alpaca';
+import { AlpacaOrder } from '../alpaca';
 import { TrackingClient } from '@fleece/client';
 import { LoggerFactory } from '@fleece/shared';
 import { BrokerOrderClient, CreateLimitOrderInput, CreateMarketOrderInput, CreateMultiLegOrderInput, CreateOtoOrderInput, CreatedOrder } from '../l1/broker-order-client';

@@ -1,4 +1,4 @@
-import { AlpacaOrder } from '@fleece/alpaca';
+import { AlpacaOrder } from '@fleece/broker';
 
 /** A plausible Alpaca order, overridable field by field. */
 export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {

@@ -10,7 +10,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@fleece/alpaca": "1.0.0",
+    "@fleece/broker": "1.0.0",
     "@fleece/core": "1.0.0",
     "@fleece/shared": "1.0.0",
     "express": "^5.1.0"

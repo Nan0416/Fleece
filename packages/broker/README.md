@@ -1,11 +1,11 @@
 # @fleece/broker
 
-Places orders at a broker account, in three layers over `@fleece/alpaca`. Each adds a
-single thing to the one below, and each can be left out.
+Places orders at a broker account, in three layers over the Alpaca wire client in
+`src/alpaca/`. Each adds a single thing to the one below, and each can be left out.
 
 | Layer | Class | Adds |
 | --- | --- | --- |
-| **L0** | `AlpacaRestClient` (`@fleece/alpaca`) | Alpaca's API, one to one |
+| **L0** | `AlpacaRestClient` (`src/alpaca/`) | Alpaca's API, one to one |
 | **L1** | `L1BrokerOrderClient` | The virtual account, encoded into `client_order_id` |
 | **L2** | `L2BrokerOrderClient` | A claim to the tracking service that the order is that account's |
 | **L3** | `L3BrokerOrderClient` | Signed decimals, live handles, event delivery |

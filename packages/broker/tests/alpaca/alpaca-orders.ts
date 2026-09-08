@@ -1,4 +1,4 @@
-import { AlpacaOrder } from '../src/models';
+import { AlpacaOrder } from '../../src/alpaca/models';
 
 /** A plausible Alpaca order, overridable field by field. */
 export function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {

@@ -1,4 +1,4 @@
-import { convertAlpacaOrderToBrokerOrderEvents, AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaWsClient } from '@fleece/alpaca';
+import { convertAlpacaOrderToBrokerOrderEvents, AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaWsClient } from '@fleece/broker';
 import { BrokerOrderEvent, LoggerFactory } from '@fleece/shared';
 import { OrderTrackingFacade } from './order-tracking-facade';
 
