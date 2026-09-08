@@ -1,6 +1,7 @@
 import { easternClock } from '@fleece/shared';
 
 import { DataProviderError } from '../../src/data-models';
+import { marketState } from '../../src/market-hours';
 import { PolygonRestClient } from '../../src/polygon';
 
 /**
@@ -174,5 +175,28 @@ describe('failure', () => {
 
   it('reports an unknown symbol as a 404 rather than inventing a ticker', async () => {
     await expect(polygon.tickerDetails({ symbol: 'ZZZZNOPE' })).rejects.toThrow(/returned 404/);
+  });
+});
+
+/**
+ * The one thing here that is about today, because Polygon serves a snapshot only while a
+ * session is live and clears it at Eastern midnight. Both branches assert something: that
+ * the minute bar is a real minute of the live session, or that a closed market is why
+ * there is none.
+ */
+describe('the latest snapshot', () => {
+  it("stamps its minute bar at a whole minute of today's session, or is absent because the market is shut", async () => {
+    const { snapshot } = await polygon.snapshot({ symbol: 'AAPL' });
+
+    if (snapshot === undefined) {
+      expect(marketState()).toBe('closed');
+      return;
+    }
+
+    // Reading the window as nanoseconds would date it to 1970; reading it from `updated`
+    // would land on whatever minute this ran in rather than the bar's own.
+    expect(snapshot.mb.t % 60_000).toBe(0);
+    expect(easternClock.date(snapshot.mb.t)).toBe(easternClock.date());
+    expect(snapshot.mb.t).toBeLessThanOrEqual(Date.now());
   });
 });

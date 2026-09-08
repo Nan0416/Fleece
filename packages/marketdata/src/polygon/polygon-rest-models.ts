@@ -136,6 +136,12 @@ export interface PolygonLatestSnapshotLastTradeSection {
 
 export interface PolygonLatestSnapshotMinuteSection {
   readonly av: number;
+  /**
+   * The start of the minute this bar covers, in **milliseconds** — an aggregate window,
+   * stamped the way every other Polygon aggregate is, and not in the nanoseconds the
+   * trade, quote and `updated` timestamps around it use.
+   */
+  readonly t: number;
   readonly o: number;
   readonly h: number;
   readonly l: number;
