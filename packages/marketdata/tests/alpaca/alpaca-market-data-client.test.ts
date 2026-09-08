@@ -450,8 +450,8 @@ describe('an option chain', () => {
     const { contracts } = await client(http).optionChain({ underlying: 'AAPL' });
 
     expect(contracts.map((contract) => contract.contract)).toEqual([
-      { symbol: CONTRACT, underlying: 'AAPL', expiration: '2026-09-18', type: 'call', strike: 230, strikeMils: 230000 },
-      { symbol: PUT, underlying: 'AAPL', expiration: '2026-09-18', type: 'put', strike: 230, strikeMils: 230000 },
+      { symbol: CONTRACT, underlying: 'AAPL', root: 'AAPL', expiration: '2026-09-18', type: 'call', strike: 230, strikeMils: 230000 },
+      { symbol: PUT, underlying: 'AAPL', root: 'AAPL', expiration: '2026-09-18', type: 'put', strike: 230, strikeMils: 230000 },
     ]);
   });
 
@@ -665,5 +665,107 @@ describe('the condition and exchange dictionaries', () => {
 
     await expect(send).rejects.toThrow(DataProviderError);
     await expect(send).rejects.toThrow(/not a description/);
+  });
+});
+
+describe('what the option surface changed for stocks', () => {
+  it('refuses a monthly multiplier of 4 on stock bars too, since the table is shared', async () => {
+    // The option path is guarded above; this is the shipped path the same change altered.
+    const http = new FakeHttpClient();
+    const send = client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, timespan: 'month', multiplier: 4 });
+
+    await expect(send).rejects.toThrow(InvalidRequestError);
+    await expect(send).rejects.toThrow(/1, 2, 3, 6 or 12/);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it.each([1, 2, 3, 6, 12])('still takes a monthly multiplier of %i on stock bars', async (multiplier) => {
+    const http = new FakeHttpClient().reply(bars('AAPL'));
+    await client(http).bars({ symbol: 'AAPL', from: SESSION, to: SESSION, timespan: 'month', multiplier });
+
+    expect(http.lastRequest.query['timeframe']).toBe(`${multiplier}Month`);
+  });
+});
+
+describe('an adjusted contract', () => {
+  const ADJUSTED = 'AAPL1260918C00230000';
+
+  it('reads as the same expiry and strike as an unadjusted one, with the root telling them apart', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }, { symbol: ADJUSTED }));
+    const { contracts } = await client(http).optionChain({ underlying: 'AAPL' });
+
+    expect(contracts.map((contract) => contract.contract.root)).toEqual(['AAPL', 'AAPL1']);
+    expect(contracts.every((contract) => contract.contract.underlying === 'AAPL' && contract.contract.strike === 230 && contract.contract.expiration === '2026-09-18')).toBe(true);
+  });
+
+  it('does not cost the rest of the page, which refusing to parse it would', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: ADJUSTED }, { symbol: CONTRACT }, { symbol: PUT }));
+    const { contracts } = await client(http).optionChain({ underlying: 'AAPL' });
+
+    expect(contracts).toHaveLength(3);
+  });
+
+  it('is history Alpaca will serve, so it is not refused before the request', async () => {
+    const http = new FakeHttpClient().reply(optionBars(ADJUSTED, { t: utc('2024-12-19T05:00:00Z') }));
+    const { bars: got } = await client(http).optionBars({ symbol: ADJUSTED, from: SESSION, to: SESSION, multiplier: 1, timespan: 'day' });
+
+    expect(http.lastRequest.query['symbols']).toBe(ADJUSTED);
+    expect(got[0].S).toBe(ADJUSTED);
+  });
+});
+
+describe('a print with no condition', () => {
+  it('has none, rather than a list holding nothing', async () => {
+    const http = new FakeHttpClient().reply(optionTrades(CONTRACT, { t: utc('2024-12-19T15:34:44Z'), p: 91.6, c: undefined }));
+    const { trades: got } = await client(http).optionTrades({ symbol: CONTRACT, date: SESSION });
+
+    expect(got[0].c).toBeUndefined();
+  });
+
+  it('reads a null condition as no condition, not as a list holding null', async () => {
+    const http = new FakeHttpClient().reply(optionTrades(CONTRACT, { t: utc('2024-12-19T15:34:44Z'), p: 91.6, c: null }));
+    const { trades: got } = await client(http).optionTrades({ symbol: CONTRACT, date: SESSION });
+
+    expect(got[0].c).toBeUndefined();
+  });
+});
+
+describe('a malformed provider answer', () => {
+  it('reports greeks missing a field rather than typing undefined as a number', async () => {
+    // A summed gamma over a position would otherwise be NaN, with nothing to point at.
+    const http = new FakeHttpClient().reply({ snapshots: { [CONTRACT]: { greeks: { delta: 0.5 }, impliedVolatility: 0.69 } } });
+    const send = client(http).optionChain({ underlying: 'AAPL' });
+
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/gamma/);
+  });
+
+  it('keeps an unmodelled greek out of the domain model', async () => {
+    const greeks = { delta: 0.5, gamma: 0.02, theta: -0.03, vega: 0.04, rho: 0.01 };
+    const http = new FakeHttpClient().reply({ snapshots: { [CONTRACT]: { greeks: { ...greeks, charm: 9 } } } });
+    const [contract] = (await client(http).optionChain({ underlying: 'AAPL' })).contracts;
+
+    expect(contract.greeks).toEqual(greeks);
+  });
+
+  it('reports a dictionary sent as a list, rather than keying the codes by position', async () => {
+    const http = new FakeHttpClient().reply(['CBOE', 'AMEX']);
+    const send = client(http).exchanges({ market: 'options' });
+
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/as a list/);
+  });
+
+  it('still refuses a symbol that is no kind of contract', async () => {
+    const http = new FakeHttpClient().reply({ snapshots: { NOTANOCCSYMBOL: {} } });
+    await expect(client(http).optionChain({ underlying: 'AAPL' })).rejects.toThrow(/not an OCC contract symbol/);
+  });
+});
+
+describe('a chain with no underlying', () => {
+  it('is refused here rather than addressing the multi-symbol route by accident', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).optionChain({ underlying: '  ' })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
   });
 });

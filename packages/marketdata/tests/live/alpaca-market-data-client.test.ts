@@ -260,7 +260,7 @@ describe('failure', () => {
 
 interface TradedContract {
   readonly symbol: string;
-  /** The session that daily bar covers, which is the last one this contract traded in. */
+  /** A settled session this contract traded in — never today's, which is still open. */
   readonly date: string;
 }
 
@@ -268,19 +268,26 @@ interface TradedContract {
  * A contract picked from the live chain rather than written down: an OCC symbol names a
  * date, so a hardcoded one stops existing.
  *
- * The session comes from the snapshot's own daily bar rather than from today. Before the
- * open — and on any day the contract did not trade — today's window is empty and the bar
- * is the last one there was.
+ * The session comes from the snapshot's own daily bar rather than from today, and a bar
+ * dated today is skipped. Today's is still being aggregated: a print landing between the
+ * trades response and the bars response would make them disagree, and this suite's whole
+ * point is that when they disagree it means the normalisation is wrong.
  */
-async function aTradedContract(): Promise<TradedContract> {
-  const { contracts } = await alpaca.optionChain({ underlying: 'AAPL', type: 'call', limit: 200 });
+async function aSettledContract(): Promise<TradedContract> {
+  const today = easternClock.date();
+  const { contracts } = await alpaca.optionChain({ underlying: 'AAPL', type: 'call', limit: 500 });
+
   for (const contract of contracts) {
     const bar = contract.db;
-    if (bar !== undefined && bar.v > 0) {
-      return { symbol: contract.S, date: easternClock.date(bar.t) };
+    if (bar === undefined || bar.v <= 0) {
+      continue;
+    }
+    const date = easternClock.date(bar.t);
+    if (date !== today) {
+      return { symbol: contract.S, date };
     }
   }
-  throw new Error('No AAPL call in the first page of the chain has a daily bar with volume; the option suite needs one.');
+  throw new Error('No AAPL call in the chain has a daily bar from a settled session; the option suite needs one.');
 }
 
 describe('the option chain', () => {
@@ -322,8 +329,14 @@ describe('the option chain', () => {
 });
 
 describe('option history', () => {
+  let contract: TradedContract;
+
+  beforeAll(async () => {
+    contract = await aSettledContract();
+  });
+
   it('returns daily bars for a contract, in order and within the day', async () => {
-    const { symbol, date } = await aTradedContract();
+    const { symbol, date } = contract;
     const { bars } = await alpaca.optionBars({ symbol, from: easternClock.shiftDate(date, -30), to: date, multiplier: 1, timespan: 'day' });
 
     expect(bars.length).toBeGreaterThan(0);
@@ -332,7 +345,7 @@ describe('option history', () => {
   });
 
   it('returns prints with a condition and an exchange, and no trade id', async () => {
-    const { symbol, date } = await aTradedContract();
+    const { symbol, date } = contract;
     const { trades } = await alpaca.optionTrades({ symbol, date });
 
     expect(trades.length).toBeGreaterThan(0);
@@ -342,7 +355,7 @@ describe('option history', () => {
   });
 
   it("agrees with its own daily bar on the day's volume", async () => {
-    const { symbol, date } = await aTradedContract();
+    const { symbol, date } = contract;
     const [{ trades }, { bars }] = await Promise.all([alpaca.optionTrades({ symbol, date }), alpaca.optionBars({ symbol, from: date, to: date, multiplier: 1, timespan: 'day' })]);
 
     expect(bars).toHaveLength(1);

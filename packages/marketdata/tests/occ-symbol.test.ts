@@ -7,6 +7,7 @@ describe('parsing an OCC contract symbol', () => {
     expect(parseOccSymbol('AAPL260918C00230000')).toEqual({
       symbol: 'AAPL260918C00230000',
       underlying: 'AAPL',
+      root: 'AAPL',
       expiration: '2026-09-18',
       type: 'call',
       strike: 230,
@@ -37,10 +38,38 @@ describe('parsing an OCC contract symbol', () => {
     expect(parseOccSymbol('AAPL260230C00230000')).toBeUndefined();
   });
 
-  it('refuses the seven-digit date Alpaca permits, rather than shifting every field after it', () => {
-    // Alpaca validates against `\d{6,7}`; OCC defines six. A seventh digit would be read
-    // as part of the strike, and a mis-parsed strike is worse than no answer.
-    expect(parseOccSymbol('AAPL2609181C00230000')).toBeUndefined();
+  it('reads a trailing root digit as an adjusted contract, not as part of the date', () => {
+    // The fields anchor from the right, so the suffix cannot shift the expiry or the
+    // strike. This is the form a split or a spinoff re-issues a contract under, and it is
+    // why Alpaca validates against `\d{6,7}`.
+    expect(parseOccSymbol('AAPL1260918C00230000')).toEqual({
+      symbol: 'AAPL1260918C00230000',
+      underlying: 'AAPL',
+      root: 'AAPL1',
+      expiration: '2026-09-18',
+      type: 'call',
+      strike: 230,
+      strikeMils: 230000,
+    });
+  });
+
+  it('reads an adjusted contract to the same expiry and strike as its ordinary twin', () => {
+    const ordinary = parseOccSymbol('GOOGL260918P00230000');
+    const adjusted = parseOccSymbol('GOOGL1260918P00230000');
+
+    expect(adjusted?.expiration).toBe(ordinary?.expiration);
+    expect(adjusted?.strikeMils).toBe(ordinary?.strikeMils);
+    expect(adjusted?.type).toBe(ordinary?.type);
+    expect([ordinary?.root, adjusted?.root]).toEqual(['GOOGL', 'GOOGL1']);
+  });
+
+  it('says an ordinary contract is unadjusted by giving it a root equal to its underlying', () => {
+    const parsed = parseOccSymbol('F260116C00012500');
+    expect(parsed?.root).toBe(parsed?.underlying);
+  });
+
+  it('refuses two trailing root digits, which OCC does not define', () => {
+    expect(parseOccSymbol('AAPL12260918C00230000')).toBeUndefined();
   });
 
   it.each(['AAPL', 'AAPL260918X00230000', 'aapl260918c00230000', 'AAPL260918C0023000', 'TOOLONG260918C00230000', ''])('refuses %s', (symbol) => {
@@ -49,6 +78,10 @@ describe('parsing an OCC contract symbol', () => {
 });
 
 describe('requiring an OCC contract symbol', () => {
+  it('takes an adjusted contract, which Alpaca serves history for', () => {
+    expect(requireOccSymbol('AAPL1260918C00230000', 'fetch bars').root).toBe('AAPL1');
+  });
+
   it('names the format and what could not be done, not just that it failed', () => {
     expect(() => requireOccSymbol('AAPL', 'fetch bars')).toThrow(InvalidRequestError);
     expect(() => requireOccSymbol('AAPL', 'fetch bars')).toThrow(/nothing to fetch bars.*AAPL260918C00230000/s);

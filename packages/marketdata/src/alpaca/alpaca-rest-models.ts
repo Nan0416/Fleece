@@ -122,7 +122,7 @@ export interface AlpacaOptionTrade {
   readonly p: number;
   /** Contracts. */
   readonly s: number;
-  readonly c?: string;
+  readonly c?: string | null;
 }
 
 /** Same shape as `AlpacaQuote` but for the single-character condition. */
@@ -134,7 +134,7 @@ export interface AlpacaOptionQuote {
   readonly bx: string;
   readonly bp: number;
   readonly bs: number;
-  readonly c?: string;
+  readonly c?: string | null;
 }
 
 export interface AlpacaGreeks {

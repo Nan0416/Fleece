@@ -205,7 +205,14 @@ export type OptionType = 'call' | 'put';
  */
 export interface OccSymbol {
   readonly symbol: string;
+  /** The ticker the contract is written on, without any adjustment suffix. */
   readonly underlying: string;
+  /**
+   * The OCC root. Equal to `underlying` for an ordinary contract, and `underlying` plus a
+   * digit — `AAPL1` — for one a split, a spinoff or a special dividend re-issued. That an
+   * adjusted contract does not deliver 100 shares is the reason to be able to tell.
+   */
+  readonly root: string;
   /** ISO `YYYY-MM-DD`. */
   readonly expiration: string;
   readonly type: OptionType;

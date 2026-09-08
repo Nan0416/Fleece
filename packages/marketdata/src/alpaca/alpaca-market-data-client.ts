@@ -263,10 +263,16 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
    * caller can answer. The filters are how they answer it.
    */
   async optionChain(request: OptionChainRequest): Promise<OptionChainResponse> {
+    // An empty one would address the multi-symbol snapshots route instead, which answers
+    // about a `symbols` parameter this call never sends.
+    if (request.underlying.trim().length === 0) {
+      throw new InvalidRequestError('An option chain needs an underlying ticker to be a chain of, and this request has none.');
+    }
+
     const body = await this.get<AlpacaOptionSnapshotsResponse>(`/v1beta1/options/snapshots/${encodeURIComponent(request.underlying)}`, {
       feed: this.optionFeed,
       type: request.type,
-      limit: chainPageSize(request.limit),
+      limit: pageSize(request.limit, 'chain', MAX_CHAIN_PAGE),
       page_token: request.startAfter,
       ...expirationRange(request),
       ...strikeRange(request),
@@ -293,31 +299,37 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
   /**
    * No `adjustment` and no `feed`: the option endpoints reject both. A split re-issues an
    * option rather than restating it, and the historical option data has one tape.
+   *
+   * And no filtering to the session table, which `bars` does for an intraday timespan.
+   * That table is the equity calendar, options have no pre- or post-market session to
+   * strip, and consulting it would refuse a contract expiring past where it stops for a
+   * filter that would remove nothing. The same window therefore returns a different bar
+   * count here than from `bars`, deliberately.
    */
   async optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse> {
-    const contract = requireOccSymbol(request.symbol, 'fetch bars');
+    requireOccSymbol(request.symbol, 'fetch bars');
     const timeframe = resolveTimeframe(request.timespan, request.multiplier);
     const from = startOfDay(request.from);
     const to = endOfDay(request.to);
     requireForwardRange(from, to, 'option bars');
 
-    const raw = await this.page<AlpacaBar, AlpacaOptionBarsResponse>('/v1beta1/options/bars', contract.symbol, (body) => body.bars, {
+    const raw = await this.page<AlpacaBar, AlpacaOptionBarsResponse>('/v1beta1/options/bars', request.symbol, (body) => body.bars, {
       timeframe,
       start: new Date(from).toISOString(),
       end: new Date(to).toISOString(),
     });
-    return { bars: raw.map((bar) => normalizeBar(contract.symbol, bar)) };
+    return { bars: raw.map((bar) => normalizeBar(request.symbol, bar)) };
   }
 
   async optionTrades(request: OptionTradesRequest): Promise<OptionTradesResponse> {
-    const contract = requireOccSymbol(request.symbol, 'fetch trades');
+    requireOccSymbol(request.symbol, 'fetch trades');
     const window = this.resolveWindow(request, 'option trades');
     if (window === undefined) {
       return { trades: [] };
     }
 
-    const raw = await this.page<AlpacaOptionTrade, AlpacaOptionTradesResponse>('/v1beta1/options/trades', contract.symbol, (body) => body.trades, window);
-    return { trades: raw.map((trade) => normalizeOptionTrade(contract.symbol, trade)) };
+    const raw = await this.page<AlpacaOptionTrade, AlpacaOptionTradesResponse>('/v1beta1/options/trades', request.symbol, (body) => body.trades, window);
+    return { trades: raw.map((trade) => normalizeOptionTrade(request.symbol, trade)) };
   }
 
   /**
@@ -450,15 +462,19 @@ function readPageToken(body: unknown): string | undefined {
   return typeof token === 'string' ? token : undefined;
 }
 
-/** Alpaca caps a page at 10,000 whatever is asked for. */
-function pageSize(requested: number | undefined, what: string): number {
+/**
+ * Alpaca caps a page whatever is asked for — at 10,000 for bars, trades and quotes, and
+ * at 1,000 for a chain. One rule rather than one per cap: an unclamped page size once
+ * truncated a session silently, and that is not a bug worth finding twice.
+ */
+function pageSize(requested: number | undefined, what: string, max: number = MAX_PAGE): number {
   if (requested === undefined) {
-    return MAX_PAGE;
+    return max;
   }
   if (!Number.isFinite(requested) || requested < 1) {
     throw new InvalidRequestError(`A ${what} request needs at least one item per request, got ${requested}.`);
   }
-  return Math.min(Math.round(requested), MAX_PAGE);
+  return Math.min(Math.round(requested), max);
 }
 
 function resolveTimeframe(timespan: Timespan, multiplier: number): string {
@@ -502,22 +518,17 @@ function requireStrike(strike: number | undefined, field: string): void {
   }
 }
 
-/** Alpaca caps a chain page at 1,000, where a bar or trade page goes to 10,000. */
-function chainPageSize(requested: number | undefined): number {
-  if (requested === undefined) {
-    return MAX_CHAIN_PAGE;
-  }
-  if (!Number.isFinite(requested) || requested < 1) {
-    throw new InvalidRequestError(`A chain request needs at least one contract per page, got ${requested}.`);
-  }
-  return Math.min(Math.round(requested), MAX_CHAIN_PAGE);
-}
-
 /**
  * The metadata endpoints answer with a flat code-to-description object rather than the
  * keyed collections everything else uses, so it is read as one rather than paged.
  */
 function dictionary(body: Record<string, unknown>, what: string): ReadonlyMap<string, string> {
+  // `get` proves this is an object, and an array is one — which would key the codes by
+  // position and hand back a dictionary in which every real code is missing.
+  if (Array.isArray(body)) {
+    throw new DataProviderError(SOURCE, `returned ${what} as a list rather than as codes and their descriptions.`);
+  }
+
   const entries = new Map<string, string>();
   for (const [code, description] of Object.entries(body)) {
     if (typeof description !== 'string') {

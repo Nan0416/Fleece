@@ -52,9 +52,18 @@ export function optionBars(symbol: string, ...entries: ReadonlyArray<{ t: string
   return { bars: { [symbol]: entries.map((entry) => ({ t: entry.t, o: 1, h: 3, l: 0.5, c: entry.c ?? 2, v: 100, n: 10, vw: 1.5 })) } };
 }
 
-/** An option print: no trade id, no tape, and one condition character rather than a list. */
-export function optionTrades(symbol: string, ...entries: ReadonlyArray<{ t: string; p: number; c?: string; s?: number }>): unknown {
-  return { trades: { [symbol]: entries.map((entry) => ({ t: entry.t, x: 'C', p: entry.p, s: entry.s ?? 1, c: entry.c ?? 'f' })) } };
+/**
+ * An option print: no trade id, no tape, and one condition character rather than a list.
+ *
+ * `c` is taken as given — including `null` and absent, which are the two shapes a print
+ * with no condition arrives in and which a fixture that always supplies one cannot reach.
+ */
+export function optionTrades(symbol: string, ...entries: ReadonlyArray<{ t: string; p: number; c?: string | null; s?: number }>): unknown {
+  return {
+    trades: {
+      [symbol]: entries.map((entry) => ({ t: entry.t, x: 'C', p: entry.p, s: entry.s ?? 1, ...('c' in entry ? { c: entry.c } : { c: 'f' }) })),
+    },
+  };
 }
 
 export interface FakeContract {
