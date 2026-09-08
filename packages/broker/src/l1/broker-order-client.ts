@@ -1,9 +1,9 @@
-import { AlpacaOrder, AlpacaPositionIntent, CreateMultiLegOrderLeg } from '@fleece/alpaca';
+import { AlpacaOrder, AlpacaPositionIntent, CreateMultiLegOrderLeg } from '../alpaca';
 
 /**
  * **L1: placing an order that says whose it is.**
  *
- * One layer above `@fleece/alpaca`, and only one thing wider than it. Every input here
+ * One layer above `alpaca/`, and only one thing wider than it. Every input here
  * is the broker's own — an unsigned size and a `side`, prices as numbers, `symbol` an
  * OCC contract or a ticker — with the one field we control swapped: instead of handing
  * over a `client_order_id`, the caller names the **virtual account**, and the correlation
@@ -26,7 +26,7 @@ import { AlpacaOrder, AlpacaPositionIntent, CreateMultiLegOrderLeg } from '@flee
  * `AlpacaRestClient.createLimitOrder`, minus `clientOrderId` and plus `accountId`, so the
  * one-to-one-ness is visible at the call site rather than asserted in a comment. The
  * input types share their names too: within this package `CreateLimitOrderInput` is this
- * one, and the broker's own is reached through `@fleece/alpaca`.
+ * one, and the broker's own is reached through `../alpaca`.
  *
  * `L2BrokerOrderClient` (L2) implements this same interface, which is what makes
  * telling the tracking service a layer you can leave out rather than a step inside one.

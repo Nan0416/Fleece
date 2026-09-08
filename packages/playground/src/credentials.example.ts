@@ -11,7 +11,7 @@
  * own `credentials.ts` breaks nobody's build but your own, and the reverse breaks
  * everyone else's.
  */
-import { ALPACA_REST_LIVE_URL, ALPACA_REST_PAPER_URL, ALPACA_WS_LIVE_URL, ALPACA_WS_PAPER_URL } from '@fleece/alpaca';
+import { ALPACA_REST_LIVE_URL, ALPACA_REST_PAPER_URL, ALPACA_WS_LIVE_URL, ALPACA_WS_PAPER_URL } from '@fleece/broker';
 
 /**
  * One broker account, and everything a playground script needs to connect to it.

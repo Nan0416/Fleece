@@ -1,4 +1,4 @@
-import { AppError } from '@fleece/shared';
+import { AppError } from '@fleece/utilities';
 
 /**
  * A data provider answered, and what it said is not usable — a non-200, or a body whose

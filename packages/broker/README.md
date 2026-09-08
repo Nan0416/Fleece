@@ -1,11 +1,11 @@
 # @fleece/broker
 
-Places orders at a broker account, in three layers over `@fleece/alpaca`. Each adds a
-single thing to the one below, and each can be left out.
+Places orders at a broker account, in three layers over the Alpaca wire client in
+`src/alpaca/`. Each adds a single thing to the one below, and each can be left out.
 
 | Layer | Class | Adds |
 | --- | --- | --- |
-| **L0** | `AlpacaRestClient` (`@fleece/alpaca`) | Alpaca's API, one to one |
+| **L0** | `AlpacaRestClient` (`src/alpaca/`) | Alpaca's API, one to one |
 | **L1** | `L1BrokerOrderClient` | The virtual account, encoded into `client_order_id` |
 | **L2** | `L2BrokerOrderClient` | A claim to the tracking service that the order is that account's |
 | **L3** | `L3BrokerOrderClient` | Signed decimals, live handles, event delivery |
@@ -43,8 +43,8 @@ account is one the injector books to the catch-all account, so L1 refuses one.
 `reservationId` is an *input* here: this layer takes no hold and knows nothing about what
 one would cost.
 
-**L2 — a second answer to the same question.** It sends `PUT /track` to
-`@fleece/tracking-service`, holding `@fleece/client`'s `TrackingClient` directly — no
+**L2 — a second answer to the same question.** It sends `PUT /track` to the tracking
+process, holding `@fleece/client`'s `TrackingClient` directly — no
 port, no adapter, no do-nothing implementation. A process with no tracking service leaves
 the layer out, which is what having layers is for. For orders placed
 through this package it adds little today: the converter gives every nested leg its

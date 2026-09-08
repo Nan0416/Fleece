@@ -10,17 +10,17 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @fleece/shared && npm run build -w @fleece/client -w @fleece/alpaca -w @fleece/marketdata && npm run build -w @fleece/core -w @fleece/broker && npm run build -w @fleece/service -w @fleece/tracking-service -w @fleece/corporate-actions",
+    "build": "npm run build -w @fleece/utilities && npm run build -w @fleece/models && npm run build -w @fleece/client -w @fleece/marketdata && npm run build -w @fleece/broker && npm run build -w @fleece/service",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
-    "start": "npm run build && node packages/service/dist/main.js",
-    "start:tracking-service": "npm run build && node packages/tracking-service/dist/main.js",
+    "start": "npm run build && node packages/service/dist/api/main.js",
+    "start:tracking-service": "npm run build && node packages/service/dist/tracking/main.js",
     "test": "jest --config jest.config.js",
     "test:live": "jest --config jest.live.config.js",
     "format:fix": "prettier --write \"packages/*/{src,tests}/**/*.ts\"",
     "format:lint": "prettier --check \"packages/*/{src,tests}/**/*.ts\"",
     "lint": "eslint \"packages/*/{src,tests}/**/*.ts\"",
     "lint:fix": "eslint --fix \"packages/*/{src,tests}/**/*.ts\"",
-    "corporate-actions": "npm run build && node packages/corporate-actions/dist/main.js",
+    "corporate-actions": "npm run build && node packages/service/dist/corporate-actions/main.js",
     "build:all": "tsc -b",
     "test:ci": "jest --config jest.config.js --ci --no-cache --json --outputFile=jest-results.json"
   },

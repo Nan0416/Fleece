@@ -4,15 +4,12 @@
   // through the referenced project that owns it rather than guessing.
   "files": [],
   "references": [
-    { "path": "./packages/shared" },
+    { "path": "./packages/utilities" },
+    { "path": "./packages/models" },
     { "path": "./packages/client" },
-    { "path": "./packages/alpaca" },
     { "path": "./packages/marketdata" },
     { "path": "./packages/broker" },
-    { "path": "./packages/core" },
     { "path": "./packages/service" },
-    { "path": "./packages/tracking-service" },
-    { "path": "./packages/corporate-actions" },
     // Experiment scripts: referenced so editors resolve them, but left out of
     // `npm run build` so a half-finished experiment cannot break the product build.
     { "path": "./packages/playground" }

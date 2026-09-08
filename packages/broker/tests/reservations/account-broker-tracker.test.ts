@@ -1,4 +1,4 @@
-import { Decimal } from '@fleece/shared';
+import { Decimal } from '@fleece/utilities';
 import { AccountBrokerTracker } from '../../src/reservations/account-broker-tracker';
 import { brokerEvent } from '../broker-events';
 import { d, shows } from '../decimals';

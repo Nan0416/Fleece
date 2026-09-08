@@ -1,14 +1,5 @@
-import {
-  BrokerOrderEvent,
-  Decimal,
-  defaultContractMultiplier,
-  deriveUnitCost,
-  eventContractMultiplier,
-  isTerminalStatus,
-  LoggerFactory,
-  reconcilePosition,
-  sumDecimals,
-} from '@fleece/shared';
+import { BrokerOrderEvent, defaultContractMultiplier, eventContractMultiplier, isTerminalStatus } from '@fleece/models';
+import { Decimal, deriveUnitCost, LoggerFactory, reconcilePosition, sumDecimals } from '@fleece/utilities';
 import { nanoid } from 'nanoid';
 import { BuyingPowerLedger } from './buying-power';
 import { NotReservableError } from '../errors';
@@ -339,7 +330,7 @@ export class SymbolPositionTracker implements PositionTracker {
    * Moves the position, the cost basis and the realised profit, then settles the fill
    * against the reservation that paid for it.
    *
-   * The position arithmetic is `reconcilePosition` from `@fleece/shared` — the same
+   * The position arithmetic is `reconcilePosition` from `@fleece/utilities` — the same
    * function the ledger uses. The legacy carried a second copy of it here, which is two
    * places for a cost basis to be computed differently.
    */

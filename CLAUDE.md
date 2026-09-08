@@ -6,38 +6,40 @@ P&L falls out of a single brokerage statement. Node 22, TypeScript, PostgreSQL.
 
 ## Shape
 
-An npm-workspaces monorepo, nine packages under `packages/`:
+An npm-workspaces monorepo, six packages under `packages/` (plus `playground`):
 
 | Package | What it is |
 | --- | --- |
-| `shared` | Domain models, API contracts, errors, the HTTP client seam, utilities. Imports nothing of ours |
-| `core` | The ledger: account facade, data access, schema migrations. The only writer |
-| `service` | The HTTP API over the ledger |
-| `client` | Typed client for that API |
-| `alpaca` | Alpaca REST and WebSocket clients, wire models, the correlation codec. Equities and options, single-leg and spreads |
-| `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price |
-| `marketdata` | The market data model, two REST clients over it — Polygon (stock bars, trades, quotes, snapshots, reference data) and Alpaca (the same for stocks, plus option chains, option bars and trades, the exchange calendar, and the condition and exchange dictionaries) — and the US market-hours table. Options are Alpaca-only: Polygon's are a separate subscription. The Alpaca one here is market data; `@fleece/alpaca` is the trading API |
-| `tracking-service` | Turns broker order events into ledger entries, and takes claims about whose an order is |
-| `corporate-actions` | Records the dividends each account is owed |
+| `utilities` | Exact decimals, the clock, logging, environment reading, assertions, error types, the HTTP client seam. Imports nothing of ours |
+| `models` | The domain model — accounts, positions, orders, broker events — and in `api/` the request and response contracts written against it |
+| `client` | Typed client for the Fleece HTTP API |
+| `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price. `src/alpaca/` is the wire — Alpaca's REST and WebSocket clients, wire models, the correlation codec, equities and options, single-leg and spreads |
+| `marketdata` | The market data model, two REST clients over it — Polygon (stock bars, trades, quotes, snapshots, reference data) and Alpaca (the same for stocks, plus option chains, option bars and trades, the exchange calendar, and the condition and exchange dictionaries) — and the US market-hours table. Options are Alpaca-only: Polygon's are a separate subscription. The Alpaca one here is market data; `@fleece/broker` is the trading API |
+| `service` | The ledger and the three processes that write to it, a folder each: `core/` (the ledger — account facade, data access, schema migrations; the only writer), `http/` (the plumbing both Express apps are assembled from), `api/` (the HTTP API over it), `tracking/` (turns broker order events into ledger entries, and takes claims about whose an order is), `corporate-actions/` (records the dividends each account is owed) |
 
-Dependencies point one way: `service`/`tracking-service`/`corporate-actions` → `core` →
-`shared`; `tracking-service` → `alpaca`; `broker` → `alpaca` and `client`;
-`corporate-actions` → `marketdata`; `client` → `shared`.
+Dependencies point one way: `service` → `broker` → `client` → `models` → `utilities`;
+`service` → `marketdata` → `utilities`. Nothing imports upward, and `utilities` imports
+nothing of ours.
 
-There is no CLI. Each runnable package has a `src/main.ts` that reads its configuration
-from the environment and starts; nothing parses arguments.
+There is no CLI. Each runnable thing has a `main.ts` that reads its configuration from
+the environment and starts; nothing parses arguments. `service` has three of them —
+`src/api/main.ts`, `src/tracking/main.ts`, `src/corporate-actions/main.ts` — one per
+process, rather than one entry point that takes an argument saying which to be.
 
-`broker` has no consumer inside Fleece yet. It is groundwork for porting the execution
-service, and the reason it exists now is that its reservation accounting is the piece
-the legacy got most carefully right. It is built in layers over `@fleece/alpaca`, a folder
-each: `l1/` encodes the virtual account, `l2/` claims the order for it, `l3/` hands back
-the handles, and `reservations/` sits beside them because L3 runs with or without it.
+`broker` has no consumer inside Fleece yet apart from the order feed `tracking/` reads.
+It is groundwork for porting the execution service, and the reason it exists now is that
+its reservation accounting is the piece the legacy got most carefully right. It is built
+in layers over `src/alpaca/`, a folder each: `l1/` encodes the virtual account, `l2/`
+claims the order for it, `l3/` hands back the handles, and `reservations/` sits beside
+them because L3 runs with or without it.
 [packages/broker/README.md](./packages/broker/README.md) has the table and the reasoning.
 
-Inside `core`: `services` answer requests and hold the rules → `data` talks to
-Postgres. Inside `service`: `routes` parse and delegate to a `core` service.
+Inside `service/src/core`: `services` answer requests and hold the rules → `data` talks
+to Postgres. Inside `service/src/api`: `routes` parse and delegate to a `core` service.
+`service/src/http` holds what the API and the tracking app assemble themselves from —
+the app builder, the middleware, the health check — so neither keeps its own copy.
 
-Schema lives in `packages/core/migrations/` as numbered SQL files, applied on startup.
+Schema lives in `packages/service/migrations/` as numbered SQL files, applied on startup.
 Never edit one that has shipped; add the next number.
 
 ## Three processes, one database
@@ -56,10 +58,11 @@ npm run start:tracking-service # the tracking service on :3101, in another termi
 npm run corporate-actions     # the dividend job, once
 ```
 
-Each of those builds first and then runs a `dist/main.js`, and that is the only way to
+Each of those builds first and then runs a compiled `main.js` — `dist/api/main.js`,
+`dist/tracking/main.js`, `dist/corporate-actions/main.js` — and that is the only way to
 run one. Node 22 strips TypeScript types but resolves relative imports as ESM specifiers,
-so `node packages/service/src/main.ts` fails on the first `./server` it meets — the
-packages compile to CommonJS, which is what makes `dist/main.js` work.
+so `node packages/service/src/api/main.ts` fails on the first `./server` it meets — the
+packages compile to CommonJS, which is what makes the `dist` copy work.
 
 Everything is configured from the environment; see `dev.md`. There are no command-line
 flags to learn. `npm run build:all` additionally type-checks `packages/playground`, which
@@ -68,11 +71,12 @@ holding real broker keys, so it compiles on a laptop and nowhere else.
 
 ## Tests
 
-`packages/<pkg>/tests/` mirrors that package's `src/`, so `src/data/pg-ledger-dao.ts`
-is tested by `tests/data/pg-ledger-dao.test.ts`. Helpers and fakes live beside the
+`packages/<pkg>/tests/` mirrors that package's `src/`, so
+`service/src/core/data/pg-ledger-dao.ts` is tested by
+`service/tests/core/data/pg-ledger-dao.test.ts`. Helpers and fakes live beside the
 tests that use them, named anything but `*.test.ts`.
 
-`npm test` skips `packages/core/tests/data-integration/` — the suites needing a real
+`npm test` skips every `tests/**/data-integration/` directory — the suites needing a real
 PostgreSQL — unless `FLEECE_TEST_DATABASE_URL` points at a throwaway database.
 Everything else runs against fakes and needs nothing installed.
 

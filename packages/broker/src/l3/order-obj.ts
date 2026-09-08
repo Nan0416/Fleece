@@ -1,4 +1,5 @@
-import { BrokerOrderEvent, Decimal } from '@fleece/shared';
+import { BrokerOrderEvent } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 
 /**
  * What a caller holds after placing an order.

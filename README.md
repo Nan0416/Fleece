@@ -34,7 +34,7 @@ Three processes, one PostgreSQL database:
 ```
                     ┌──────────────────┐
    Alpaca stream ──▶│                  │──┐
-   Alpaca REST   ──▶│ tracking-service │  │
+   Alpaca REST   ──▶│     tracking     │  │
    claims        ──▶│      :3101       │  │
                     └──────────────────┘  │
                                           ▼
@@ -43,16 +43,19 @@ Three processes, one PostgreSQL database:
                     └──────────────────┘ └────────────┘
                                           ▲
                     ┌──────────────────┐  │
-   HTTP callers  ──▶│  service :3100   │──┘
+   HTTP callers  ──▶│    api :3100     │──┘
                     └──────────────────┘
 ```
 
-Each is a `src/main.ts` that reads its configuration from the environment and starts.
-There is no CLI and nothing parses arguments.
+All three live in `@fleece/service`, a folder each, and each is a `main.ts` that reads its
+configuration from the environment and starts — `src/api/main.ts`, `src/tracking/main.ts`,
+`src/corporate-actions/main.ts`. There is no CLI and nothing parses arguments. They are
+one package because they are one deployable unit against one schema; the ledger itself is
+`src/core/`, which all three hold directly.
 
-- **`service`** answers questions about the ledger and handles account management and
+- **`api`** answers questions about the ledger and handles account management and
   transfers.
-- **`tracking-service`** holds a websocket per broker account and records what the broker
+- **`tracking`** holds a websocket per broker account and records what the broker
   reports. It also polls REST for events the stream dropped, because a missing fill is
   not a gap in a log — it is a position that is silently wrong from then on. And it
   serves `PUT /track`, the one thing it is *told* rather than discovers: which virtual

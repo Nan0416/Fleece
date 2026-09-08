@@ -32,14 +32,14 @@ an ad-hoc run is a script with the values in it. Nothing was lost but argument p
 **The wire format** was the one decision rather than a translation, and it is settled:
 decimals cross as **strings** in both directions. The service refuses a JSON number where
 a decimal is expected and says to send a string; the client revives responses field by
-field with `packages/shared/src/api/wire.ts`, which retired the sanctioned `as` that
+field with `packages/models/src/api/wire.ts`, which retired the sanctioned `as` that
 guideline 18 used to allow at that boundary.
 
-One boundary still goes through a `number`: `@fleece/alpaca`'s placement inputs take
-`size` and `limitPrice` as numbers and write them back out with `toString()`. That
-round-trips exactly for any value with fifteen significant digits or fewer, which no
-share count or price approaches — but the honest fix is for those inputs to take strings,
-and it belongs in that package.
+One boundary still goes through a `number`: the placement inputs in
+`packages/broker/src/alpaca/` take `size` and `limitPrice` as numbers and write them back
+out with `toString()`. That round-trips exactly for any value with fifteen significant
+digits or fewer, which no share count or price approaches — but the honest fix is for
+those inputs to take strings, and it belongs in that layer.
 
 ---
 
@@ -132,7 +132,7 @@ call rather than approximated.**
 between them turned out to be the useful distinction:
 
 - **What a fill cost is knowable, always.** A contract quoted at 3.85 moved $385, and
-  `eventContractMultiplier` in `@fleece/shared` is the single place that figure comes
+  `eventContractMultiplier` in `@fleece/models` is the single place that figure comes
   from — the ledger's fill path and the tracker's both call it. Two copies of that rule
   would be two places for the account's view of itself to diverge from the ledger's.
 - **What an order will *require* is knowable only sometimes.** Buying is priced: it costs
@@ -184,7 +184,7 @@ is a new implementation rather than a change to the placement path.
 
 **Resolved — every money and size column is now `NUMERIC(28, 9)`.**
 
-Arithmetic happens in TypeScript against `Decimal` in `@fleece/shared`, a private
+Arithmetic happens in TypeScript against `Decimal` in `@fleece/utilities`, a private
 `decimal.js` constructor that reads and writes those columns as text so nothing is lost
 in either direction. Positions and transactions store **total cost** rather than a unit
 price, which removes division from every path but one and makes the conservation

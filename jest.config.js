@@ -20,13 +20,12 @@ module.exports = {
   testPathIgnorePatterns: ['/node_modules/', '/tests/live/'],
   setupFiles: ['<rootDir>/jest.setup.js'],
   moduleNameMapper: {
-    '^@fleece/shared$': '<rootDir>/packages/shared/src',
-    '^@fleece/core$': '<rootDir>/packages/core/src',
+    '^@fleece/utilities$': '<rootDir>/packages/utilities/src',
+    '^@fleece/models$': '<rootDir>/packages/models/src',
     '^@fleece/client$': '<rootDir>/packages/client/src',
-    '^@fleece/alpaca$': '<rootDir>/packages/alpaca/src',
     '^@fleece/broker$': '<rootDir>/packages/broker/src',
     '^@fleece/marketdata$': '<rootDir>/packages/marketdata/src',
-    '^@fleece/tracking-service$': '<rootDir>/packages/tracking-service/src',
+    '^@fleece/service$': '<rootDir>/packages/service/src',
   },
   transform: {
     '^.+\\.ts$': [

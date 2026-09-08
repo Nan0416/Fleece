@@ -8,33 +8,59 @@ and most of what follows exists because of that.
 
 ## Structure
 
-1. **One monorepo, nine packages.** `shared` (models, contracts, utilities), `core`
-   (the ledger), `service` (the HTTP API), `client` (typed client), `alpaca` (broker),
-   `broker` (order placement), `marketdata` (Polygon, Alpaca, options, market hours), `tracking-service` (broker events
-   in, and claims about whose an order is), `corporate-actions` (the dividend job). A
-   package exists when something needs to be installed separately — `core` is separate
-   from `service` because the tracking service and the dividend job need the ledger
-   without pulling in the API's routes.
-1a. **A runnable package has a `src/main.ts` and no arguments.** Configuration comes
-   from the environment, so there is one place a setting can come from rather than two
-   with a precedence rule between them. There is no CLI: an ad-hoc run is a script in
-   `playground/` with the values in it, built and run like everything else. Node 22
-   strips types but resolves relative imports as ESM, so a `src/main.ts` cannot be run
-   directly — `npm start` and friends build first for that reason.
-2. **Dependencies point one way**: `service`/`tracking-service`/`corporate-actions` →
-   `core` → `shared`; `tracking-service` → `alpaca`; `broker` → `alpaca` and `client`;
-   `corporate-actions` → `marketdata`; `client` → `shared`. Nothing imports upward, and
-   `shared` imports nothing of ours. `broker` depends on `client` because a claim is an
-   HTTP call to the tracking service, and the typed client for that call belongs with
-   every other typed client rather than hand-rolled where it is used.
+1. **One monorepo, six packages.** `utilities` (decimals, clock, logging, errors, the
+   HTTP seam), `models` (the domain model and the wire contracts), `client` (typed
+   client), `broker` (order placement, over the Alpaca wire client in `src/alpaca/`),
+   `marketdata` (Polygon, Alpaca, options, market hours), `service` (the ledger and the
+   three processes that write to it). A package exists when something needs to be
+   **installed** separately, not when it needs to be *organised* separately — that is
+   what folders are for. The API, the tracking process and the dividend job are one
+   package because they are one deployable unit against one schema; the ledger is a
+   folder inside it, not a package, because nothing installs the ledger without them.
+   A boundary that no consumer ever crosses alone is a boundary that only costs.
+1a. **A runnable thing has a `main.ts` and no arguments.** Configuration comes from the
+   environment, so there is one place a setting can come from rather than two with a
+   precedence rule between them. One package may hold several: `service` has
+   `src/api/main.ts`, `src/tracking/main.ts` and `src/corporate-actions/main.ts`, one
+   per process. That is deliberately not one entry point taking an argument for which
+   process to be — the argument would be the command line this codebase does without.
+   There is no CLI: an ad-hoc run is a script in `playground/` with the values in it,
+   built and run like everything else. Node 22 strips types but resolves relative
+   imports as ESM, so a `main.ts` cannot be run directly — `npm start` and friends
+   build first for that reason.
+2. **Dependencies point one way**: `service` → `broker` → `client` → `models` →
+   `utilities`, and `service` → `marketdata` → `utilities`. Nothing imports upward, and
+   `utilities` imports nothing of ours. `broker` depends on `client` because a claim is
+   an HTTP call to the tracking process, and the typed client for that call belongs with
+   every other typed client rather than hand-rolled where it is used. `service` depends
+   on `broker` because the tracking process reads the same Alpaca order feed the broker
+   places orders through, and there is one wire client for one broker.
+   The one arrow that points back is a **devDependency**: `client`'s integration suite
+   starts a real `FleeceServer` to round-trip against, which is the only honest way to
+   test a client. It is declared, it stays out of `dependencies`, and `tsc -b` never sees
+   it because the project references cover `src/` only — so the compiled graph is acyclic
+   even though the workspace graph is not.
+2a. **`models` depends on `utilities`, and that direction is forced.** The models are
+   written in `Decimal` and the revivers in `api/` use the assertions, so the helpers
+   have to sit underneath; `errors.ts` sits with them rather than with the models
+   because the assertions and the HTTP client both throw them, and the other
+   arrangement is a cycle. Neither package repeats its own name in a folder — there is
+   no `utilities/src/utils/` and no `models/src/models/`.
 3. **Every package declares its dev tooling, at the same range as the root.**
    `typescript` is `^5.7.3` everywhere, so npm resolves one copy and the whole repo
    compiles with one compiler. `npm i -D typescript` in one workspace takes `latest`,
    and npm answers the conflict by nesting a second compiler under that package — where
    it silently wins for every build and editor session in that folder. Check with
    `find . -type d -path '*node_modules/typescript'`: one path.
-4. **Layers**: in `core`, `services` answer requests and hold the rules, `data` talks
-   to Postgres. In `service`, `routes` parse and delegate. A route never touches a DAO.
+4. **Layers**: in `service/src/core`, `services` answer requests and hold the rules,
+   `data` talks to Postgres. In `service/src/api`, `routes` parse and delegate. A route
+   never touches a DAO. `api/` and `tracking/` are two Express apps of the same shape,
+   and what they have in common — the assembler, the error handler, the request log, the
+   auth scheme, the health check, the `Endpoints` interface — is `http/`, held once. What
+   stays with each app is what actually differs: its `server.ts`, its `dependencies/` and
+   its `utils/request-parsing.ts`. Duplication inside one package has no boundary to
+   justify it, which is why nine copied files became one folder the moment these four
+   packages became one.
 
 ## The ledger
 
@@ -91,7 +117,7 @@ and most of what follows exists because of that.
     exhaustively without a database. It is the single most important file here.
 12. **Money and sizes are `Decimal`, never `number`.** A ledger's failure mode is a
     number that is quietly wrong, and IEEE 754 supplies them: `0.1 + 0.2` is not `0.3`.
-    `Decimal` in `@fleece/shared` is a private `decimal.js` constructor — `clone`, not
+    `Decimal` in `@fleece/utilities` is a private `decimal.js` constructor — `clone`, not
     `set`, so nothing else in the process can reconfigure the arithmetic — and it
     serialises as a **string**, because a JSON number is a double and would undo all of
     this at the process boundary. `NUMERIC(28, 9)` columns come back as strings for the
@@ -132,7 +158,7 @@ and most of what follows exists because of that.
     untradable, and nothing reports it.
 12h. **A hold is in dollars, so a contract holds its premium times the multiplier.** One
     contract quoted at 3.85 costs $385, and holding $3.85 lets an account place a hundred
-    times what it can afford. `eventContractMultiplier` in `@fleece/shared` is the one
+    times what it can afford. `eventContractMultiplier` in `@fleece/models` is the one
     place that figure comes from, shared with the ledger's fill path — a tracker that
     disagreed with the ledger about what a fill cost would drift from it on every trade.
 12i. **What cannot be priced is refused, not approximated.** A short option's requirement
@@ -164,7 +190,7 @@ and most of what follows exists because of that.
 
 17. **All interface properties are `readonly`.**
 18. **Never use `as`.** Validate at trust boundaries with the assertion helpers in
-    `@fleece/shared`. ESLint enforces this; the sanctioned exceptions are the
+    `@fleece/utilities`. ESLint enforces this; the sanctioned exceptions are the
     client/server type boundary and the two places where a broker's schema meets ours,
     each carrying an inline justification naming what *is* checked.
 19. **Prefer explicit narrowing to truthiness.** `typeof x === 'number'`, not `x` — a

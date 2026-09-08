@@ -1,4 +1,4 @@
-import { Decimal } from '@fleece/shared';
+import { Decimal } from '@fleece/utilities';
 import { AccountBrokerTracker } from '../../src/reservations/account-broker-tracker';
 import { NotReservableError } from '../../src/errors';
 import { PendingOrder } from '../../src/reservations/trackers';

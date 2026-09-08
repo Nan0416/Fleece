@@ -1,5 +1,5 @@
-import { AlpacaActiveSynchronization, decodeAlpacaOrderCorrelation } from '@fleece/alpaca';
-import { BrokerOrderEvent } from '@fleece/shared';
+import { AlpacaActiveSynchronization, decodeAlpacaOrderCorrelation } from '../../src/alpaca';
+import { BrokerOrderEvent } from '@fleece/models';
 import { createAlpacaBrokerOrderClient } from '../../src/create-alpaca-broker-order-client';
 import { NotReservableError } from '../../src/errors';
 import { MultiLegOrderRequest, MultiLegOrderRequestLeg } from '../../src/l3/requests';

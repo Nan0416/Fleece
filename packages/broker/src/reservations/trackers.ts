@@ -1,4 +1,5 @@
-import { AssetClass, BrokerOrderEvent, Decimal } from '@fleece/shared';
+import { AssetClass, BrokerOrderEvent } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 
 /**
  * Reservations: the accounting that keeps concurrent strategies from oversubscribing

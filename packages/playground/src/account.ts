@@ -1,4 +1,4 @@
-import { Logger } from '@fleece/shared';
+import { Logger } from '@fleece/utilities';
 import { AccountInfo } from './credentials';
 
 /**

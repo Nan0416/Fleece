@@ -1,4 +1,5 @@
-import { Decimal, MarketBrokerOrderEvent } from '@fleece/shared';
+import { MarketBrokerOrderEvent } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 
 /** A broker order event, market-shaped; the trackers never branch on order type. */
 export function brokerEvent(overrides: Partial<MarketBrokerOrderEvent> = {}): MarketBrokerOrderEvent {

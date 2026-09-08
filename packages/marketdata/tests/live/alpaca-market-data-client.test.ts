@@ -1,4 +1,4 @@
-import { easternClock } from '@fleece/shared';
+import { easternClock } from '@fleece/utilities';
 
 import { AlpacaMarketDataClient } from '../../src/alpaca';
 import { DataProviderError } from '../../src/data-models';

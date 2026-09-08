@@ -1,10 +1,6 @@
 import {
   ActivateAccountRequest,
   ActivateAccountResponse,
-  assertInteger,
-  assertNonEmptyString,
-  assertOneOf,
-  assertRecord,
   CreateAccountRequest,
   CreateAccountResponse,
   DeactivateAccountRequest,
@@ -64,7 +60,8 @@ import {
   TransferPositionResponse,
   UpdateAccountNameRequest,
   UpdateAccountNameResponse,
-} from '@fleece/shared';
+} from '@fleece/models';
+import { assertInteger, assertNonEmptyString, assertOneOf, assertRecord } from '@fleece/utilities';
 import { HttpClient, HttpClientProps } from './http-client';
 
 /**
@@ -78,11 +75,12 @@ import { HttpClient, HttpClientProps } from './http-client';
  * number is a double and would discard the precision the ledger exists to keep — so the
  * JSON that arrives does not have the shape its `Response` type describes, and no cast
  * would give it one. Each method rebuilds its response with the revivers in
- * `@fleece/shared`, which also retires the sanctioned `as` this boundary used to carry.
+ * `@fleece/models`, which also retires the sanctioned `as` this boundary used to carry.
  *
  * This covers the read and management surface only. Applying fills, recording dividends
  * and recording broker orders are not here because they are not HTTP endpoints: the
- * injector and the corporate-action job hold `@fleece/core` directly.
+ * tracking process and the corporate-action job run in the same package as the ledger
+ * and hold it directly.
  */
 export class FleeceClient {
   private readonly http: HttpClient;

@@ -15,8 +15,8 @@
  * (`event`, `execution_id`, `price`, `qty`, `timestamp`) is not printed here.
  * `order.status` carries most of the same information.
  */
-import { AlpacaOrder, WsAlpacaWsClient } from '@fleece/alpaca';
-import { LoggerFactory } from '@fleece/shared';
+import { AlpacaOrder, WsAlpacaWsClient } from '@fleece/broker';
+import { LoggerFactory } from '@fleece/utilities';
 import { AccountInfo, liveAccountInfo, paperAccountInfo } from './credentials';
 
 const logger = LoggerFactory.getLogger('OrderEvents');

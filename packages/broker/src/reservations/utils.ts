@@ -1,4 +1,4 @@
-import { Decimal } from '@fleece/shared';
+import { Decimal } from '@fleece/utilities';
 
 export function hasDifferentSign(first: Decimal, second: Decimal): boolean {
   return first.signum() * second.signum() < 0;

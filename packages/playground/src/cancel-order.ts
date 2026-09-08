@@ -10,8 +10,8 @@
  * Prints the order before and after, because cancelling tells you almost nothing on
  * its own — see the comments in `main`.
  */
-import { HttpAlpacaRestClient } from '@fleece/alpaca';
-import { LoggerFactory } from '@fleece/shared';
+import { HttpAlpacaRestClient } from '@fleece/broker';
+import { LoggerFactory } from '@fleece/utilities';
 import { liveAccountInfo, paperAccountInfo } from './credentials';
 
 const logger = LoggerFactory.getLogger('CancelOrder');

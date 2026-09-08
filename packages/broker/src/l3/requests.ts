@@ -1,4 +1,5 @@
-import { AssetClass, BrokerOrderEvent, BrokerOrderSide, BrokerPositionIntent, Decimal } from '@fleece/shared';
+import { AssetClass, BrokerOrderEvent, BrokerOrderSide, BrokerPositionIntent } from '@fleece/models';
+import { Decimal } from '@fleece/utilities';
 import { MultiLegOrderObj, SingleOrderObj } from './order-obj';
 
 /** Called for every event the broker reports about the order this handler was attached to. */

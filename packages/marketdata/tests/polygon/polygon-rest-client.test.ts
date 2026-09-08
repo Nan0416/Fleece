@@ -1,4 +1,4 @@
-import { easternClock, InternalServiceError, InvalidRequestError, type HttpClient } from '@fleece/shared';
+import { easternClock, InternalServiceError, InvalidRequestError, type HttpClient } from '@fleece/utilities';
 
 import { DataProviderError } from '../../src/data-models';
 import { marketHoursCoverage } from '../../src/market-hours';

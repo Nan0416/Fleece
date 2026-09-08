@@ -9,7 +9,7 @@ import {
   NotFoundError,
   ServiceUnreachableError,
   UnauthenticatedError,
-} from '@fleece/shared';
+} from '@fleece/utilities';
 
 const logger = LoggerFactory.getLogger('HttpClient');
 
@@ -113,7 +113,7 @@ export class HttpClient {
     // Returned raw. A response carries decimals as strings — a JSON number is a double
     // and would lose the precision the ledger keeps — so the payload does not have the
     // shape a `Response` type describes, and no cast can give it one. `FleeceClient`
-    // revives it field by field with the helpers in `@fleece/shared`.
+    // revives it field by field with the helpers in `@fleece/models`.
     return payload;
   }
 

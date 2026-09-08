@@ -8,7 +8,7 @@ behaviour reads as a decision rather than an accident.
 then removed in the schema redesign, along with the correlation fields they carried, and
 so was the `DOUBLE PRECISION` money the port inherited. Where this document describes
 them it is describing the legacy and the port that followed it, not the system as it
-stands — see `md/OPEN-ITEMS.md` items 2 and 3, and `packages/core/migrations/`.
+stands — see `md/OPEN-ITEMS.md` items 2 and 3, and `packages/service/migrations/`.
 
 The legacy source is cloned to `/Users/nan/workplace/alpaca-legacy/`. The service
 itself was thin; the logic lived in packages published to a private registry:
@@ -16,16 +16,16 @@ itself was thin; the logic lived in packages published to a private registry:
 | Legacy | Where it went |
 | --- | --- |
 | `accounts-service/src/server.ts` | `packages/service/src/routes/` |
-| `account-store/src/account-facade-impl.ts` | `packages/core/src/services/` |
-| `account-store/src/mongodb-*.ts` | `packages/core/src/data/` |
-| `broker-models-utils/position-reconciliation.ts` | `packages/shared/src/utils/position-reconciliation.ts` |
-| `broker-models-utils/alpaca-order-converter.ts` | `packages/alpaca/src/{correlation,order-converter}.ts` |
+| `account-store/src/account-facade-impl.ts` | `packages/service/src/core/services/` |
+| `account-store/src/mongodb-*.ts` | `packages/service/src/core/data/` |
+| `broker-models-utils/position-reconciliation.ts` | `packages/utilities/src/position-reconciliation.ts` |
+| `broker-models-utils/alpaca-order-converter.ts` | `packages/broker/src/alpaca/{correlation,order-converter}.ts` |
 | `order-tracking-core/order-tracking-facade.ts` | `packages/injector/src/order-tracking-facade.ts` |
 | `broker-models/` | `packages/broker/src/models/` |
 | `broker-clients/alpaca-broker.ts` | `packages/broker/src/alpaca-broker.ts` |
 | `broker-clients/multi-session-position-tracker.ts` | `packages/broker/src/symbol-position-tracker.ts` |
 | `broker-clients/broker-tracker-impl.ts` | `packages/broker/src/account-broker-tracker.ts` |
-| `accounts-service/processors/corporate-action-processor.ts` | `packages/corporate-actions/src/` |
+| `accounts-service/processors/corporate-action-processor.ts` | `packages/service/src/corporate-actions/` |
 
 ## Bugs the port fixes
 
@@ -179,11 +179,11 @@ table could only disagree with it.
 orders belonged to the execution service, and a ledger that could place orders could
 disagree with the broker about what it had done. Porting `@fleece/broker` changed that —
 the write path (`createMarketOrder`, `createLimitOrder`, `createOtoOrder`, `cancelOrder`)
-now lives in `@fleece/alpaca` alongside the reads, because both halves share one
-credential, one rate limit and one base URL. Splitting them would mean two clients
+now lives in `packages/broker/src/alpaca/` alongside the reads, because both halves share
+one credential, one rate limit and one base URL. Splitting them would mean two clients
 competing for the same quota without knowing about each other. The read/write separation
-now lives at the package boundary instead: `injector` depends on the reads, `broker` on
-the writes, and `AlpacaActiveSynchronization` takes a narrowed `AlpacaOrderReader` so a
+lives in the types instead: the tracking process depends on the reads, the layers above
+on the writes, and `AlpacaActiveSynchronization` takes a narrowed `AlpacaOrderReader` so a
 reconciliation job cannot trade.
 
 **`AlpacaActiveSynchronization.register` came back.** It was removed as dead code — its
@@ -193,7 +193,7 @@ caller, so it returned, this time with tests.
 **`@fleece/broker` is layered, where the legacy `AlpacaBroker` was one class.** The legacy
 did the reservation, the correlation, the send, the poller registration, the tracking
 request and the event dispatch in one method per order type. Those are now three layers
-over `@fleece/alpaca` — `L1BrokerOrderClient`, `L2BrokerOrderClient`,
+over the wire client in `src/alpaca/` — `L1BrokerOrderClient`, `L2BrokerOrderClient`,
 `L3BrokerOrderClient`, one folder each — plus reservations beside them. See
 [packages/broker/README.md](../packages/broker/README.md).
 The gain is not tidiness: it is that the two pieces nobody can finish today, the
@@ -207,9 +207,9 @@ Summarised here; the ones needing a decision are argued out in
 
 **The message stream became a port.** The legacy ran a `lite-server` listening on the
 `OrderTracking.{STAGE}` topic, with a `TrackingProcessor` bound to `PUT /track`. That
-platform is not ported; the shape is. `@fleece/tracking-service` — the package the
-injector became — serves `PUT /track` over Express, parses the claim and enqueues it onto
-the same queue the broker's events use.
+platform is not ported; the shape is. `service/src/tracking/` — what the injector became
+— serves `PUT /track` over Express, parses the claim and enqueues it onto the same queue
+the broker's events use.
 
 One queue for both is the reason the two live in one process. A claim about an order and
 that order's own events must not be decided concurrently: the facade reads what the
@@ -234,5 +234,5 @@ account, and the piece most likely to change when the execution service lands.
 
 `order-execution-service`, `backtest-service`, `ticker-service` and `treasury-service`
 all exist in the legacy repositories and all imported `@qnquant/account-types`. Whether
-they reach the ledger over HTTP or by importing `@fleece/core` is the same decision
+they reach the ledger over HTTP or by importing `@fleece/service` is the same decision
 made here for the injector, and can be made again per service.

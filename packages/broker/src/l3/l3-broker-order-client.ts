@@ -1,5 +1,6 @@
-import { AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaRestClient, AlpacaWsClient, convertAlpacaOrderToBrokerOrderEvents } from '@fleece/alpaca';
-import { BrokerOrderEvent, Decimal, InvalidRequestError, LoggerFactory } from '@fleece/shared';
+import { AlpacaAccountIdentifier, AlpacaActiveSynchronization, AlpacaOrder, AlpacaRestClient, AlpacaWsClient, convertAlpacaOrderToBrokerOrderEvents } from '../alpaca';
+import { BrokerOrderEvent } from '@fleece/models';
+import { Decimal, InvalidRequestError, LoggerFactory } from '@fleece/utilities';
 import { Asset, Broker } from './broker';
 import { BrokerUnavailableError } from '../errors';
 import { MultiLegOrderObj, OtoOrderObj, SingleOrderObj } from './order-obj';
@@ -335,10 +336,10 @@ export class L3BrokerOrderClient implements Broker {
 /**
  * Alpaca's size is unsigned, and this is where the sign becomes a `side`.
  *
- * Going through `number` is lossy in principle and not in practice: `@fleece/alpaca`
+ * Going through `number` is lossy in principle and not in practice: `alpaca/`
  * writes it back out with `toString()`, which produces the shortest decimal that
  * round-trips, and a share count needs nowhere near the digits that costs. The honest
- * fix is for the placement API to take strings, which is a change to that package.
+ * fix is for the placement API to take strings, which is a change to that layer.
  */
 function toWireSize(size: Decimal): number {
   return size.abs().toNumber();

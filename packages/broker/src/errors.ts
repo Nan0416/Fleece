@@ -1,4 +1,4 @@
-import { AppError } from '@fleece/shared';
+import { AppError } from '@fleece/utilities';
 
 /**
  * Placing an order can fail for reasons the ledger's error vocabulary has no word for,

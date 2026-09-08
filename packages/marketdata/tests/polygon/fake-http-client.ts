@@ -1,4 +1,4 @@
-import type { HttpClient, HttpRequest, HttpResponse } from '@fleece/shared';
+import type { HttpClient, HttpRequest, HttpResponse } from '@fleece/utilities';
 
 import { FakeHttpClient, type RecordedRequest } from '../fake-http-client';
 

@@ -19,7 +19,7 @@ npm start               # migrates on the way up
 | `npm start` | Build, migrate, then serve the API on :3100 |
 | `npm run start:tracking-service` | Build, then run the tracking service on :3101 |
 | `npm run corporate-actions` | Build, then run the dividend job once |
-| `npm run build:all` | Type-check every package, `broker` included |
+| `npm run build:all` | Type-check every package, `playground` included |
 | `npm test` | Unit tests; integration suites skip without a database |
 | `npm run test:ci` | What CI runs: no cache, and writes `jest-results.json` |
 | `npm run test:live` | The suites that call a real data provider; needs `POLYGON_KEY` in `.env` |
@@ -33,9 +33,10 @@ environment, so `FLEECE_PORT=4000 npm start` is how you change a port — one pl
 setting can come from, rather than two with a precedence rule between them.
 
 The build is not skippable. Node 22 strips TypeScript types, but it resolves relative
-imports as ESM specifiers, so `node packages/service/src/main.ts` fails on the first
-`./server` it meets — the packages compile to CommonJS, and that is what makes
-`dist/main.js` work. `npm start` and its siblings build first for this reason.
+imports as ESM specifiers, so `node packages/service/src/api/main.ts` fails on the first
+`./server` it meets — the packages compile to CommonJS, and that is what makes the
+compiled `dist/api/main.js` work. `npm start` and its siblings build first for this
+reason.
 
 To run something one-off: write a script with the values in it and run
 it with `node`. `packages/playground/` exists for exactly that and is kept out of the
@@ -54,7 +55,7 @@ format, then tests against a PostgreSQL service container.
 Two things there are worth knowing before you trust a green run locally:
 
 - **`npm test` is not evidence that the code compiles.** ts-jest keys its cache on a
-  file's own content, so after editing `@fleece/shared` every importer stays cached and
+  file's own content, so after editing `@fleece/utilities` every importer stays cached and
   suites pass against types that no longer exist. Run `npm run build` first, or
   `npm run test:ci`, which passes `--no-cache`.
 - **The integration suites skip themselves when `FLEECE_TEST_DATABASE_URL` is unset**,
@@ -86,7 +87,7 @@ importing a package never throws for missing configuration.
 | `FLEECE_DATABASE_URL` | `postgres://localhost:5432/fleece_<stage>` | Where the ledger lives |
 | `FLEECE_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
-### The API (`packages/service/src/main.ts`)
+### The API (`packages/service/src/api/main.ts`)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -95,7 +96,7 @@ importing a package never throws for missing configuration.
 | `FLEECE_TOKEN` | *(unset)* | Bearer token callers must present. Unset disables authentication, and says so on every start |
 | `FLEECE_CORS_ORIGINS` | `*` | Comma-separated origins. Setting it *replaces* the default rather than adding to it |
 
-### The tracking service (`packages/tracking-service/src/main.ts`)
+### The tracking service (`packages/service/src/tracking/main.ts`)
 
 The first broker account uses unsuffixed names; further accounts are numbered from 2,
 so the usual single-account setup needs no numbering.
@@ -129,24 +130,17 @@ An order that lands in one of these stays there: a broker order's virtual accoun
 written once. These accounts are also what "orphan" means — `GET /broker-orders?accountId=0000000001`
 is the list worth watching.
 
-### The dividend job (`packages/corporate-actions/src/main.ts`)
+### The dividend job (`packages/service/src/corporate-actions/main.ts`)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `FLEECE_POLYGON_API_KEY` | **required** | Polygon API key. No default: a job that runs to completion having recorded nothing looks like success |
 
-### The CLI
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `FLEECE_SERVICE_URL` | `http://127.0.0.1:3100` | Which API to talk to. `--service` overrides it |
-| `FLEECE_TOKEN` | *(unset)* | Bearer token. `--token` overrides it |
-
 ### Tests
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `FLEECE_TEST_DATABASE_URL` | *(unset)* | A throwaway database. Unset skips `packages/core/tests/data-integration/` |
+| `FLEECE_TEST_DATABASE_URL` | *(unset)* | A throwaway database. Unset skips every `tests/**/data-integration/` suite |
 | `POLYGON_KEY` | *(unset)* | Read from `.env` by `npm run test:live`. Those suites are not part of `npm test`, so an absent key costs nothing |
 | `ALPACA_PAPER_API_KEY` / `ALPACA_PAPER_SECRET_KEY` | *(unset)* | Same: the Alpaca market-data live suite. Market data works with paper keys |
 
@@ -160,7 +154,7 @@ keep.
 
 ## Migrations
 
-Numbered SQL files in `packages/core/migrations/`, applied in ascending numeric order,
+Numbered SQL files in `packages/service/migrations/`, applied in ascending numeric order,
 each in its own transaction together with its bookkeeping row. Never edit one that has
 shipped — add the next number. The runner rejects a filename it cannot parse and two
 files sharing a sequence number, because both of those otherwise produce a schema that
@@ -168,12 +162,12 @@ differs between machines rather than an error.
 
 ## Adding an endpoint
 
-1. Add the `Request`/`Response` pair to `packages/shared/src/api/`.
-2. Add the method to the relevant service in `packages/core/src/services/`.
-3. Parse the request in `packages/service/src/utils/request-parsing.ts`.
-4. Bind the route in `packages/service/src/routes/`.
+1. Add the `Request`/`Response` pair to `packages/models/src/api/`.
+2. Add the method to the relevant service in `packages/service/src/core/services/`.
+3. Parse the request in `packages/service/src/api/utils/request-parsing.ts`.
+4. Bind the route in `packages/service/src/api/routes/`.
 5. Add the method to `packages/client/src/fleece-client.ts`, reviving the response with
-   the helpers in `packages/shared/src/api/wire.ts`.
+   the helpers in `packages/models/src/api/wire.ts`.
 
 Steps 1 and 5 are what keep the client and service from drifting: both compile against
 the same interfaces, so a contract change is a build failure rather than a runtime 400.

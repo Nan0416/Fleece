@@ -10,7 +10,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     rules: {
-      // Guideline: never cast with `as` — use the assertion helpers in @fleece/shared.
+      // Guideline: never cast with `as` — use the assertion helpers in @fleece/utilities.
       '@typescript-eslint/consistent-type-assertions': ['error', { assertionStyle: 'never' }],
       // Guideline: always brace `if` bodies.
       curly: ['error', 'all'],
@@ -21,7 +21,7 @@ export default tseslint.config(
   },
   {
     // The logger and assertion helpers are the sanctioned boundary where casting is unavoidable.
-    files: ['packages/shared/src/utils/assertions.ts', 'packages/shared/src/utils/logger.ts'],
+    files: ['packages/utilities/src/assertions.ts', 'packages/utilities/src/logger.ts'],
     rules: { '@typescript-eslint/consistent-type-assertions': 'off' },
   },
   {
@@ -30,7 +30,7 @@ export default tseslint.config(
     // point: it names the contract and gives the shape somewhere to grow, so an
     // endpoint or query gaining a field is not a breaking signature change for every
     // caller.
-    files: ['packages/shared/src/api/*.ts', 'packages/core/src/data/*-dao.ts', 'packages/core/src/services/*.ts', 'packages/alpaca/src/alpaca-rest-client.ts', 'packages/broker/src/l1/*.ts'],
+    files: ['packages/models/src/api/*.ts', 'packages/service/src/core/data/*-dao.ts', 'packages/service/src/core/services/*.ts', 'packages/broker/src/alpaca/alpaca-rest-client.ts', 'packages/broker/src/l1/*.ts'],
     rules: { '@typescript-eslint/no-empty-object-type': 'off' },
   },
   {

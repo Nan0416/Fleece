@@ -5,5 +5,5 @@
     "outDir": "./dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../shared" }, { "path": "../core" }]
+  "references": [{ "path": "../models" }, { "path": "../utilities" }, { "path": "../broker" }, { "path": "../marketdata" }]
 }
