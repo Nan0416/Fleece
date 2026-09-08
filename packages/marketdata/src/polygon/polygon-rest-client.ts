@@ -29,7 +29,7 @@ import {
   type Timespan,
   type TradesRequest,
   type TradesResponse,
-} from '../equity-data-models';
+} from '../data-models';
 import { marketHour, marketHourByIndex, marketHoursCoverage } from '../market-hours';
 import { adjustPrice, splitRatios, type SplitRatio } from '../split-adjustment';
 import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, spansWholeSessions, startOfDay } from '../request-window';

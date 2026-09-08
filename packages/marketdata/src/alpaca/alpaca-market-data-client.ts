@@ -2,7 +2,6 @@ import { FetchHttpClient, InvalidRequestError, LoggerFactory, easternClock, type
 
 import {
   DataProviderError,
-  type AlpacaStockRestClient,
   type BarsRequest,
   type BarsResponse,
   type DailyBarsRequest,
@@ -11,12 +10,13 @@ import {
   type MinuteBarsRequest,
   type QuotesRequest,
   type QuotesResponse,
+  type StockRestClient,
   type StockSplitsRequest,
   type StockSplitsResponse,
   type Timespan,
   type TradesRequest,
   type TradesResponse,
-} from '../equity-data-models';
+} from '../data-models';
 import { adjustPrice, splitRatios, type SplitRatio } from '../split-adjustment';
 import { endOfDay, regularHoursOnly, requireCoveredRange, requireForwardRange, requireIsoDate, requireMarketHoursCover, spansWholeSessions, startOfDay } from '../request-window';
 import { marketHour } from '../market-hours';
@@ -97,7 +97,7 @@ export interface AlpacaMarketDataClientProps {
   readonly httpClient?: HttpClient;
 }
 
-export class AlpacaMarketDataClient implements AlpacaStockRestClient {
+export class AlpacaMarketDataClient implements StockRestClient {
   private readonly headers: HttpHeaders;
   private readonly feed: AlpacaFeed;
   private readonly tradingBaseUrl: string;

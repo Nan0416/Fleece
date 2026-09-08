@@ -1,6 +1,6 @@
 import { easternClock } from '@fleece/shared';
 
-import type { StockSplit } from './equity-data-models';
+import type { StockSplit } from './data-models';
 
 /**
  * Restating a price in today's shares.

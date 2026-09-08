@@ -1,7 +1,7 @@
 import { easternClock, InternalServiceError, InvalidRequestError } from '@fleece/shared';
 
 import { AlpacaMarketDataClient, ALPACA_TRADING_LIVE_URL, ALPACA_TRADING_PAPER_URL } from '../../src/alpaca';
-import { DataProviderError } from '../../src/equity-data-models';
+import { DataProviderError } from '../../src/data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { FakeHttpClient } from '../fake-http-client';
 
