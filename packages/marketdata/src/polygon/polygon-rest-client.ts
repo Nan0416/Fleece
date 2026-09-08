@@ -15,6 +15,7 @@ import {
   type PolygonStockRestClient,
   type QuotesRequest,
   type QuotesResponse,
+  type LatestSnapshot,
   type SnapshotRequest,
   type SnapshotResponse,
   type SnapshotsRequest,
@@ -71,6 +72,16 @@ const ONE_DAY_MS = 86_400_000;
 /** Polygon caps a page at 50,000 for aggregates, trades and quotes. */
 const MAX_PAGE = 50_000;
 const REFERENCE_PAGE = 1_000;
+
+/**
+ * How much of the `tickers` parameter one snapshot request may carry.
+ *
+ * Polygon's front end refuses a request line much past 6,000 characters — measured at
+ * 5,999 accepted and 6,020 refused — with a 414 whose body is HTML rather than JSON, so
+ * it reaches a caller as a provider error naming a status and nothing else. Half of that
+ * leaves room for the path, the key and a universe of unusually long symbols.
+ */
+const MAX_TICKERS_CHARS = 3_000;
 
 /** An intraday range is split into windows of this width and fetched in parallel. */
 const INTRADAY_WINDOW_MS = 50 * ONE_DAY_MS;
@@ -205,6 +216,7 @@ export class PolygonRestClient implements PolygonStockRestClient {
     return { snapshot: normalizeSnapshot(body.ticker, session.previousSessionStart) };
   }
 
+  /** Asked for in batches, because the symbols travel in the request line. */
   async snapshots(request: SnapshotsRequest): Promise<SnapshotsResponse> {
     if (request.symbols.length === 0) {
       return { snapshots: [] };
@@ -213,8 +225,17 @@ export class PolygonRestClient implements PolygonStockRestClient {
     if (session === undefined) {
       return { snapshots: [] };
     }
-    const body = await this.get<PolygonLatestSnapshotsResponse>('/v2/snapshot/locale/us/markets/stocks/tickers', { tickers: request.symbols.join(',') });
-    return { snapshots: (body.tickers ?? []).filter((ticker) => isSnapshot(ticker)).map((ticker) => normalizeSnapshot(ticker, session.previousSessionStart)) };
+
+    const snapshots: LatestSnapshot[] = [];
+    for (const tickers of batchTickers(request.symbols)) {
+      const body = await this.get<PolygonLatestSnapshotsResponse>('/v2/snapshot/locale/us/markets/stocks/tickers', { tickers });
+      for (const ticker of body.tickers ?? []) {
+        if (isSnapshot(ticker)) {
+          snapshots.push(normalizeSnapshot(ticker, session.previousSessionStart));
+        }
+      }
+    }
+    return { snapshots };
   }
 
   /**
@@ -587,6 +608,33 @@ function pathOf(url: string): string {
   } catch {
     throw new DataProviderError(SOURCE, `sent a next_url that is not an absolute URL: ${JSON.stringify(url)}.`);
   }
+}
+
+/**
+ * Splits the symbols so no `tickers` parameter overruns the request line.
+ *
+ * By encoded length rather than by count: a ticker is one to five characters, so a count
+ * safe for a list of `F` and `T` is not safe for one of `BRK.B` and `GOOGL`.
+ */
+function batchTickers(symbols: ReadonlyArray<string>): string[] {
+  const batches: string[] = [];
+  let current = '';
+
+  for (const symbol of symbols) {
+    if (current.length === 0) {
+      current = symbol;
+    } else if (current.length + 1 + symbol.length > MAX_TICKERS_CHARS) {
+      batches.push(current);
+      current = symbol;
+    } else {
+      current += `,${symbol}`;
+    }
+  }
+
+  if (current.length > 0) {
+    batches.push(current);
+  }
+  return batches;
 }
 
 function isSnapshot(snapshot: PolygonLatestSnapshot | undefined): snapshot is PolygonLatestSnapshot {

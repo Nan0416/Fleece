@@ -48,7 +48,11 @@ export function splits(...entries: ReadonlyArray<{ date: string; from: number; t
   return { status: 'OK', results: entries.map((entry) => ({ execution_date: entry.date, split_from: entry.from, split_to: entry.to, ticker: 'AAPL' })) };
 }
 
-export function snapshot(ticker: string, updatedMs: number): unknown {
+/**
+ * `minuteStartMs` defaults to the minute `updatedMs` falls in, which is the common case
+ * and the one that hides a bar filed under the wrong minute. Pass it to separate them.
+ */
+export function snapshot(ticker: string, updatedMs: number, minuteStartMs?: number): unknown {
   return {
     ticker,
     todaysChange: 1,
@@ -58,7 +62,7 @@ export function snapshot(ticker: string, updatedMs: number): unknown {
     day: { o: 2, h: 3, l: 1.5, c: 2.5, v: 20, vw: 2 },
     lastQuote: { p: 2.4, s: 1, P: 2.6, S: 2, t: updatedMs * 1_000_000 },
     lastTrade: { c: [12], i: 99, p: 2.5, s: 5, t: updatedMs * 1_000_000, x: 4, z: 3 },
-    min: { av: 100, o: 2.2, h: 2.7, l: 2.1, c: 2.5, v: 15, vw: 2.3 },
+    min: { av: 100, t: minuteStartMs ?? Math.floor(updatedMs / 60_000) * 60_000, o: 2.2, h: 2.7, l: 2.1, c: 2.5, v: 15, vw: 2.3 },
   };
 }
 

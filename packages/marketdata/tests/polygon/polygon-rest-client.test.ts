@@ -480,6 +480,35 @@ describe('snapshot', () => {
       expect(easternClock.time(result!.mb.t)).toBe('10:00:00');
     });
 
+    it("takes the minute bar's own window, not the minute the snapshot was last touched", async () => {
+      // A name whose last print was 09:58 and whose quote moved at 10:05: deriving the
+      // bar's timestamp from `updated` files 09:58's prices at 10:05, a minute nothing
+      // traded in, and loses the minute that did.
+      const http = new FakeHttpClient().reply({ status: 'OK', ticker: snapshot('AAPL', at(SESSION, '10:05:11'), at(SESSION, '09:58:00')) });
+      const { snapshot: result } = await client(http).snapshot({ symbol: 'AAPL' });
+
+      expect(easternClock.time(result!.mb.t)).toBe('09:58:00');
+    });
+
+    it('refuses a minute section with no timestamp rather than filing the bar at 1970', async () => {
+      const payload = snapshot('AAPL', during) as { min: Record<string, unknown> };
+      delete payload.min['t'];
+      const http = new FakeHttpClient().reply({ status: 'OK', ticker: payload });
+
+      await expect(client(http).snapshot({ symbol: 'AAPL' })).rejects.toThrow(DataProviderError);
+      await expect(client(http).snapshot({ symbol: 'AAPL' })).rejects.toThrow(/minute-bar timestamp/);
+    });
+
+    it('reads the minute window in milliseconds, not in the nanoseconds beside it', async () => {
+      // `updated`, `lastTrade.t` and `lastQuote.t` are nanoseconds; an aggregate window is
+      // not. Dividing this one by a million would date it to 1970.
+      const http = new FakeHttpClient().reply({ status: 'OK', ticker: snapshot('AAPL', during, at(SESSION, '09:58:00')) });
+      const { snapshot: result } = await client(http).snapshot({ symbol: 'AAPL' });
+
+      expect(result!.mb.t).toBe(at(SESSION, '09:58:00'));
+      expect(easternClock.date(result!.mb.t)).toBe(SESSION);
+    });
+
     it('has no snapshot for a symbol Polygon returned no ticker for', async () => {
       const http = new FakeHttpClient().reply({ status: 'OK' });
       expect((await client(http).snapshot({ symbol: 'NOSUCH' })).snapshot).toBeUndefined();
@@ -505,6 +534,46 @@ describe('snapshot', () => {
       const { snapshots } = await client(http).snapshots({ symbols: ['AAPL', 'THIN'] });
 
       expect(snapshots.map((entry) => entry.S)).toStrictEqual(['AAPL']);
+    });
+
+    it('splits a universe too large for one request line, and merges the answers', async () => {
+      // Polygon's front end refuses a request line much past 6,000 characters with a 414
+      // whose body is HTML, which reaches a caller as a status and nothing else.
+      const universe = Array.from({ length: 1_200 }, (_, index) => `TCK${String(index).padStart(2, '0')}`);
+      const http = new FakeHttpClient().reply(
+        { status: 'OK', count: 1, tickers: [snapshot('TCK00', during)] },
+        { status: 'OK', count: 1, tickers: [snapshot('TCK01', during)] },
+        { status: 'OK', count: 1, tickers: [snapshot('TCK02', during)] },
+      );
+      const { snapshots } = await client(http).snapshots({ symbols: universe });
+
+      expect(http.requests.length).toBeGreaterThan(1);
+      expect(snapshots.map((entry) => entry.S)).toStrictEqual(['TCK00', 'TCK01', 'TCK02']);
+    });
+
+    it('keeps every batch inside the request line Polygon will accept', async () => {
+      const universe = Array.from({ length: 1_200 }, (_, index) => `TCK${String(index).padStart(2, '0')}`);
+      const http = new FakeHttpClient().reply({ status: 'OK', count: 0, tickers: [] });
+      await client(http).snapshots({ symbols: universe });
+
+      // The measured ceiling, not the batch size, so retuning the budget leaves this true.
+      expect(http.requests.every((request) => request.query['tickers'].length < 6_000)).toBe(true);
+    });
+
+    it('asks for every symbol exactly once, in order, across the batches', async () => {
+      const universe = Array.from({ length: 1_200 }, (_, index) => `TCK${String(index).padStart(2, '0')}`);
+      const http = new FakeHttpClient().reply({ status: 'OK', count: 0, tickers: [] });
+      await client(http).snapshots({ symbols: universe });
+
+      expect(http.requests.flatMap((request) => request.query['tickers'].split(','))).toStrictEqual(universe);
+    });
+
+    it('asks once for a universe that fits', async () => {
+      const http = new FakeHttpClient().reply({ status: 'OK', count: 1, tickers: [snapshot('AAPL', during)] });
+      await client(http).snapshots({ symbols: ['AAPL', 'MSFT'] });
+
+      expect(http.requests).toHaveLength(1);
+      expect(http.lastRequest.query['tickers']).toBe('AAPL,MSFT');
     });
 
     it('reports no snapshots when Polygon omits the list entirely', async () => {

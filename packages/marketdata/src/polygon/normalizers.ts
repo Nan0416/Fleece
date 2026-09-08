@@ -27,8 +27,6 @@ import type {
 
 const logger = LoggerFactory.getLogger('PolygonNormalizers');
 
-const ONE_MINUTE_MS = 60_000;
-
 const DIVIDEND_FREQUENCY: Partial<Record<number, DividendFrequency>> = {
   0: 'one-time',
   1: 'annually',
@@ -92,6 +90,14 @@ export function nanosecondTimestamp(timestamp: number): bigint {
 
 export function nanosecondsToMilliseconds(timestamp: number): number {
   return Number(nanosecondTimestamp(timestamp) / BigInt(1_000_000));
+}
+
+/** For an aggregate window, which Polygon stamps in milliseconds rather than nanoseconds. */
+export function millisecondTimestamp(timestamp: number, what: string): number {
+  if (!Number.isInteger(timestamp)) {
+    throw new DataProviderError('Polygon', `sent ${JSON.stringify(timestamp)} where ${what} was expected.`);
+  }
+  return timestamp;
 }
 
 export function normalizeAggregateBar(symbol: string, bar: PolygonAggregateBar): Bar {
@@ -214,7 +220,11 @@ export function normalizeSnapshot(snapshot: PolygonLatestSnapshot, previousTradi
       l: snapshot.min.l,
       c: snapshot.min.c,
       v: snapshot.min.v,
-      t: Math.floor(updatedAt / ONE_MINUTE_MS) * ONE_MINUTE_MS,
+      // The window the bar covers, not when the snapshot was last touched. Those differ
+      // whenever a name's last print is older than its last quote — deriving this from
+      // `updated` filed 09:58's prices under 10:05, at a minute nothing traded in, and
+      // lost the minute that did.
+      t: millisecondTimestamp(snapshot.min.t, `${snapshot.ticker}'s minute-bar timestamp`),
     },
     db: { S: snapshot.ticker, o: snapshot.day.o, h: snapshot.day.h, l: snapshot.day.l, c: snapshot.day.c, v: snapshot.day.v, t: easternMidnight },
     pdb: {
