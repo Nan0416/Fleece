@@ -1,5 +1,4 @@
-import type { Bar, Dividend, LatestSnapshot, Quote, StockSplit, Ticker, TickerDetails, TickerType, Trade } from './types';
-import type { OptionBarsRequest, OptionBarsResponse, OptionChainRequest, OptionChainResponse, OptionTradesRequest, OptionTradesResponse } from './option-rest-client';
+import type { Bar, Dividend, LatestSnapshot, OptionSnapshot, OptionTrade, OptionType, Quote, StockSplit, Ticker, TickerDetails, TickerType, Trade } from './types';
 
 export type Timespan = 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year';
 
@@ -113,6 +112,51 @@ export interface HistoricalBarsRequest {
 }
 
 /**
+ * A chain is a listing, and a large one: a full AAPL chain is around 3,100 contracts and
+ * SPY's is around 12,000, so the filters are how a caller asks a question rather than
+ * downloads a market. Every one of them is optional and they combine.
+ */
+export interface OptionChainRequest {
+  /** The underlying ticker, not a contract symbol. */
+  readonly underlying: string;
+  readonly type?: OptionType;
+  /** Inclusive, ISO `YYYY-MM-DD`. Set both to the same date for one expiry. */
+  readonly expirationFrom?: string;
+  readonly expirationTo?: string;
+  /** Inclusive, in dollars. */
+  readonly strikeFrom?: number;
+  readonly strikeTo?: number;
+  readonly limit?: number;
+  /** Exclusive, and what a previous response's `resumeFrom` is for. */
+  readonly startAfter?: string;
+}
+
+/**
+ * No `adjustForSplit`, unlike `BarsRequest`, and not by omission: a split does not restate
+ * an option's history, it re-issues the contract under a new symbol with a new strike and
+ * multiplier. The prints under the old symbol stand as they printed.
+ */
+export interface OptionBarsRequest {
+  /** The OCC contract symbol. */
+  readonly symbol: string;
+  readonly from: DateOrTimestamp;
+  readonly to: DateOrTimestamp;
+  readonly multiplier: number;
+  readonly timespan: Timespan;
+}
+
+/** Either a whole trading day by `date`, or a `from`/`to` window, as `TradesRequest`. */
+export interface OptionTradesRequest {
+  /** The OCC contract symbol. */
+  readonly symbol: string;
+  readonly date?: string;
+  readonly from?: number;
+  /** Defaults to now. */
+  readonly to?: number;
+  readonly itemsPerRequest?: number;
+}
+
+/**
  * Every method answers with an object rather than the collection itself. A provider's
  * answer grows fields — a cursor, a count, a note that a window was truncated — and an
  * array has nowhere to put them without changing the signature of every caller.
@@ -164,6 +208,24 @@ export interface DividendsResponse {
 /** Keyed by Eastern date, most recent first. Non-trading days are absent, not empty. */
 export interface HistoricalBarsResponse {
   readonly days: ReadonlyMap<string, ReadonlyArray<Bar>>;
+}
+
+/**
+ * `resumeFrom` is set when the listing stopped before running out, and follows
+ * `TickersResponse` for the same reason: a chain is more pages than one call should walk
+ * on the caller's behalf.
+ */
+export interface OptionChainResponse {
+  readonly contracts: ReadonlyArray<OptionSnapshot>;
+  readonly resumeFrom?: string;
+}
+
+export interface OptionBarsResponse {
+  readonly bars: ReadonlyArray<Bar>;
+}
+
+export interface OptionTradesResponse {
+  readonly trades: ReadonlyArray<OptionTrade>;
 }
 
 /** What every provider serves: prices over a window. */
