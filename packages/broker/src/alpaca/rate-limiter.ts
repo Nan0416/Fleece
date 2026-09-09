@@ -1,4 +1,4 @@
-import { LoggerFactory, sleep } from '@fleece/utilities';
+import { InternalServiceError, LoggerFactory, sleep } from '@fleece/utilities';
 
 const logger = LoggerFactory.getLogger('AlpacaRateLimiter');
 
@@ -37,7 +37,15 @@ export class RateLimiter {
 
     // Wait for the oldest call to age out of the window, plus a small margin so the
     // retry does not land on the same millisecond it expires.
+    //
+    // A cap of zero admits nothing, so there is no oldest call to wait for and no
+    // delay that would ever produce one. Waiting on `undefined` computed a `NaN` delay,
+    // which `setTimeout` reads as zero — turning "permit nothing" into a recursion that
+    // re-entered on every tick and pinned the event loop instead of refusing the call.
     const oldest = this.callTimes[0];
+    if (oldest === undefined) {
+      throw new InternalServiceError(`The Alpaca rate limiter is configured to permit ${this.maxCalls} calls per ${this.windowMs}ms, so no call can ever be made.`);
+    }
     const waitMs = oldest - (this.now() - this.windowMs) + 100;
     logger.debug(`Alpaca rate limit reached (${this.maxCalls} per ${this.windowMs}ms); waiting ${waitMs}ms.`);
     await sleep(Math.max(waitMs, 1));

@@ -84,6 +84,25 @@ Everything else runs against fakes and needs nothing installed.
 a real data provider, CI has no key for one, and a suite that skipped itself there would
 make the run green having tested nothing. `npm run test:live` runs them, reading `.env`.
 
+`npm run test:coverage` is the coverage gate, and runs from `jest.coverage.config.js` —
+the only config carrying thresholds. **It runs the unit suites alone**, `data-integration/`
+included in what it excludes. That is deliberate: those suites skip themselves without a
+database, so a number taken from the full run means one thing on a machine that has one
+and something fifteen points lower on a machine that does not, and a threshold calibrated
+against either fails on the other. Pinning the test set is what makes the gate answer a
+question about the change rather than about the environment — the same number on a
+laptop, in CI, and in whatever CI comes next. It needs nothing installed.
+
+The Postgres DAOs under `core/data/` are therefore barely measured by it. They have a
+threshold group of their own rather than an exclusion — the report should say what is
+unmeasured, not hide it — and the suites that do test them still run under `npm test`
+and `npm run test:ci`, where `scripts/assert-suites-ran.js` turns a silent skip red. It
+is coverage that stops depending on a database, not correctness.
+
+The thresholds are a ratchet, not a target: they sit just under what the suite reaches,
+so ordinary work does not trip them and a genuine fall does. Raise one when the real
+figure moves up; never lower one to make a red build green.
+
 ## Conventions
 
 **Read [md/GUIDELINES.md](./md/GUIDELINES.md) before writing code here.** It is the

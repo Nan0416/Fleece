@@ -1,4 +1,5 @@
 import { Account } from '@fleece/models';
+import { ConflictError } from '@fleece/utilities';
 import { AccountDao, CreateAccountInput, ListAccountsInput } from '../../../src/core/data/account-dao';
 
 /** Fakes that store what they are given, implementing the rules a caller depends on. */
@@ -12,7 +13,18 @@ export class FakeAccountDao implements AccountDao {
     return account;
   }
 
+  /**
+   * Refuses a duplicate id, as the real one does.
+   *
+   * `PgAccountDao` lets the primary key raise it rather than pre-checking with a SELECT,
+   * so the conflict is the DAO's to report and no service above it looks first. A fake
+   * that quietly overwrote would make a caller relying on that refusal pass here and
+   * fail against Postgres.
+   */
   async createAccount(input: CreateAccountInput): Promise<{ account: Account }> {
+    if (this.accounts.has(input.accountId)) {
+      throw new ConflictError(`Account ${input.accountId} already exists. Choose a different id, or omit it to have one generated.`);
+    }
     const account: Account = { ...input, createdAt: 1, lastUpdatedAt: 1 };
     this.accounts.set(input.accountId, account);
     return { account };

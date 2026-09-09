@@ -1,5 +1,5 @@
 import { AssetClass, HistoricalPosition, OrderFillProgress, Position, Profit, Transaction } from '@fleece/models';
-import { Decimal, derivePremium, deriveRoi, deriveUnitCost, InternalServiceError, reconcilePosition } from '@fleece/utilities';
+import { Decimal, derivePremium, deriveRoi, deriveUnitCost, InternalServiceError, LoggerFactory, reconcilePosition } from '@fleece/utilities';
 import { Pool, PoolClient } from 'pg';
 import {
   AppendTransactionInput,
@@ -35,6 +35,8 @@ import {
   TransferSide,
 } from './ledger-dao';
 import { toAssetClass, toDecimal, toOptionalDecimal } from './row-parsers';
+
+const logger = LoggerFactory.getLogger('PgLedgerDao');
 
 /**
  * Every NUMERIC column arrives as a **string**. node-postgres does that deliberately —
@@ -636,7 +638,15 @@ export class PgLedgerDao implements LedgerDao {
       await client.query('COMMIT');
       return result;
     } catch (err) {
-      await client.query('ROLLBACK');
+      // The rollback's own failure must not replace the failure that caused it. A
+      // connection that dropped mid-transaction fails both, and reporting the second
+      // loses the only description of what actually went wrong — Postgres discards an
+      // uncommitted transaction on a lost connection anyway.
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        logger.error('Rolling back after a failed ledger write did not succeed; reporting the original failure.', rollbackErr);
+      }
       throw err;
     } finally {
       client.release();

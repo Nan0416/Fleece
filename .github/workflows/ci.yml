@@ -68,3 +68,22 @@ jobs:
         if: always()
         run: node scripts/assert-suites-ran.js jest-results.json
 
+      # Separate from `Test`, and after it: an instrumented run is slower, and a failure
+      # here is a different thing from a failing test — the suite passed, it just covers
+      # less than it did.
+      #
+      # It needs nothing from the `services:` block above. `jest.coverage.config.js`
+      # runs the unit suites alone, so this step gives the same number on a laptop, on
+      # this runner, and on whatever CI replaces it — the thresholds hold or fail on the
+      # change rather than on what the environment happened to provide.
+      - name: Coverage thresholds
+        run: npm run test:coverage
+
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+          if-no-files-found: ignore

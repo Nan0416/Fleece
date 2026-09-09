@@ -8,6 +8,7 @@ import {
   assertNonEmptyString,
   assertOneOf,
   assertOptionalDecimal,
+  assertOptionalInteger,
   assertOptionalOneOf,
   assertOptionalString,
   assertRecord,
@@ -185,8 +186,11 @@ export function reviveBrokerOrder(value: unknown, field = 'brokerOrder'): Broker
     stopPrice: assertOptionalDecimal(record['stopPrice'], `${field}.stopPrice`),
     filledQty: assertDecimal(record['filledQty'], `${field}.filledQty`),
     filledAvgPrice: assertOptionalDecimal(record['filledAvgPrice'], `${field}.filledAvgPrice`),
-    submittedAt: record['submittedAt'] === undefined ? undefined : assertInteger(record['submittedAt'], `${field}.submittedAt`),
-    filledAt: record['filledAt'] === undefined ? undefined : assertInteger(record['filledAt'], `${field}.filledAt`),
+    // `assertOptionalInteger`, not an `=== undefined` test: every other optional field
+    // here tolerates an explicit `null`, and a caller that serialises absence as `null`
+    // rather than by omitting the key got a 400 on these two alone.
+    submittedAt: assertOptionalInteger(record['submittedAt'], `${field}.submittedAt`),
+    filledAt: assertOptionalInteger(record['filledAt'], `${field}.filledAt`),
     createdAt: assertInteger(record['createdAt'], `${field}.createdAt`),
     lastUpdatedAt: assertInteger(record['lastUpdatedAt'], `${field}.lastUpdatedAt`),
   };

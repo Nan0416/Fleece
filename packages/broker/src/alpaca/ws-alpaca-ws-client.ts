@@ -110,6 +110,15 @@ export class WsAlpacaWsClient implements AlpacaWsClient {
 
     ws.on('close', (code: number, reason: Buffer) => {
       this.connected = false;
+      // A closed socket is not an authorized one. Left saying otherwise, the ping job
+      // goes on pinging it for the whole reconnect delay and arms deadlines against a
+      // socket that is already gone.
+      this.authorization = 'waiting';
+      // The socket this pong was owed by is gone. Left armed, the deadline fires
+      // against whatever `this.ws` points at by then — after a reconnect, the healthy
+      // replacement — reporting a disconnection that did not happen and terminating a
+      // connection that was fine, which reconnects, and so on.
+      this.clearPongTimeout();
       const text = reason.toString();
       logger.info(`Alpaca stream closed for account ${this.props.account.accountId}: code ${code} ${text}.`, this.logMeta);
       this.onDisconnected?.(code, text);
@@ -226,8 +235,19 @@ export class WsAlpacaWsClient implements AlpacaWsClient {
       // A TCP connection can be dead without either side noticing; a missing pong is
       // the only signal that the stream has gone quiet because it is broken rather
       // than because the market is.
+      //
+      // Armed only when nothing is already waiting, which is what makes the deadline
+      // reachable. A pong deadline longer than the ping period is a supported
+      // configuration, and both re-arming and clearing-then-re-arming on every tick
+      // push it past the next tick forever — the stream would never be declared dead
+      // however long Alpaca stayed silent. The first unanswered ping starts the clock;
+      // a pong is what stops it.
+      if (this.pongTimeout !== undefined) {
+        return;
+      }
       this.pongTimeout = setTimeout(() => {
         logger.warn(`No pong from Alpaca for account ${this.props.account.accountId}; treating the stream as dead.`, this.logMeta);
+        this.pongTimeout = undefined;
         this.onDisconnected?.(1006, 'ping detected abnormal closure');
         this.ws?.terminate();
       }, this.props.pongTimeoutMs ?? 5_000);

@@ -24,7 +24,9 @@ const results = JSON.parse(readFileSync(resultsPath, 'utf-8'));
 // A suite that failed is already red on jest's own exit code, and a suite that failed
 // to compile also reports zero assertions — so failures are excluded here rather than
 // reported twice under the wrong heading.
-const skipped = results.testResults.filter((suite) => suite.status !== 'failed' && (suite.assertionResults.length === 0 || suite.assertionResults.every((test) => test.status === 'pending')));
+const skipped = results.testResults.filter(
+  (suite) => suite.status !== 'failed' && (suite.assertionResults.length === 0 || suite.assertionResults.every((test) => test.status === 'pending')),
+);
 
 if (skipped.length > 0) {
   console.error(`${skipped.length} test suite(s) ran nothing:`);
