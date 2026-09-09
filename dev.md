@@ -23,9 +23,10 @@ npm start               # migrates on the way up
 | `npm test` | Unit tests; integration suites skip without a database |
 | `npm run test:ci` | What CI runs: no cache, and writes `jest-results.json` |
 | `npm run test:live` | The suites that call a real data provider; needs `POLYGON_KEY` in `.env` |
+| `npm run test:coverage` | The coverage gate. Unit suites only, so the number is the same everywhere and it needs no database |
 | `npx ts-node packages/marketdata/src/refresh-market-hours.ts` | Rewrites `market-hours-data.json` from Alpaca's calendar; needs the Alpaca keys in `.env` |
-| `npm run lint` / `lint:fix` | ESLint |
-| `npm run format:lint` / `format:fix` | Prettier |
+| `npm run lint` / `lint:fix` | ESLint, across the repo — the build and CI scripts included, not only `packages/*/src` |
+| `npm run format:lint` / `format:fix` | Prettier, across the repo. `.prettierignore` holds what it does not own: generated files, captured broker payloads, and the Markdown, which is hand-wrapped prose |
 | `npm run clean` | Remove `dist/` and build info |
 
 There are no command-line flags. Every process reads its configuration from the

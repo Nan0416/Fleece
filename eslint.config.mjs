@@ -4,10 +4,37 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/coverage/**',
+      // Session notes and captured broker payloads: neither is source.
+      'prompts/**',
+      'packages/playground/data/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    // The tooling that decides how everything else is built, and the one script CI
+    // runs directly. These were outside the lint glob until the glob became the repo,
+    // which is exactly backwards: a mistake in `jest.config.js` decides whether the
+    // suite runs at all, and nothing was reading it.
+    //
+    // They are CommonJS scripts for Node, so `require`, `module` and `process` are the
+    // vocabulary rather than a mistake.
+    files: ['*.js', '*.mjs', 'scripts/**/*.js'],
+    languageOptions: {
+      globals: globals.node,
+      sourceType: 'commonjs',
+    },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
+    // `.mjs` is a module whatever the block above says about its siblings.
+    files: ['*.mjs'],
+    languageOptions: { sourceType: 'module' },
+  },
   {
     rules: {
       // Guideline: never cast with `as` — use the assertion helpers in @fleece/utilities.
@@ -30,7 +57,13 @@ export default tseslint.config(
     // point: it names the contract and gives the shape somewhere to grow, so an
     // endpoint or query gaining a field is not a breaking signature change for every
     // caller.
-    files: ['packages/models/src/api/*.ts', 'packages/service/src/core/data/*-dao.ts', 'packages/service/src/core/services/*.ts', 'packages/broker/src/alpaca/alpaca-rest-client.ts', 'packages/broker/src/l1/*.ts'],
+    files: [
+      'packages/models/src/api/*.ts',
+      'packages/service/src/core/data/*-dao.ts',
+      'packages/service/src/core/services/*.ts',
+      'packages/broker/src/alpaca/alpaca-rest-client.ts',
+      'packages/broker/src/l1/*.ts',
+    ],
     rules: { '@typescript-eslint/no-empty-object-type': 'off' },
   },
   {

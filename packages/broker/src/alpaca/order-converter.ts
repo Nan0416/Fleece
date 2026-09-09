@@ -145,11 +145,11 @@ function toMarketEvent(order: AlpacaOrder, account: AlpacaAccountIdentifier, cor
 
     createdAt: strictParseDate(order.created_at, `order ${order.id} created_at`),
     updatedAt: strictParseDate(order.updated_at, `order ${order.id} updated_at`),
-    filledAt: optionalDate(order.filled_at),
-    expiredAt: optionalDate(order.expired_at),
-    canceledAt: optionalDate(order.canceled_at),
-    failedAt: optionalDate(order.failed_at),
-    replacedAt: optionalDate(order.replaced_at),
+    filledAt: optionalDate(order.filled_at, `order ${order.id} filled_at`),
+    expiredAt: optionalDate(order.expired_at, `order ${order.id} expired_at`),
+    canceledAt: optionalDate(order.canceled_at, `order ${order.id} canceled_at`),
+    failedAt: optionalDate(order.failed_at, `order ${order.id} failed_at`),
+    replacedAt: optionalDate(order.replaced_at, `order ${order.id} replaced_at`),
   };
 }
 
@@ -229,7 +229,11 @@ export function alpacaOrderAssetClass(order: AlpacaOrder): AssetClass {
       // Empty on a multi-leg parent, which trades nothing itself. It takes its first
       // leg's class so the field is never a lie — nothing books against the parent, so
       // the multiplier this feeds is only ever read off the legs.
-      return order.legs === null || order.legs[0] === undefined ? 'option' : alpacaOrderAssetClass(order.legs[0]);
+      // `legs` is absent, not null, unless the request asked for `nested=true` — the
+      // same fact `convertAlpacaOrderToBrokerOrderEvents` defends against with `?? []`.
+      // Reading `[0]` off it threw a bare TypeError on the restart path that seeds the
+      // reservation tracker from open orders.
+      return order.legs?.[0] === undefined ? 'option' : alpacaOrderAssetClass(order.legs[0]);
     default:
       throw new InternalServiceError(`Alpaca order ${order.id} has unrecognised asset_class "${String(order.asset_class)}".`);
   }
@@ -275,6 +279,13 @@ function strictParseDate(value: string, field: string): number {
   return parsed;
 }
 
-function optionalDate(value: string | null | undefined): number | undefined {
-  return typeof value === 'string' ? Date.parse(value) : undefined;
+/**
+ * Absent stays absent; anything present is held to the same standard as a required
+ * date. `Date.parse` answers `NaN` rather than throwing, and `NaN` is not nullish — so
+ * returning it unchecked put it past every `filledAt ?? updatedAt` downstream and into
+ * `to_timestamp()` on the ledger's write path, where the complaint names the column
+ * rather than the broker payload that caused it.
+ */
+function optionalDate(value: string | null | undefined, field: string): number | undefined {
+  return typeof value === 'string' ? strictParseDate(value, field) : undefined;
 }

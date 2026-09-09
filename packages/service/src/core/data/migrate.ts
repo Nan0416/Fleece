@@ -96,7 +96,14 @@ export async function migrate(pool: Pool, migrationsDir: string = defaultMigrati
       newlyApplied.push(file);
       logger.info(`Applied migration ${file}.`);
     } catch (err) {
-      await client.query('ROLLBACK');
+      // The rollback's own failure must not replace the failure that caused it: a
+      // connection lost mid-migration fails both, and the second says nothing about
+      // which statement in the file was bad.
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        logger.error(`Rolling back migration ${file} did not succeed; reporting the failure that caused it.`, rollbackErr);
+      }
       logger.error(`Migration ${file} failed and was rolled back.`, err);
       throw err;
     } finally {

@@ -131,5 +131,24 @@ describe('crossing the wire', () => {
     it('names the field that was wrong, not just the object', () => {
       expect(() => reviveBrokerOrder(overTheWire({ ...parent, orderClass: 'spread' }))).toThrow(/brokerOrder\.orderClass/);
     });
+
+    it('reads a timestamp that is present', () => {
+      const revived = reviveBrokerOrder(overTheWire({ ...parent, submittedAt: 1_700_000_000_000, filledAt: 1_700_000_000_500 }));
+      expect(revived.submittedAt).toBe(1_700_000_000_000);
+      expect(revived.filledAt).toBe(1_700_000_000_500);
+    });
+
+    it('treats an explicit null timestamp as absence, as every other optional field does', () => {
+      // These two tested `=== undefined` while the rest of the file went through
+      // `assertOptional*`, so a caller that serialised absence as `null` rather than by
+      // omitting the key got a 400 on these fields alone.
+      const revived = reviveBrokerOrder(overTheWire({ ...parent, submittedAt: null, filledAt: null }));
+      expect(revived.submittedAt).toBeUndefined();
+      expect(revived.filledAt).toBeUndefined();
+    });
+
+    it('still refuses a timestamp that is present and not an integer', () => {
+      expect(() => reviveBrokerOrder(overTheWire({ ...parent, filledAt: 'yesterday' }))).toThrow(/brokerOrder\.filledAt/);
+    });
   });
 });

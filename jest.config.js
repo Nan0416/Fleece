@@ -47,5 +47,26 @@ module.exports = {
     // Barrels are re-exports with no behaviour of their own; counting them inflates
     // the number without anything being tested.
     '!packages/*/src/**/index.ts',
+    // Not part of the product build — `npm run build` leaves it out, CI never compiles
+    // it, and its `credentials.ts` is gitignored. Counting throwaway experiment scripts
+    // measures nothing and only moves the number.
+    '!packages/playground/**',
+    // Process entry points. Each is the same shape: read the environment, build the
+    // object graph, listen. There is no branch in one that a test could take that
+    // starting the process would not, so a unit test here asserts that the wiring is
+    // the wiring. What they compose is covered; the composition is covered by running it.
+    '!packages/service/src/*/main.ts',
+    // A maintenance script with the same shape, run by hand against a live provider to
+    // refresh the checked-in market-hours table.
+    '!packages/marketdata/src/refresh-market-hours.ts',
   ],
+
+  // `text-summary` rather than `text`: the per-file table is 90 lines of noise in a CI
+  // log, and the report that answers "which lines" is the HTML one, kept as an artifact.
+  coverageReporters: ['text-summary', 'html', 'lcov', 'json-summary'],
+
+  // No `coverageThreshold` here on purpose. What this config measures depends on
+  // whether a database happened to be reachable, and a gate whose bar moves with the
+  // environment fails on machines rather than on changes. `jest.coverage.config.js`
+  // holds the thresholds and fixes the test set they were calibrated against.
 };

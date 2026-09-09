@@ -1,7 +1,7 @@
-import { BrokerOrderEvent } from '@fleece/models';
+import { AssetClass, BrokerOrderEvent } from '@fleece/models';
 import { InternalServiceError } from '@fleece/utilities';
-import { convertAlpacaOrderToBrokerOrderEvents } from '../../src/alpaca/order-converter';
-import { AlpacaAccountIdentifier, AlpacaOrder } from '../../src/alpaca/models';
+import { alpacaOrderAssetClass, convertAlpacaOrderToBrokerOrderEvents } from '../../src/alpaca/order-converter';
+import { AlpacaAccountIdentifier, AlpacaAssetClass, AlpacaOrder } from '../../src/alpaca/models';
 import { alpacaOrder } from './alpaca-orders';
 import { mlegAlpacaOrder, mlegLeg } from './mleg-alpaca-orders';
 
@@ -221,6 +221,56 @@ describe('convertAlpacaOrderToBrokerOrderEvents', () => {
     it('still refuses a lone option order with no limit price', () => {
       const lone = mlegLeg({ position_intent: 'buy_to_open', order_class: '', limit_price: null });
       expect(() => convertAlpacaOrderToBrokerOrderEvents(lone, account)).toThrow(InternalServiceError);
+    });
+  });
+  describe('timestamps', () => {
+    it('reads the optional dates Alpaca supplies', () => {
+      const event = convertOne(alpacaOrder({ filled_at: '2024-03-01T14:30:00Z', canceled_at: null }));
+      expect(event.filledAt).toBe(Date.parse('2024-03-01T14:30:00Z'));
+      expect(event.canceledAt).toBeUndefined();
+    });
+
+    it('refuses an unreadable optional date rather than passing NaN downstream', () => {
+      // `Date.parse` answers NaN rather than throwing, and NaN is not nullish — so it
+      // survived every `filledAt ?? updatedAt` and reached `to_timestamp()` on the
+      // ledger's write path, where the complaint named a column rather than the broker
+      // payload that caused it.
+      expect(() => convertOne(alpacaOrder({ filled_at: 'not-a-date' }))).toThrow(InternalServiceError);
+      expect(() => convertOne(alpacaOrder({ filled_at: 'not-a-date' }))).toThrow(/filled_at/);
+    });
+
+    it.each(['expired_at', 'canceled_at', 'failed_at', 'replaced_at'])('holds %s to the same standard', (field) => {
+      expect(() => convertOne(alpacaOrder({ [field]: 'nonsense' }))).toThrow(InternalServiceError);
+    });
+  });
+
+  describe('alpacaOrderAssetClass', () => {
+    it.each([
+      ['us_equity', 'equity'],
+      ['us_option', 'option'],
+      ['crypto', 'crypto'],
+    ] as ReadonlyArray<readonly [AlpacaAssetClass, AssetClass]>)('maps %s to %s', (alpaca, expected) => {
+      expect(alpacaOrderAssetClass(alpacaOrder({ asset_class: alpaca }))).toBe(expected);
+    });
+
+    it('refuses an asset class it does not recognise', () => {
+      // Alpaca adding one is a thing to notice, not a thing to book against a guess.
+      const futures = alpacaOrder({ asset_class: 'crypto' });
+      expect(() => alpacaOrderAssetClass({ ...futures, asset_class: 'futures' as AlpacaAssetClass })).toThrow(InternalServiceError);
+    });
+
+    it("takes a composite parent's class from its first leg", () => {
+      expect(alpacaOrderAssetClass(mlegAlpacaOrder())).toBe('option');
+    });
+
+    it('assumes an option when a composite parent arrives with no legs at all', () => {
+      // Alpaca omits `legs` unless the request asked for `nested=true`, so the field is
+      // absent rather than null — and reading `[0]` off it threw a bare TypeError on
+      // the restart path that seeds the reservation tracker from open orders.
+      const withoutLegs = { ...mlegAlpacaOrder() };
+      delete (withoutLegs as Record<string, unknown>)['legs'];
+      expect(alpacaOrderAssetClass(withoutLegs)).toBe('option');
+      expect(alpacaOrderAssetClass({ ...mlegAlpacaOrder(), legs: null })).toBe('option');
     });
   });
 });
