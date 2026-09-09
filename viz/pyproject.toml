@@ -1,0 +1,6 @@
+[project]
+name = "fleece-viz"
+version = "0.1.0"
+description = "Matplotlib renderers for the JSON the playground scripts write. Reads data, never fetches it."
+requires-python = ">=3.12"
+dependencies = ["matplotlib>=3.9", "numpy>=2.0"]

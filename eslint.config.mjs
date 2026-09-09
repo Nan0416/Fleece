@@ -11,6 +11,8 @@ export default tseslint.config(
       // Session notes and captured broker payloads: neither is source.
       'prompts/**',
       'packages/playground/data/**',
+      // Python renderers and the JSON they read. Nothing here is JavaScript.
+      'viz/**',
     ],
   },
   js.configs.recommended,

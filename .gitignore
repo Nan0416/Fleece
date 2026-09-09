@@ -123,3 +123,8 @@ jest-results.json
 
 # Session notes, not part of the codebase.
 prompts/
+
+# Chart data written by `npm run option-delta-surface -w @fleece/playground`, and the
+# Python environment uv builds for viz/. Both are regenerated on demand.
+viz/data/
+viz/.venv/
