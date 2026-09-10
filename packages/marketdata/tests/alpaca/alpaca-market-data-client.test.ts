@@ -5,7 +5,7 @@ import { DataProviderError } from '../../src/data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { FakeHttpClient } from '../fake-http-client';
 
-import { bars, calendar, conditionDictionary, corporateActions, optionBars, optionSnapshots, optionTrades, quotes, trades, withPageToken } from './fake-responses';
+import { bars, calendar, conditionDictionary, corporateActions, optionBars, optionContracts, optionSnapshots, optionTrades, quotes, trades, withPageToken } from './fake-responses';
 
 const SESSION = '2024-12-19';
 const at = (date: string, time: string): number => easternClock.timestamp(date, time);
@@ -399,6 +399,165 @@ describe('marketHours', () => {
 
 const CONTRACT = 'AAPL260918C00230000';
 const PUT = 'AAPL260918P00230000';
+
+describe('a contract listing', () => {
+  it('asks the trading host, which is where contracts live and market data does not', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
+    await client(http).listOptionContracts({ underlying: 'AAPL' });
+
+    expect(http.lastRequest.url).toBe('/v2/options/contracts');
+    expect(http.lastRequest.baseUrl).toBe(ALPACA_TRADING_PAPER_URL);
+  });
+
+  it('sends the filters under the names Alpaca reads', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
+    await client(http).listOptionContracts({
+      underlying: 'AAPL',
+      status: 'inactive',
+      root: 'AAPL1',
+      type: 'call',
+      style: 'american',
+      expirationFrom: '2026-09-01',
+      expirationTo: '2026-10-30',
+      strikeFrom: 200,
+      strikeTo: 260,
+      withDeliverables: true,
+    });
+
+    expect(http.lastRequest.query).toMatchObject({
+      underlying_symbols: 'AAPL',
+      status: 'inactive',
+      root_symbol: 'AAPL1',
+      type: 'call',
+      style: 'american',
+      expiration_date_gte: '2026-09-01',
+      expiration_date_lte: '2026-10-30',
+      strike_price_gte: '200',
+      strike_price_lte: '260',
+      show_deliverables: 'true',
+    });
+  });
+
+  it('lists active contracts when the request names no status, as Alpaca does', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
+    await client(http).listOptionContracts({ underlying: 'AAPL' });
+
+    expect(http.lastRequest.query['status']).toBe('active');
+    expect(http.lastRequest.query['show_deliverables']).toBeUndefined();
+  });
+
+  it('asks for a full page by default, and caps one asked for above the maximum', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
+    await client(http).listOptionContracts({ underlying: 'AAPL' });
+    expect(http.lastRequest.query['limit']).toBe('10000');
+
+    await client(http).listOptionContracts({ underlying: 'AAPL', limit: 50_000 });
+    expect(http.lastRequest.query['limit']).toBe('10000');
+  });
+
+  it('refuses a listing with no underlying to list the contracts of', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
+    await expect(client(http).listOptionContracts({ underlying: '  ' })).rejects.toThrow(InvalidRequestError);
+  });
+
+  it('reads a contract, leaving the symbol for the caller to take apart', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
+    const { contracts } = await client(http).listOptionContracts({ underlying: 'AAPL' });
+
+    expect(contracts).toEqual([
+      {
+        S: CONTRACT,
+        f: 'a',
+        status: 'active',
+        tradable: true,
+        style: 'american',
+        multiplier: 100,
+        size: 100,
+        openInterest: 1234,
+        openInterestDate: '2024-12-19',
+        closePrice: 1.25,
+        closePriceDate: '2024-12-19',
+      },
+    ]);
+  });
+
+  it('reads what an adjusted contract delivers, where the multiplier and the size disagree', async () => {
+    const http = new FakeHttpClient().reply(
+      optionContracts({
+        symbol: CONTRACT,
+        size: '75',
+        deliverables: [
+          {
+            type: 'equity',
+            symbol: 'AAPL',
+            asset_id: 'b0b6dd9d',
+            amount: '75',
+            allocation_percentage: '75',
+            settlement_type: 'T+1',
+            settlement_method: 'BTOB',
+            delayed_settlement: false,
+          },
+          { type: 'cash', amount: '2500', allocation_percentage: '25', settlement_type: 'T+1', settlement_method: 'CCC', delayed_settlement: false },
+        ],
+      }),
+    );
+    const { contracts } = await client(http).listOptionContracts({ underlying: 'AAPL', withDeliverables: true });
+
+    expect(contracts[0].multiplier).toBe(100);
+    expect(contracts[0].size).toBe(75);
+    expect(contracts[0].deliverables).toEqual([
+      { type: 'equity', symbol: 'AAPL', amount: 75, allocationPercentage: 75, settlementType: 'T+1', settlementMethod: 'BTOB' },
+      { type: 'cash', amount: 2500, allocationPercentage: 25, settlementType: 'T+1', settlementMethod: 'CCC' },
+    ]);
+  });
+
+  it('leaves out an open interest and a close Alpaca has none for', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, openInterest: null, closePrice: null }));
+    const { contracts } = await client(http).listOptionContracts({ underlying: 'AAPL' });
+
+    expect(contracts[0].openInterest).toBeUndefined();
+    expect(contracts[0].closePrice).toBeUndefined();
+  });
+
+  it('reports a missing multiplier rather than reading it as NaN', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, multiplier: null }));
+    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(DataProviderError);
+  });
+
+  it('reports a status it does not recognise rather than carrying it through', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, status: 'expired' }));
+    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(/neither active nor inactive/);
+  });
+
+  it('reports a listing that is not a list', async () => {
+    const http = new FakeHttpClient().reply({ option_contracts: { AAPL: [] } });
+    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(DataProviderError);
+  });
+
+  it('hands back a cursor rather than walking a listing of thousands itself', async () => {
+    const http = new FakeHttpClient().reply(withPageToken(optionContracts({ symbol: CONTRACT }), 'QUFQTA=='));
+    const { contracts, resumeFrom } = await client(http).listOptionContracts({ underlying: 'AAPL' });
+
+    expect(contracts).toHaveLength(1);
+    expect(resumeFrom).toBe('QUFQTA==');
+    expect(http.requests).toHaveLength(1);
+  });
+
+  it('resumes from where a previous page stopped', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
+    await client(http).listOptionContracts({ underlying: 'AAPL', status: 'inactive', startAfter: 'QUFQTA==' });
+
+    expect(http.lastRequest.query['status']).toBe('inactive');
+    expect(http.lastRequest.query['page_token']).toBe('QUFQTA==');
+  });
+
+  it.each([null, ''])('reports a %p page token as the end of the listing', async (token) => {
+    const http = new FakeHttpClient().reply(withPageToken(optionContracts({ symbol: CONTRACT }), token));
+    const { resumeFrom } = await client(http).listOptionContracts({ underlying: 'AAPL' });
+
+    expect(resumeFrom).toBeUndefined();
+  });
+});
 
 describe('an option chain', () => {
   it('asks for the underlying by path, since the endpoint is keyed by it rather than by symbols', async () => {

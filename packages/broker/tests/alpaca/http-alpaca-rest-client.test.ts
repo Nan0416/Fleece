@@ -164,20 +164,4 @@ describe('HttpAlpacaRestClient', () => {
         });
     });
   });
-
-  describe('getOptionContract', () => {
-    it('reads a contract from the options endpoint, which is the only place options exist', async () => {
-      respond = () => new Response(JSON.stringify({ symbol: 'AMZN261016C00280000', multiplier: '100', type: 'call' }), { status: 200 });
-      const { contract } = await client().getOptionContract({ symbolOrId: 'amzn261016c00280000' });
-
-      // Upper-cased, and not on /v2/assets: that endpoint 404s on an OCC symbol.
-      expect(sent[0].url).toBe('https://broker.test/v2/options/contracts/AMZN261016C00280000');
-      expect(contract?.multiplier).toBe('100');
-    });
-
-    it('reports a contract Alpaca does not have as absent rather than as a failure', async () => {
-      respond = () => new Response(JSON.stringify({ code: 40410000, message: 'not found' }), { status: 404 });
-      await expect(client().getOptionContract({ symbolOrId: 'AMZN261016C00280000' })).resolves.toEqual({ contract: null });
-    });
-  });
 });

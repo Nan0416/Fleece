@@ -5,8 +5,12 @@ import {
   type Bar,
   type MarketSession,
   type OccSymbol,
+  type OptionContract,
+  type OptionContractStatus,
+  type OptionDeliverable,
   type OptionGreeks,
   type OptionSnapshot,
+  type OptionStyle,
   type OptionTrade,
   type Quote,
   type StockSplit,
@@ -17,6 +21,8 @@ import type {
   AlpacaBar,
   AlpacaCalendarDay,
   AlpacaGreeks,
+  AlpacaOptionContract,
+  AlpacaOptionDeliverable,
   AlpacaOptionQuote,
   AlpacaOptionSnapshot,
   AlpacaOptionTrade,
@@ -115,6 +121,80 @@ export function normalizeOptionSnapshot(contract: OccSymbol, snapshot: AlpacaOpt
     greeks: present(snapshot.greeks) ? normalizeGreeks(symbol, snapshot.greeks) : undefined,
     iv: present(snapshot.impliedVolatility) ? requireNumber(symbol, snapshot.impliedVolatility, 'implied volatility') : undefined,
   };
+}
+
+export function normalizeOptionContract(contract: AlpacaOptionContract): OptionContract {
+  const symbol = contract.symbol;
+  if (typeof symbol !== 'string' || symbol.length === 0) {
+    throw new DataProviderError(SOURCE, `sent a contract carrying ${JSON.stringify(symbol)} where its symbol should be.`);
+  }
+  return {
+    S: symbol,
+    f: 'a',
+    status: requireStatus(symbol, contract.status),
+    tradable: requireBoolean(symbol, contract.tradable, 'tradable'),
+    style: requireStyle(symbol, contract.style),
+    multiplier: requireNumericString(symbol, contract.multiplier, 'multiplier'),
+    size: requireNumericString(symbol, contract.size, 'size'),
+    deliverables: present(contract.deliverables) ? contract.deliverables.map((deliverable) => normalizeDeliverable(symbol, deliverable)) : undefined,
+    openInterest: present(contract.open_interest) ? requireNumericString(symbol, contract.open_interest, 'open interest') : undefined,
+    openInterestDate: present(contract.open_interest_date) ? requireString(symbol, contract.open_interest_date, 'open interest date') : undefined,
+    closePrice: present(contract.close_price) ? requireNumericString(symbol, contract.close_price, 'close price') : undefined,
+    closePriceDate: present(contract.close_price_date) ? requireString(symbol, contract.close_price_date, 'close price date') : undefined,
+  };
+}
+
+function normalizeDeliverable(symbol: string, deliverable: AlpacaOptionDeliverable): OptionDeliverable {
+  const type = deliverable.type;
+  if (type !== 'cash' && type !== 'equity') {
+    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(type)} as the type of one of ${symbol}'s deliverables, which is neither cash nor equity.`);
+  }
+  return {
+    type,
+    symbol: present(deliverable.symbol) ? deliverable.symbol : undefined,
+    amount: requireNumericString(symbol, deliverable.amount, "deliverable's amount"),
+    allocationPercentage: requireNumericString(symbol, deliverable.allocation_percentage, "deliverable's allocation percentage"),
+    settlementType: requireString(symbol, deliverable.settlement_type, "deliverable's settlement type"),
+    settlementMethod: requireString(symbol, deliverable.settlement_method, "deliverable's settlement method"),
+  };
+}
+
+function requireStatus(symbol: string, value: unknown): OptionContractStatus {
+  if (value !== 'active' && value !== 'inactive') {
+    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s status, which is neither active nor inactive.`);
+  }
+  return value;
+}
+
+function requireStyle(symbol: string, value: unknown): OptionStyle {
+  if (value !== 'american' && value !== 'european') {
+    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s style, which is neither american nor european.`);
+  }
+  return value;
+}
+
+function requireBoolean(symbol: string, value: unknown, what: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s ${what}, where true or false was expected.`);
+  }
+  return value;
+}
+
+function requireString(symbol: string, value: unknown, what: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s ${what}, where text was expected.`);
+  }
+  return value;
+}
+
+/** Every number on the contract route arrives as a string, including the multiplier. */
+function requireNumericString(symbol: string, value: unknown, what: string): number {
+  const text = requireString(symbol, value, what);
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) {
+    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s ${what}, where a number was expected.`);
+  }
+  return parsed;
 }
 
 /**

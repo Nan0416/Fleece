@@ -1,4 +1,20 @@
-import type { Bar, Dividend, LatestSnapshot, OptionSnapshot, OptionTrade, OptionType, Quote, StockSplit, Ticker, TickerDetails, TickerType, Trade } from './types';
+import type {
+  Bar,
+  Dividend,
+  LatestSnapshot,
+  OptionContract,
+  OptionContractStatus,
+  OptionSnapshot,
+  OptionStyle,
+  OptionTrade,
+  OptionType,
+  Quote,
+  StockSplit,
+  Ticker,
+  TickerDetails,
+  TickerType,
+  Trade,
+} from './types';
 
 export type Timespan = 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year';
 
@@ -111,6 +127,29 @@ export interface HistoricalBarsRequest {
   readonly marketHoursOnly?: boolean;
 }
 
+export interface OptionContractsRequest {
+  /** The underlying ticker, not a contract symbol. */
+  readonly underlying: string;
+  /** Omitted means `active`, as Alpaca's own default does. */
+  readonly status?: OptionContractStatus;
+  /** The OCC root, which tells an adjusted contract (`AAPL1`) from an ordinary one. */
+  readonly root?: string;
+  readonly type?: OptionType;
+  readonly style?: OptionStyle;
+  /** Inclusive, ISO `YYYY-MM-DD`. */
+  readonly expirationFrom?: string;
+  /** Inclusive, ISO `YYYY-MM-DD`. */
+  readonly expirationTo?: string;
+  /** Inclusive, in dollars. */
+  readonly strikeFrom?: number;
+  readonly strikeTo?: number;
+  /** Asks for `deliverables`, which Alpaca leaves out of the payload unless asked. */
+  readonly withDeliverables?: boolean;
+  readonly limit?: number;
+  /** Exclusive, and what a previous response's `resumeFrom` is for. */
+  readonly startAfter?: string;
+}
+
 /**
  * A chain is a listing, and a large one: a full AAPL chain is around 3,100 contracts and
  * SPY's is around 12,000, so the filters are how a caller asks a question rather than
@@ -208,6 +247,11 @@ export interface DividendsResponse {
 /** Keyed by Eastern date, most recent first. Non-trading days are absent, not empty. */
 export interface HistoricalBarsResponse {
   readonly days: ReadonlyMap<string, ReadonlyArray<Bar>>;
+}
+
+export interface OptionContractsResponse {
+  readonly contracts: ReadonlyArray<OptionContract>;
+  readonly resumeFrom?: string;
 }
 
 /**
@@ -319,6 +363,8 @@ export interface AlpacaMarketDataRestClient extends StockRestClient {
    * derives.
    */
   marketHours(request: MarketHoursRequest): Promise<MarketHoursResponse>;
+  /** The only listing here that reaches contracts which no longer trade. */
+  listOptionContracts(request: OptionContractsRequest): Promise<OptionContractsResponse>;
   optionChain(request: OptionChainRequest): Promise<OptionChainResponse>;
   optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse>;
   optionTrades(request: OptionTradesRequest): Promise<OptionTradesResponse>;

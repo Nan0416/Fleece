@@ -19,6 +19,8 @@ import {
   type OptionBarsResponse,
   type OptionChainRequest,
   type OptionChainResponse,
+  type OptionContractsRequest,
+  type OptionContractsResponse,
   type OptionSnapshot,
   type OptionTradesRequest,
   type OptionTradesResponse,
@@ -40,6 +42,7 @@ import type {
   AlpacaCorporateActions,
   AlpacaCorporateActionsResponse,
   AlpacaOptionBarsResponse,
+  AlpacaOptionContractsResponse,
   AlpacaOptionSnapshotsResponse,
   AlpacaOptionTrade,
   AlpacaOptionTradesResponse,
@@ -48,7 +51,16 @@ import type {
   AlpacaTrade,
   AlpacaTradesResponse,
 } from './alpaca-rest-models';
-import { normalizeBar, normalizeOptionSnapshot, normalizeOptionTrade, normalizeQuote, normalizeSession, normalizeSplit, normalizeTrade } from './normalizers';
+import {
+  normalizeBar,
+  normalizeOptionContract,
+  normalizeOptionSnapshot,
+  normalizeOptionTrade,
+  normalizeQuote,
+  normalizeSession,
+  normalizeSplit,
+  normalizeTrade,
+} from './normalizers';
 
 const logger = LoggerFactory.getLogger('AlpacaMarketDataClient');
 
@@ -82,6 +94,9 @@ const MAX_PAGES = 500;
 
 /** A chain page is capped lower than a bar or trade page. */
 const MAX_CHAIN_PAGE = 1_000;
+
+/** The contract listing caps at ten thousand, as the tick endpoints do. */
+const MAX_CONTRACTS_PAGE = MAX_PAGE;
 
 /** Alpaca's corporate-action history does not reach further back than this. */
 const EARLIEST_CORPORATE_ACTION = '2000-01-01';
@@ -253,6 +268,45 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       throw new DataProviderError(SOURCE, 'returned a calendar that is not a list of days.');
     }
     return { sessions: body.map((day) => normalizeSession(day)) };
+  }
+
+  /**
+   * One page of the contracts written on an underlying, expired ones included.
+   *
+   * `status` picks which side of expiry, and defaults to `active` as Alpaca's own filter
+   * does — a listing of what has already expired has to ask for `inactive`.
+   */
+  async listOptionContracts(request: OptionContractsRequest): Promise<OptionContractsResponse> {
+    if (request.underlying.trim().length === 0) {
+      throw new InvalidRequestError('A contract listing needs an underlying ticker to list the contracts of, and this request has none.');
+    }
+
+    const body = await this.get<AlpacaOptionContractsResponse>(
+      '/v2/options/contracts',
+      {
+        underlying_symbols: request.underlying,
+        status: request.status ?? 'active',
+        root_symbol: request.root,
+        type: request.type,
+        style: request.style,
+        show_deliverables: request.withDeliverables === true ? 'true' : undefined,
+        limit: pageSize(request.limit, 'contract listing', MAX_CONTRACTS_PAGE),
+        page_token: request.startAfter,
+        ...expirationRange(request),
+        ...strikeRange(request),
+      },
+      this.tradingBaseUrl,
+    );
+
+    const listed = body.option_contracts;
+    if (listed !== undefined && listed !== null && !Array.isArray(listed)) {
+      throw new DataProviderError(SOURCE, `returned ${request.underlying}'s contracts as something other than a list.`);
+    }
+    const next = readPageToken(body);
+    return {
+      contracts: (listed ?? []).map((contract) => normalizeOptionContract(contract)),
+      resumeFrom: next === undefined || next.length === 0 ? undefined : next,
+    };
   }
 
   /**
@@ -488,7 +542,7 @@ function resolveTimeframe(timespan: Timespan, multiplier: number): string {
   return `${multiplier}${timeframe.unit}`;
 }
 
-function expirationRange(request: OptionChainRequest): Query {
+function expirationRange(request: { readonly expirationFrom?: string; readonly expirationTo?: string }): Query {
   const { expirationFrom, expirationTo } = request;
   if (expirationFrom !== undefined) {
     requireIsoDate(expirationFrom, 'read the start of the expiration range');
@@ -502,7 +556,7 @@ function expirationRange(request: OptionChainRequest): Query {
   return { expiration_date_gte: expirationFrom, expiration_date_lte: expirationTo };
 }
 
-function strikeRange(request: OptionChainRequest): Query {
+function strikeRange(request: { readonly strikeFrom?: number; readonly strikeTo?: number }): Query {
   const { strikeFrom, strikeTo } = request;
   requireStrike(strikeFrom, 'strikeFrom');
   requireStrike(strikeTo, 'strikeTo');
@@ -514,7 +568,7 @@ function strikeRange(request: OptionChainRequest): Query {
 
 function requireStrike(strike: number | undefined, field: string): void {
   if (strike !== undefined && (!Number.isFinite(strike) || strike <= 0)) {
-    throw new InvalidRequestError(`A chain's ${field} must be a strike in dollars above zero, got ${strike}.`);
+    throw new InvalidRequestError(`A ${field} must be a strike in dollars above zero, got ${strike}.`);
   }
 }
 
