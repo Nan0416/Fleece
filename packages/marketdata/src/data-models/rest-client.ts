@@ -127,35 +127,12 @@ export interface HistoricalBarsRequest {
   readonly marketHoursOnly?: boolean;
 }
 
-export interface OptionContractsRequest {
-  /** The underlying ticker, not a contract symbol. */
-  readonly underlying: string;
-  /** Omitted means `active`, as Alpaca's own default does. */
-  readonly status?: OptionContractStatus;
-  /** The OCC root, which tells an adjusted contract (`AAPL1`) from an ordinary one. */
-  readonly root?: string;
-  readonly type?: OptionType;
-  readonly style?: OptionStyle;
-  /** Inclusive, ISO `YYYY-MM-DD`. */
-  readonly expirationFrom?: string;
-  /** Inclusive, ISO `YYYY-MM-DD`. */
-  readonly expirationTo?: string;
-  /** Inclusive, in dollars. */
-  readonly strikeFrom?: number;
-  readonly strikeTo?: number;
-  /** Asks for `deliverables`, which Alpaca leaves out of the payload unless asked. */
-  readonly withDeliverables?: boolean;
-  readonly limit?: number;
-  /** Exclusive, and what a previous response's `resumeFrom` is for. */
-  readonly startAfter?: string;
-}
-
 /**
- * A chain is a listing, and a large one: a full AAPL chain is around 3,100 contracts and
- * SPY's is around 12,000, so the filters are how a caller asks a question rather than
- * downloads a market. Every one of them is optional and they combine.
+ * What both option listings narrow by. Every filter is optional and they combine, which
+ * is how a caller asks a question rather than downloads a market: a full AAPL chain is
+ * around 3,100 contracts and SPY's is around 12,000.
  */
-export interface OptionChainRequest {
+export interface OptionListingRequest {
   /** The underlying ticker, not a contract symbol. */
   readonly underlying: string;
   readonly type?: OptionType;
@@ -169,6 +146,19 @@ export interface OptionChainRequest {
   /** Exclusive, and what a previous response's `resumeFrom` is for. */
   readonly startAfter?: string;
 }
+
+export interface OptionContractsRequest extends OptionListingRequest {
+  /** Omitted means `active`, as Alpaca's own default does. */
+  readonly status?: OptionContractStatus;
+  /** The OCC root, which tells an adjusted contract (`AAPL1`) from an ordinary one. */
+  readonly root?: string;
+  readonly style?: OptionStyle;
+  /** Asks for `deliverables`, which Alpaca leaves out of the payload unless asked. */
+  readonly withDeliverables?: boolean;
+}
+
+/** A chain is quotes, so it reaches only what is quoted now. */
+export type OptionChainRequest = OptionListingRequest;
 
 /**
  * No `adjustForSplit`, unlike `BarsRequest`, and not by omission: a split does not restate

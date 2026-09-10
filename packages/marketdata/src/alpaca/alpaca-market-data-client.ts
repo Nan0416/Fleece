@@ -18,6 +18,7 @@ import {
   type OptionBarsRequest,
   type OptionBarsResponse,
   type OptionChainRequest,
+  type OptionListingRequest,
   type OptionChainResponse,
   type OptionContractsRequest,
   type OptionContractsResponse,
@@ -94,9 +95,6 @@ const MAX_PAGES = 500;
 
 /** A chain page is capped lower than a bar or trade page. */
 const MAX_CHAIN_PAGE = 1_000;
-
-/** The contract listing caps at ten thousand, as the tick endpoints do. */
-const MAX_CONTRACTS_PAGE = MAX_PAGE;
 
 /** Alpaca's corporate-action history does not reach further back than this. */
 const EARLIEST_CORPORATE_ACTION = '2000-01-01';
@@ -271,41 +269,41 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
   }
 
   /**
-   * One page of the contracts written on an underlying, expired ones included.
+   * One page of the contracts written on an underlying, expired ones reachable.
    *
    * `status` picks which side of expiry, and defaults to `active` as Alpaca's own filter
    * does — a listing of what has already expired has to ask for `inactive`.
    */
   async listOptionContracts(request: OptionContractsRequest): Promise<OptionContractsResponse> {
-    if (request.underlying.trim().length === 0) {
+    const underlying = request.underlying.trim().toUpperCase();
+    if (underlying.length === 0) {
       throw new InvalidRequestError('A contract listing needs an underlying ticker to list the contracts of, and this request has none.');
     }
 
     const body = await this.get<AlpacaOptionContractsResponse>(
       '/v2/options/contracts',
       {
-        underlying_symbols: request.underlying,
+        underlying_symbols: underlying,
         status: request.status ?? 'active',
         root_symbol: request.root,
         type: request.type,
         style: request.style,
         show_deliverables: request.withDeliverables === true ? 'true' : undefined,
-        limit: pageSize(request.limit, 'contract listing', MAX_CONTRACTS_PAGE),
+        limit: pageSize(request.limit, 'contract listing'),
         page_token: request.startAfter,
         ...expirationRange(request),
-        ...strikeRange(request),
+        ...strikeRange(request, 'contract listing'),
       },
       this.tradingBaseUrl,
     );
 
     const listed = body.option_contracts;
     if (listed !== undefined && listed !== null && !Array.isArray(listed)) {
-      throw new DataProviderError(SOURCE, `returned ${request.underlying}'s contracts as something other than a list.`);
+      throw new DataProviderError(SOURCE, `returned ${underlying}'s contracts as something other than a list.`);
     }
-    const next = readPageToken(body);
     return {
       contracts: (listed ?? []).map((contract) => normalizeOptionContract(contract)),
-      resumeFrom: next === undefined || next.length === 0 ? undefined : next,
+      resumeFrom: cursor(body),
     };
   }
 
@@ -329,7 +327,7 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       limit: pageSize(request.limit, 'chain', MAX_CHAIN_PAGE),
       page_token: request.startAfter,
       ...expirationRange(request),
-      ...strikeRange(request),
+      ...strikeRange(request, 'chain'),
     });
 
     const contracts: OptionSnapshot[] = [];
@@ -346,8 +344,7 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       contracts.push(normalizeOptionSnapshot(contract, snapshot));
     }
 
-    const next = readPageToken(body);
-    return { contracts, resumeFrom: next === undefined || next.length === 0 ? undefined : next };
+    return { contracts, resumeFrom: cursor(body) };
   }
 
   /**
@@ -462,8 +459,8 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       });
       pages.push(body.corporate_actions ?? {});
 
-      const next = readPageToken(body);
-      if (next === undefined || next.length === 0) {
+      const next = cursor(body);
+      if (next === undefined) {
         return pages;
       }
       pageToken = next;
@@ -481,9 +478,8 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       const bySymbol = read(body) ?? {};
       results.push(...(bySymbol[symbol] ?? []));
 
-      const next = readPageToken(body);
-      // Absent, null and empty all mean the same thing: this was the last page.
-      if (next === undefined || next.length === 0) {
+      const next = cursor(body);
+      if (next === undefined) {
         return results;
       }
       pageToken = next;
@@ -506,6 +502,12 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
     // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the boundary with Alpaca's schema; the body is checked to be an object here, every collection read from it is guarded before it is walked, and each timestamp is parsed rather than trusted.
     return response.body as T;
   }
+}
+
+/** Absent, null and empty all mean the same thing: that page was the last one. */
+function cursor(body: unknown): string | undefined {
+  const token = readPageToken(body);
+  return token === undefined || token.length === 0 ? undefined : token;
 }
 
 function readPageToken(body: unknown): string | undefined {
@@ -542,7 +544,7 @@ function resolveTimeframe(timespan: Timespan, multiplier: number): string {
   return `${multiplier}${timeframe.unit}`;
 }
 
-function expirationRange(request: { readonly expirationFrom?: string; readonly expirationTo?: string }): Query {
+function expirationRange(request: OptionListingRequest): Query {
   const { expirationFrom, expirationTo } = request;
   if (expirationFrom !== undefined) {
     requireIsoDate(expirationFrom, 'read the start of the expiration range');
@@ -556,19 +558,19 @@ function expirationRange(request: { readonly expirationFrom?: string; readonly e
   return { expiration_date_gte: expirationFrom, expiration_date_lte: expirationTo };
 }
 
-function strikeRange(request: { readonly strikeFrom?: number; readonly strikeTo?: number }): Query {
+function strikeRange(request: OptionListingRequest, what: string): Query {
   const { strikeFrom, strikeTo } = request;
-  requireStrike(strikeFrom, 'strikeFrom');
-  requireStrike(strikeTo, 'strikeTo');
+  requireStrike(strikeFrom, 'strikeFrom', what);
+  requireStrike(strikeTo, 'strikeTo', what);
   if (strikeFrom !== undefined && strikeTo !== undefined && strikeFrom > strikeTo) {
     throw new InvalidRequestError(`A strike range must start below where it ends, got ${strikeFrom} to ${strikeTo}.`);
   }
   return { strike_price_gte: strikeFrom, strike_price_lte: strikeTo };
 }
 
-function requireStrike(strike: number | undefined, field: string): void {
+function requireStrike(strike: number | undefined, field: string, what: string): void {
   if (strike !== undefined && (!Number.isFinite(strike) || strike <= 0)) {
-    throw new InvalidRequestError(`A ${field} must be a strike in dollars above zero, got ${strike}.`);
+    throw new InvalidRequestError(`A ${what}'s ${field} must be a strike in dollars above zero, got ${strike}.`);
   }
 }
 

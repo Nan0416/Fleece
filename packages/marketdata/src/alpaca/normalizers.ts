@@ -1,4 +1,4 @@
-import { easternClock } from '@fleece/utilities';
+import { easternClock, isIsoDate } from '@fleece/utilities';
 
 import {
   DataProviderError,
@@ -6,16 +6,15 @@ import {
   type MarketSession,
   type OccSymbol,
   type OptionContract,
-  type OptionContractStatus,
   type OptionDeliverable,
   type OptionGreeks,
   type OptionSnapshot,
-  type OptionStyle,
   type OptionTrade,
   type Quote,
   type StockSplit,
   type Trade,
 } from '../data-models';
+import { parseOccSymbol } from '../occ-symbol';
 
 import type {
   AlpacaBar,
@@ -123,34 +122,39 @@ export function normalizeOptionSnapshot(contract: OccSymbol, snapshot: AlpacaOpt
   };
 }
 
-export function normalizeOptionContract(contract: AlpacaOptionContract): OptionContract {
-  const symbol = contract.symbol;
+export function normalizeOptionContract(raw: AlpacaOptionContract): OptionContract {
+  const symbol = raw.symbol;
   if (typeof symbol !== 'string' || symbol.length === 0) {
     throw new DataProviderError(SOURCE, `sent a contract carrying ${JSON.stringify(symbol)} where its symbol should be.`);
   }
+  // As `optionChain` does: a symbol that will not parse is a provider fault, and letting
+  // it through would hand a caller a contract whose own fields it cannot read.
+  const contract = parseOccSymbol(symbol);
+  if (contract === undefined) {
+    throw new DataProviderError(SOURCE, `returned ${JSON.stringify(symbol)} as a contract symbol, which is not an OCC one.`);
+  }
+
   return {
     S: symbol,
     f: 'a',
-    status: requireStatus(symbol, contract.status),
-    tradable: requireBoolean(symbol, contract.tradable, 'tradable'),
-    style: requireStyle(symbol, contract.style),
-    multiplier: requireNumericString(symbol, contract.multiplier, 'multiplier'),
-    size: requireNumericString(symbol, contract.size, 'size'),
-    deliverables: present(contract.deliverables) ? contract.deliverables.map((deliverable) => normalizeDeliverable(symbol, deliverable)) : undefined,
-    openInterest: present(contract.open_interest) ? requireNumericString(symbol, contract.open_interest, 'open interest') : undefined,
-    openInterestDate: present(contract.open_interest_date) ? requireString(symbol, contract.open_interest_date, 'open interest date') : undefined,
-    closePrice: present(contract.close_price) ? requireNumericString(symbol, contract.close_price, 'close price') : undefined,
-    closePriceDate: present(contract.close_price_date) ? requireString(symbol, contract.close_price_date, 'close price date') : undefined,
+    contract,
+    underlying: requireString(symbol, raw.underlying_symbol, 'underlying'),
+    status: requireOneOf(symbol, raw.status, ['active', 'inactive'], 'status'),
+    tradable: requireBoolean(symbol, raw.tradable, 'tradable'),
+    style: requireOneOf(symbol, raw.style, ['american', 'european'], 'style'),
+    multiplier: requireNumericString(symbol, raw.multiplier, 'multiplier'),
+    size: requireNumericString(symbol, raw.size, 'size'),
+    deliverables: present(raw.deliverables) ? raw.deliverables.map((deliverable) => normalizeDeliverable(symbol, deliverable)) : undefined,
+    openInterest: present(raw.open_interest) ? requireNumericString(symbol, raw.open_interest, 'open interest') : undefined,
+    openInterestDate: present(raw.open_interest_date) ? requireDate(symbol, raw.open_interest_date, 'open interest date') : undefined,
+    closePrice: present(raw.close_price) ? requireNumericString(symbol, raw.close_price, 'close price') : undefined,
+    closePriceDate: present(raw.close_price_date) ? requireDate(symbol, raw.close_price_date, 'close price date') : undefined,
   };
 }
 
 function normalizeDeliverable(symbol: string, deliverable: AlpacaOptionDeliverable): OptionDeliverable {
-  const type = deliverable.type;
-  if (type !== 'cash' && type !== 'equity') {
-    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(type)} as the type of one of ${symbol}'s deliverables, which is neither cash nor equity.`);
-  }
   return {
-    type,
+    type: requireOneOf(symbol, deliverable.type, ['cash', 'equity'], "deliverable's type"),
     symbol: present(deliverable.symbol) ? deliverable.symbol : undefined,
     amount: requireNumericString(symbol, deliverable.amount, "deliverable's amount"),
     allocationPercentage: requireNumericString(symbol, deliverable.allocation_percentage, "deliverable's allocation percentage"),
@@ -159,18 +163,13 @@ function normalizeDeliverable(symbol: string, deliverable: AlpacaOptionDeliverab
   };
 }
 
-function requireStatus(symbol: string, value: unknown): OptionContractStatus {
-  if (value !== 'active' && value !== 'inactive') {
-    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s status, which is neither active nor inactive.`);
+function requireOneOf<T extends string>(symbol: string, value: unknown, allowed: ReadonlyArray<T>, what: string): T {
+  for (const candidate of allowed) {
+    if (value === candidate) {
+      return candidate;
+    }
   }
-  return value;
-}
-
-function requireStyle(symbol: string, value: unknown): OptionStyle {
-  if (value !== 'american' && value !== 'european') {
-    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s style, which is neither american nor european.`);
-  }
-  return value;
+  throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s ${what}, which is not one of [${allowed.join(', ')}].`);
 }
 
 function requireBoolean(symbol: string, value: unknown, what: string): boolean {
@@ -187,14 +186,28 @@ function requireString(symbol: string, value: unknown, what: string): string {
   return value;
 }
 
-/** Every number on the contract route arrives as a string, including the multiplier. */
+function requireDate(symbol: string, value: unknown, what: string): string {
+  const text = requireString(symbol, value, what);
+  if (!isIsoDate(text)) {
+    throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s ${what}, where an ISO YYYY-MM-DD date was expected.`);
+  }
+  return text;
+}
+
+/** What Alpaca writes a number as on the contract route: digits, and at most one point. */
+const DECIMAL = /^-?\d+(\.\d+)?$/;
+
+/**
+ * Checked before parsing rather than after, because `Number` is wider than the format:
+ * it reads whitespace as 0, `'0x64'` as 100 and `'1e3'` as 1000. A multiplier of 0 would
+ * size every premium at nothing and never raise.
+ */
 function requireNumericString(symbol: string, value: unknown, what: string): number {
   const text = requireString(symbol, value, what);
-  const parsed = Number(text);
-  if (!Number.isFinite(parsed)) {
+  if (!DECIMAL.test(text)) {
     throw new DataProviderError(SOURCE, `sent ${JSON.stringify(value)} as ${symbol}'s ${what}, where a number was expected.`);
   }
-  return parsed;
+  return Number(text);
 }
 
 /**

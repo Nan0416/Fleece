@@ -103,6 +103,8 @@ export interface FakeListedContract {
   readonly openInterest?: string | null;
   readonly closePrice?: string | null;
   readonly deliverables?: ReadonlyArray<unknown>;
+  /** Written over the payload last, for the fields a test wants malformed. */
+  readonly overrides?: Record<string, unknown>;
 }
 
 export function optionContracts(...contracts: ReadonlyArray<FakeListedContract>): unknown {
@@ -127,6 +129,7 @@ export function optionContracts(...contracts: ReadonlyArray<FakeListedContract>)
       close_price: contract.closePrice === undefined ? '1.25' : contract.closePrice,
       close_price_date: '2024-12-19',
       ...(contract.deliverables === undefined ? {} : { deliverables: contract.deliverables }),
+      ...contract.overrides,
     })),
   };
 }

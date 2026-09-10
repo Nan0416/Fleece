@@ -190,11 +190,12 @@ export interface AlpacaOptionDeliverable {
 
 /**
  * From `/v2/options/contracts`, on the trading host rather than the data host — the same
- * reach across that `marketHours` makes for the calendar. Numbers arrive as strings.
+ * reach across that `marketHours` makes for the calendar. Numbers arrive as strings, and
+ * every field is nullable here because the normalizer is what establishes otherwise.
  */
 export interface AlpacaOptionContract {
   readonly id?: string | null;
-  readonly symbol: string;
+  readonly symbol?: string | null;
   readonly name?: string | null;
   readonly status?: string | null;
   readonly tradable?: boolean | null;

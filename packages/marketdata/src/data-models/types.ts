@@ -303,12 +303,18 @@ export interface OptionDeliverable {
 }
 
 /**
- * A listed option contract: the instrument, not a price for it. Expiry, type, strike and
- * underlying are all stated by `S`, which `parseOccSymbol` takes apart.
+ * A listed option contract: the instrument, not a price for it.
  */
 export interface OptionContract {
   readonly S: string;
   readonly f: DataSource;
+  /** The symbol taken apart, as `OptionSnapshot` carries it. */
+  readonly contract: OccSymbol;
+  /**
+   * The ticker as Alpaca has it now, which `contract.underlying` is not: the OCC symbol
+   * embeds the root a contract was written under, and a rename leaves the two different.
+   */
+  readonly underlying: string;
   readonly status: OptionContractStatus;
   /** Whether Alpaca will accept an order for it, as of now rather than as of the expiry. */
   readonly tradable: boolean;

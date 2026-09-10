@@ -455,12 +455,20 @@ describe('a contract listing', () => {
     expect(http.lastRequest.query['limit']).toBe('10000');
   });
 
+  it('sends the ticker the way Alpaca writes one, rather than as it was typed', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
+    await client(http).listOptionContracts({ underlying: ' aapl ' });
+
+    // Sent raw, Alpaca answers 200 with an empty listing, which reads as "no options".
+    expect(http.lastRequest.query['underlying_symbols']).toBe('AAPL');
+  });
+
   it('refuses a listing with no underlying to list the contracts of', async () => {
     const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
     await expect(client(http).listOptionContracts({ underlying: '  ' })).rejects.toThrow(InvalidRequestError);
   });
 
-  it('reads a contract, leaving the symbol for the caller to take apart', async () => {
+  it('takes the contract symbol apart, as a chain does', async () => {
     const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT }));
     const { contracts } = await client(http).listOptionContracts({ underlying: 'AAPL' });
 
@@ -468,6 +476,8 @@ describe('a contract listing', () => {
       {
         S: CONTRACT,
         f: 'a',
+        contract: { symbol: CONTRACT, underlying: 'AAPL', root: 'AAPL', expiration: '2026-09-18', type: 'call', strike: 230, strikeMils: 230000 },
+        underlying: 'AAPL',
         status: 'active',
         tradable: true,
         style: 'american',
@@ -479,6 +489,15 @@ describe('a contract listing', () => {
         closePriceDate: '2024-12-19',
       },
     ]);
+  });
+
+  it("keeps Alpaca's underlying beside the root, which a rename leaves different", async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: 'META1260918C00230000', overrides: { underlying_symbol: 'META' } }));
+    const { contracts } = await client(http).listOptionContracts({ underlying: 'META' });
+
+    expect(contracts[0].contract.root).toBe('META1');
+    expect(contracts[0].contract.underlying).toBe('META');
+    expect(contracts[0].underlying).toBe('META');
   });
 
   it('reads what an adjusted contract delivers, where the multiplier and the size disagree', async () => {
@@ -511,27 +530,59 @@ describe('a contract listing', () => {
     ]);
   });
 
-  it('leaves out an open interest and a close Alpaca has none for', async () => {
-    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, openInterest: null, closePrice: null }));
+  it('leaves out an open interest and a close Alpaca has none for, dates included', async () => {
+    const http = new FakeHttpClient().reply(
+      optionContracts({ symbol: CONTRACT, openInterest: null, closePrice: null, overrides: { open_interest_date: null, close_price_date: null } }),
+    );
     const { contracts } = await client(http).listOptionContracts({ underlying: 'AAPL' });
 
     expect(contracts[0].openInterest).toBeUndefined();
+    expect(contracts[0].openInterestDate).toBeUndefined();
     expect(contracts[0].closePrice).toBeUndefined();
+    expect(contracts[0].closePriceDate).toBeUndefined();
   });
 
-  it('reports a missing multiplier rather than reading it as NaN', async () => {
-    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, multiplier: null }));
+  it('refuses a contract symbol that is not an OCC one, rather than passing it on unparsed', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: 'TOOLONG260918C00230000' }));
+    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(/not an OCC one/);
+  });
+
+  it('reports a contract with no symbol at all', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, overrides: { symbol: null } }));
+    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(/where its symbol should be/);
+  });
+
+  it.each([
+    ['a missing multiplier', { multiplier: null }],
+    ['a multiplier that is not a number', { overrides: { multiplier: 'abc' } }],
+    ['a multiplier of whitespace, which would otherwise size every premium at zero', { overrides: { multiplier: '   ' } }],
+    ['a multiplier written in hex, which would otherwise read as 100', { overrides: { multiplier: '0x64' } }],
+  ])('reports %s rather than a number nobody meant', async (_case, contract) => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, ...contract }));
     await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(DataProviderError);
   });
 
-  it('reports a status it does not recognise rather than carrying it through', async () => {
-    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, status: 'expired' }));
-    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(/neither active nor inactive/);
+  it.each([
+    ['a status', { status: 'expired' }, /not one of \[active, inactive\]/],
+    ['a style', { style: 'bermudan' }, /not one of \[american, european\]/],
+    [
+      'a deliverable type',
+      { deliverables: [{ type: 'crypto', amount: '1', allocation_percentage: '100', settlement_type: 'T+1', settlement_method: 'CCC' }] },
+      /not one of \[cash, equity\]/,
+    ],
+  ])('reports %s it does not recognise rather than carrying it through', async (_case, contract, message) => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, ...contract }));
+    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(message);
   });
 
-  it('reports a listing that is not a list', async () => {
-    const http = new FakeHttpClient().reply({ option_contracts: { AAPL: [] } });
-    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(DataProviderError);
+  it('reports a tradable flag that is not true or false', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, overrides: { tradable: 'yes' } }));
+    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(/where true or false was expected/);
+  });
+
+  it('reports a date that is not one, in a field the model documents as a date', async () => {
+    const http = new FakeHttpClient().reply(optionContracts({ symbol: CONTRACT, overrides: { open_interest_date: 'yesterday' } }));
+    await expect(client(http).listOptionContracts({ underlying: 'AAPL' })).rejects.toThrow(/ISO YYYY-MM-DD date/);
   });
 
   it('hands back a cursor rather than walking a listing of thousands itself', async () => {
