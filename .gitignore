@@ -124,3 +124,8 @@ prompts/
 # Python environment uv builds for viz/. Both are regenerated on demand.
 viz/data/
 viz/.venv/
+
+# Market data the research helpers cache. Derived, refetchable, and it grows a file per
+# session per contract set — `packages/playground/data/` otherwise holds committed
+# fixtures, so the cache gets its own line rather than the directory.
+packages/playground/data/research/
