@@ -53,6 +53,29 @@ describe('parsing an OCC contract symbol', () => {
     });
   });
 
+  it('reads a leading root digit as an adjusted contract, which is how Alpaca writes one', () => {
+    // Alpaca serves AAPL's re-issued December 2025 puts under root `1AAPL`, not `AAPL1`.
+    expect(parseOccSymbol('1AAPL251219P00193000')).toEqual({
+      symbol: '1AAPL251219P00193000',
+      underlying: 'AAPL',
+      root: '1AAPL',
+      expiration: '2025-12-19',
+      type: 'put',
+      strike: 193,
+      strikeMils: 193000,
+    });
+  });
+
+  it('reads either adjustment form to the same contract, which is the point of reading both', () => {
+    const leading = parseOccSymbol('1AAPL251219P00193000');
+    const trailing = parseOccSymbol('AAPL1251219P00193000');
+
+    expect(leading?.underlying).toBe(trailing?.underlying);
+    expect(leading?.expiration).toBe(trailing?.expiration);
+    expect(leading?.strikeMils).toBe(trailing?.strikeMils);
+    expect([leading?.root, trailing?.root]).toEqual(['1AAPL', 'AAPL1']);
+  });
+
   it('reads an adjusted contract to the same expiry and strike as its ordinary twin', () => {
     const ordinary = parseOccSymbol('GOOGL260918P00230000');
     const adjusted = parseOccSymbol('GOOGL1260918P00230000');
