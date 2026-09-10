@@ -819,18 +819,18 @@ describe('option bars for many contracts', () => {
     expect(http.requests).toHaveLength(2);
   });
 
-  it('chunks a list longer than one request should carry, and merges the chunks', async () => {
-    const many = Array.from({ length: 201 }, (_, index) => `AAPL260918C${String(100_000 + index * 1000).padStart(8, '0')}`);
+  it('chunks a list longer than Alpaca documents a request carrying, and merges the chunks', async () => {
+    const many = Array.from({ length: 101 }, (_, index) => `AAPL260918C${String(100_000 + index * 1000).padStart(8, '0')}`);
     const http = new FakeHttpClient().reply(
       optionBarsBySymbol({ [many[0]]: [{ t: utc('2024-12-19T14:30:00Z') }] }),
-      optionBarsBySymbol({ [many[200]]: [{ t: utc('2024-12-19T14:30:00Z') }] }),
+      optionBarsBySymbol({ [many[100]]: [{ t: utc('2024-12-19T14:30:00Z') }] }),
     );
     const { bars: got } = await client(http).optionBarsBySymbol({ ...range, symbols: many });
 
     expect(http.requests).toHaveLength(2);
-    expect(http.requests[0].query['symbols'].split(',')).toHaveLength(200);
+    expect(http.requests[0].query['symbols'].split(',')).toHaveLength(100);
     expect(http.requests[1].query['symbols'].split(',')).toHaveLength(1);
-    expect([...got.keys()].sort()).toEqual([many[0], many[200]].sort());
+    expect([...got.keys()].sort()).toEqual([many[0], many[100]].sort());
   });
 });
 

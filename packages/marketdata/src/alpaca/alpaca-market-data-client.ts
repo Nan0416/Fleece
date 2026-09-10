@@ -100,10 +100,16 @@ const MAX_PAGES = 500;
 const MAX_CHAIN_PAGE = 1_000;
 
 /**
- * Contracts per bars request. Alpaca serves a whole SPY expiry — 291 symbols in a 6.2 kB
- * URL — without complaint; this leaves room under that rather than finding the ceiling.
+ * Contracts per bars request, which Alpaca documents as "a comma-separated list of
+ * contract symbols with a limit of 100".
+ *
+ * It does not enforce it today — 288 symbols go through intact, traded contracts at both
+ * ends of the list and none dropped. The documented number is used anyway, because the
+ * failure mode if enforcement ever arrives is silent: this route answers with a map, an
+ * absent symbol means "did not trade", and a truncated request is indistinguishable from
+ * a quiet chain.
  */
-const MAX_BAR_SYMBOLS = 200;
+const MAX_BAR_SYMBOLS = 100;
 
 /** Alpaca's corporate-action history does not reach further back than this. */
 const EARLIEST_CORPORATE_ACTION = '2000-01-01';

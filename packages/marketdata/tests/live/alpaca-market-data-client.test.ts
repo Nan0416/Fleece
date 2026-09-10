@@ -454,7 +454,7 @@ describe('option history', () => {
 });
 
 describe('option bars for many contracts', () => {
-  it('serves a whole expiry in one request, keyed by contract', async () => {
+  it('serves a whole expiry, chunked and keyed by contract', async () => {
     const { contracts } = await alpaca.listOptionContracts({
       underlying: 'SPY',
       status: 'inactive',
