@@ -1,4 +1,20 @@
-import type { Bar, Dividend, LatestSnapshot, OptionSnapshot, OptionTrade, OptionType, Quote, StockSplit, Ticker, TickerDetails, TickerType, Trade } from './types';
+import type {
+  Bar,
+  Dividend,
+  LatestSnapshot,
+  OptionContract,
+  OptionContractStatus,
+  OptionSnapshot,
+  OptionStyle,
+  OptionTrade,
+  OptionType,
+  Quote,
+  StockSplit,
+  Ticker,
+  TickerDetails,
+  TickerType,
+  Trade,
+} from './types';
 
 export type Timespan = 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year';
 
@@ -112,11 +128,11 @@ export interface HistoricalBarsRequest {
 }
 
 /**
- * A chain is a listing, and a large one: a full AAPL chain is around 3,100 contracts and
- * SPY's is around 12,000, so the filters are how a caller asks a question rather than
- * downloads a market. Every one of them is optional and they combine.
+ * What both option listings narrow by. Every filter is optional and they combine, which
+ * is how a caller asks a question rather than downloads a market: a full AAPL chain is
+ * around 3,100 contracts and SPY's is around 12,000.
  */
-export interface OptionChainRequest {
+export interface OptionListingRequest {
   /** The underlying ticker, not a contract symbol. */
   readonly underlying: string;
   readonly type?: OptionType;
@@ -130,6 +146,19 @@ export interface OptionChainRequest {
   /** Exclusive, and what a previous response's `resumeFrom` is for. */
   readonly startAfter?: string;
 }
+
+export interface OptionContractsRequest extends OptionListingRequest {
+  /** Omitted means `active`, as Alpaca's own default does. */
+  readonly status?: OptionContractStatus;
+  /** The OCC root, which tells an adjusted contract (`AAPL1`) from an ordinary one. */
+  readonly root?: string;
+  readonly style?: OptionStyle;
+  /** Asks for `deliverables`, which Alpaca leaves out of the payload unless asked. */
+  readonly withDeliverables?: boolean;
+}
+
+/** A chain is quotes, so it reaches only what is quoted now. */
+export type OptionChainRequest = OptionListingRequest;
 
 /**
  * No `adjustForSplit`, unlike `BarsRequest`, and not by omission: a split does not restate
@@ -208,6 +237,11 @@ export interface DividendsResponse {
 /** Keyed by Eastern date, most recent first. Non-trading days are absent, not empty. */
 export interface HistoricalBarsResponse {
   readonly days: ReadonlyMap<string, ReadonlyArray<Bar>>;
+}
+
+export interface OptionContractsResponse {
+  readonly contracts: ReadonlyArray<OptionContract>;
+  readonly resumeFrom?: string;
 }
 
 /**
@@ -319,6 +353,8 @@ export interface AlpacaMarketDataRestClient extends StockRestClient {
    * derives.
    */
   marketHours(request: MarketHoursRequest): Promise<MarketHoursResponse>;
+  /** The only listing here that reaches contracts which no longer trade. */
+  listOptionContracts(request: OptionContractsRequest): Promise<OptionContractsResponse>;
   optionChain(request: OptionChainRequest): Promise<OptionChainResponse>;
   optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse>;
   optionTrades(request: OptionTradesRequest): Promise<OptionTradesResponse>;

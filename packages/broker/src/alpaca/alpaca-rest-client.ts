@@ -1,4 +1,4 @@
-import { AlpacaAccount, AlpacaAsset, AlpacaOptionContract, AlpacaOrder, AlpacaPosition, AlpacaPositionIntent } from './models';
+import { AlpacaAccount, AlpacaAsset, AlpacaOrder, AlpacaPosition, AlpacaPositionIntent } from './models';
 
 export interface GetOrderInput {
   readonly brokerOrderId: string;
@@ -40,16 +40,6 @@ export interface GetAssetInput {
 
 export interface GetAssetOutput {
   readonly asset: AlpacaAsset | null;
-}
-
-export interface GetOptionContractInput {
-  /** The OCC symbol, e.g. `AMZN261016C00280000`, or the contract's id. */
-  readonly symbolOrId: string;
-}
-
-export interface GetOptionContractOutput {
-  /** Null when Alpaca has no such contract, the same way `getAsset` reports one it lacks. */
-  readonly contract: AlpacaOptionContract | null;
 }
 
 interface BaseCreateOrderInput {
@@ -166,7 +156,6 @@ export interface AlpacaRestClient {
   getAccount(input?: GetAccountInput): Promise<GetAccountOutput>;
   listPositions(input?: ListPositionsInput): Promise<ListPositionsOutput>;
   getAsset(input: GetAssetInput): Promise<GetAssetOutput>;
-  getOptionContract(input: GetOptionContractInput): Promise<GetOptionContractOutput>;
 
   createMarketOrder(input: CreateMarketOrderInput): Promise<CreateOrderOutput>;
   createLimitOrder(input: CreateLimitOrderInput): Promise<CreateOrderOutput>;

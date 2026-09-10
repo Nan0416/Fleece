@@ -18,7 +18,10 @@ import {
   type OptionBarsRequest,
   type OptionBarsResponse,
   type OptionChainRequest,
+  type OptionListingRequest,
   type OptionChainResponse,
+  type OptionContractsRequest,
+  type OptionContractsResponse,
   type OptionSnapshot,
   type OptionTradesRequest,
   type OptionTradesResponse,
@@ -40,6 +43,7 @@ import type {
   AlpacaCorporateActions,
   AlpacaCorporateActionsResponse,
   AlpacaOptionBarsResponse,
+  AlpacaOptionContractsResponse,
   AlpacaOptionSnapshotsResponse,
   AlpacaOptionTrade,
   AlpacaOptionTradesResponse,
@@ -48,7 +52,16 @@ import type {
   AlpacaTrade,
   AlpacaTradesResponse,
 } from './alpaca-rest-models';
-import { normalizeBar, normalizeOptionSnapshot, normalizeOptionTrade, normalizeQuote, normalizeSession, normalizeSplit, normalizeTrade } from './normalizers';
+import {
+  normalizeBar,
+  normalizeOptionContract,
+  normalizeOptionSnapshot,
+  normalizeOptionTrade,
+  normalizeQuote,
+  normalizeSession,
+  normalizeSplit,
+  normalizeTrade,
+} from './normalizers';
 
 const logger = LoggerFactory.getLogger('AlpacaMarketDataClient');
 
@@ -256,6 +269,45 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
   }
 
   /**
+   * One page of the contracts written on an underlying, expired ones reachable.
+   *
+   * `status` picks which side of expiry, and defaults to `active` as Alpaca's own filter
+   * does — a listing of what has already expired has to ask for `inactive`.
+   */
+  async listOptionContracts(request: OptionContractsRequest): Promise<OptionContractsResponse> {
+    const underlying = request.underlying.trim().toUpperCase();
+    if (underlying.length === 0) {
+      throw new InvalidRequestError('A contract listing needs an underlying ticker to list the contracts of, and this request has none.');
+    }
+
+    const body = await this.get<AlpacaOptionContractsResponse>(
+      '/v2/options/contracts',
+      {
+        underlying_symbols: underlying,
+        status: request.status ?? 'active',
+        root_symbol: request.root,
+        type: request.type,
+        style: request.style,
+        show_deliverables: request.withDeliverables === true ? 'true' : undefined,
+        limit: pageSize(request.limit, 'contract listing'),
+        page_token: request.startAfter,
+        ...expirationRange(request),
+        ...strikeRange(request, 'contract listing'),
+      },
+      this.tradingBaseUrl,
+    );
+
+    const listed = body.option_contracts;
+    if (listed !== undefined && listed !== null && !Array.isArray(listed)) {
+      throw new DataProviderError(SOURCE, `returned ${underlying}'s contracts as something other than a list.`);
+    }
+    return {
+      contracts: (listed ?? []).map((contract) => normalizeOptionContract(contract)),
+      resumeFrom: cursor(body),
+    };
+  }
+
+  /**
    * One page of an underlying's chain, and a cursor when there is more.
    *
    * Not walked to the end on the caller's behalf: a full AAPL chain is around 3,100
@@ -275,7 +327,7 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       limit: pageSize(request.limit, 'chain', MAX_CHAIN_PAGE),
       page_token: request.startAfter,
       ...expirationRange(request),
-      ...strikeRange(request),
+      ...strikeRange(request, 'chain'),
     });
 
     const contracts: OptionSnapshot[] = [];
@@ -292,8 +344,7 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       contracts.push(normalizeOptionSnapshot(contract, snapshot));
     }
 
-    const next = readPageToken(body);
-    return { contracts, resumeFrom: next === undefined || next.length === 0 ? undefined : next };
+    return { contracts, resumeFrom: cursor(body) };
   }
 
   /**
@@ -408,8 +459,8 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       });
       pages.push(body.corporate_actions ?? {});
 
-      const next = readPageToken(body);
-      if (next === undefined || next.length === 0) {
+      const next = cursor(body);
+      if (next === undefined) {
         return pages;
       }
       pageToken = next;
@@ -427,9 +478,8 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       const bySymbol = read(body) ?? {};
       results.push(...(bySymbol[symbol] ?? []));
 
-      const next = readPageToken(body);
-      // Absent, null and empty all mean the same thing: this was the last page.
-      if (next === undefined || next.length === 0) {
+      const next = cursor(body);
+      if (next === undefined) {
         return results;
       }
       pageToken = next;
@@ -452,6 +502,12 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
     // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the boundary with Alpaca's schema; the body is checked to be an object here, every collection read from it is guarded before it is walked, and each timestamp is parsed rather than trusted.
     return response.body as T;
   }
+}
+
+/** Absent, null and empty all mean the same thing: that page was the last one. */
+function cursor(body: unknown): string | undefined {
+  const token = readPageToken(body);
+  return token === undefined || token.length === 0 ? undefined : token;
 }
 
 function readPageToken(body: unknown): string | undefined {
@@ -488,7 +544,7 @@ function resolveTimeframe(timespan: Timespan, multiplier: number): string {
   return `${multiplier}${timeframe.unit}`;
 }
 
-function expirationRange(request: OptionChainRequest): Query {
+function expirationRange(request: OptionListingRequest): Query {
   const { expirationFrom, expirationTo } = request;
   if (expirationFrom !== undefined) {
     requireIsoDate(expirationFrom, 'read the start of the expiration range');
@@ -502,19 +558,19 @@ function expirationRange(request: OptionChainRequest): Query {
   return { expiration_date_gte: expirationFrom, expiration_date_lte: expirationTo };
 }
 
-function strikeRange(request: OptionChainRequest): Query {
+function strikeRange(request: OptionListingRequest, what: string): Query {
   const { strikeFrom, strikeTo } = request;
-  requireStrike(strikeFrom, 'strikeFrom');
-  requireStrike(strikeTo, 'strikeTo');
+  requireStrike(strikeFrom, 'strikeFrom', what);
+  requireStrike(strikeTo, 'strikeTo', what);
   if (strikeFrom !== undefined && strikeTo !== undefined && strikeFrom > strikeTo) {
     throw new InvalidRequestError(`A strike range must start below where it ends, got ${strikeFrom} to ${strikeTo}.`);
   }
   return { strike_price_gte: strikeFrom, strike_price_lte: strikeTo };
 }
 
-function requireStrike(strike: number | undefined, field: string): void {
+function requireStrike(strike: number | undefined, field: string, what: string): void {
   if (strike !== undefined && (!Number.isFinite(strike) || strike <= 0)) {
-    throw new InvalidRequestError(`A chain's ${field} must be a strike in dollars above zero, got ${strike}.`);
+    throw new InvalidRequestError(`A ${what}'s ${field} must be a strike in dollars above zero, got ${strike}.`);
   }
 }
 

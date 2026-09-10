@@ -12,8 +12,6 @@ import {
   GetAccountOutput,
   GetAssetInput,
   GetAssetOutput,
-  GetOptionContractInput,
-  GetOptionContractOutput,
   GetOrderInput,
   GetOrderOutput,
   ListOrdersInput,
@@ -22,7 +20,7 @@ import {
   ListPositionsOutput,
 } from './alpaca-rest-client';
 import { restUrl } from './constants';
-import { AlpacaAccount, AlpacaAccountIdentifier, AlpacaAsset, AlpacaCredentialsProvider, AlpacaOptionContract, AlpacaOrder, AlpacaPosition, resolveCredentials } from './models';
+import { AlpacaAccount, AlpacaAccountIdentifier, AlpacaAsset, AlpacaCredentialsProvider, AlpacaOrder, AlpacaPosition, resolveCredentials } from './models';
 import { RateLimiter } from './rate-limiter';
 
 /** Alpaca's own bound, and the reason a spread cannot be built out of arbitrary parts. */
@@ -131,19 +129,6 @@ export class HttpAlpacaRestClient implements AlpacaRestClient {
     }
     // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the boundary with Alpaca's schema; symbol is checked above.
     return { asset: payload as AlpacaAsset };
-  }
-
-  async getOptionContract(input: GetOptionContractInput): Promise<GetOptionContractOutput> {
-    const response = await this.request('GET', `/v2/options/contracts/${encodeURIComponent(input.symbolOrId.toUpperCase())}`);
-    if (response.status === 404) {
-      return { contract: null };
-    }
-    const payload = await this.readJson(response, `option contract ${input.symbolOrId}`);
-    if (typeof payload !== 'object' || payload === null || typeof Reflect.get(payload, 'symbol') !== 'string' || typeof Reflect.get(payload, 'multiplier') !== 'string') {
-      throw new InternalServiceError(`Alpaca returned an option contract for ${input.symbolOrId} with no symbol or multiplier.`);
-    }
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the boundary with Alpaca's schema; symbol and multiplier are checked above and the rest is parsed by the caller.
-    return { contract: payload as AlpacaOptionContract };
   }
 
   async createMarketOrder(input: CreateMarketOrderInput): Promise<CreateOrderOutput> {

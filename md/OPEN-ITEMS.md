@@ -169,7 +169,7 @@ legs, and no model here computes that.
 | --- | --- |
 | A short option cannot be reserved | Refused at `reserve`, with a message naming this item |
 | A spread is placed with nothing held | Warned at the placement; the account can be oversubscribed by one |
-| Adjusted contracts still default to 100 | `ReservationRequest.multiplier` overrides it, and nothing looks one up per fill |
+| Adjusted contracts still default to 100 | `ReservationRequest.multiplier` overrides it, and nothing looks one up per fill — `AlpacaMarketDataClient.listOptionContracts` now serves the real multiplier and size, so the wiring is what is missing rather than the source |
 
 **Recommendation: leave short options refused and spreads unheld until something places
 them in anger**, then add a margin model against a caller that can exercise it. Guessing
@@ -325,10 +325,12 @@ Recorded so their absence reads as a decision:
   out under "todo: make it idempotent". Applied by hand through `PUT /position/split`.
 - **OCO and OTOCO orders.** The legacy `Broker` interface declared them; nothing ever
   implemented them.
-- **Option chain browsing.** `getOptionContract` reads one contract by symbol, which is
-  what placing and pricing an order needs. Listing a chain — `/v2/options/contracts`
-  with its filters and paging — is a market-data concern and belongs with
-  `@fleece/marketdata` if anything ever needs it.
+- **A contract lookup by symbol on the broker.** `getOptionContract` read one contract
+  from `/v2/options/contracts/{symbol}`; it had no caller and was deleted when that route
+  became `AlpacaMarketDataClient.listOptionContracts`, where reference data belongs. The
+  listing takes no contract-symbol filter, so looking one contract up means either
+  `parseOccSymbol` into exact filters or restoring the by-symbol route. Nothing needs
+  either yet.
 - **`reservationId` is decoded and ignored.** It is the placing process's own bookkeeping
   and the ledger has no use for it, but the field is kept so the wire format is
   documented and the execution service can encode it.

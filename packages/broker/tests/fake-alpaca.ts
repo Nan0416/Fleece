@@ -13,8 +13,6 @@ import {
   GetAccountOutput,
   GetAssetInput,
   GetAssetOutput,
-  GetOptionContractInput,
-  GetOptionContractOutput,
   GetOrderInput,
   GetOrderOutput,
   ListOrdersInput,
@@ -181,27 +179,6 @@ export class FakeAlpacaRestClient implements AlpacaRestClient {
     }
     this.created.push(input);
     return { order: { ...this.nextMultiLegOrder, client_order_id: input.clientOrderId ?? '' } };
-  }
-
-  async getOptionContract(input: GetOptionContractInput): Promise<GetOptionContractOutput> {
-    return {
-      contract: {
-        id: 'contract-1',
-        symbol: input.symbolOrId.toUpperCase(),
-        name: input.symbolOrId.toUpperCase(),
-        status: 'active',
-        tradable: true,
-        expiration_date: '2026-10-16',
-        root_symbol: 'AMZN',
-        underlying_symbol: 'AMZN',
-        underlying_asset_id: 'underlying-1',
-        type: 'call',
-        style: 'american',
-        strike_price: '280',
-        multiplier: '100',
-        size: '100',
-      },
-    };
   }
 
   async cancelOrder(input: CancelOrderInput): Promise<CancelOrderOutput> {

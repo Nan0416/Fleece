@@ -328,6 +328,83 @@ describe('the option chain', () => {
   });
 });
 
+describe('the contract listing', () => {
+  it('answers with contracts on the underlying asked for, each one parseable', async () => {
+    const { contracts } = await alpaca.listOptionContracts({ underlying: 'AAPL', limit: 50 });
+
+    expect(contracts.length).toBeGreaterThan(0);
+    expect(contracts.every((contract) => contract.underlying === 'AAPL' && contract.S === contract.contract.symbol)).toBe(true);
+    expect(contracts.every((contract) => contract.multiplier > 0 && contract.size > 0 && contract.style === 'american')).toBe(true);
+  });
+
+  /**
+   * The parameter names are the reason this suite is worth the key. A wrong one is not an
+   * error on this route — Alpaca ignores it and answers with an unfiltered listing, which
+   * a fake response can never catch.
+   */
+  it('honours every filter, rather than ignoring the ones whose names are wrong', async () => {
+    const { contracts } = await alpaca.listOptionContracts({
+      underlying: 'AAPL',
+      type: 'put',
+      strikeFrom: 150,
+      strikeTo: 250,
+      expirationFrom: '2026-01-01',
+      expirationTo: '2027-12-31',
+      limit: 100,
+    });
+
+    expect(contracts.length).toBeGreaterThan(0);
+    expect(contracts.every((contract) => contract.contract.type === 'put')).toBe(true);
+    expect(contracts.every((contract) => contract.contract.strike >= 150 && contract.contract.strike <= 250)).toBe(true);
+    expect(contracts.every((contract) => contract.contract.expiration >= '2026-01-01' && contract.contract.expiration <= '2027-12-31')).toBe(true);
+  });
+
+  it('reaches contracts that have expired, which nothing else here does', async () => {
+    const { contracts } = await alpaca.listOptionContracts({
+      underlying: 'AAPL',
+      status: 'inactive',
+      expirationFrom: '2024-06-01',
+      expirationTo: '2024-06-30',
+      limit: 100,
+    });
+
+    expect(contracts.length).toBeGreaterThan(0);
+    expect(contracts.every((contract) => contract.status === 'inactive')).toBe(true);
+    expect(contracts.every((contract) => contract.contract.expiration >= '2024-06-01' && contract.contract.expiration <= '2024-06-30')).toBe(true);
+  });
+
+  it('lists live contracts alone when no status is asked for', async () => {
+    const { contracts } = await alpaca.listOptionContracts({ underlying: 'AAPL', limit: 100 });
+
+    expect(contracts.every((contract) => contract.status === 'active')).toBe(true);
+  });
+
+  it('says what an adjusted contract delivers when asked', async () => {
+    const { contracts } = await alpaca.listOptionContracts({ underlying: 'AAPL', limit: 5, withDeliverables: true });
+
+    expect(contracts.length).toBeGreaterThan(0);
+    expect(contracts.every((contract) => contract.deliverables !== undefined && contract.deliverables.length > 0)).toBe(true);
+  });
+
+  it('pages a listing too large for one answer, and the cursor moves', async () => {
+    const first = await alpaca.listOptionContracts({ underlying: 'SPY', limit: 100 });
+    expect(first.resumeFrom).toBeDefined();
+
+    const second = await alpaca.listOptionContracts({ underlying: 'SPY', limit: 100, startAfter: first.resumeFrom });
+    const seen = new Set(first.contracts.map((contract) => contract.S));
+
+    expect(second.contracts.length).toBeGreaterThan(0);
+    expect(second.contracts.some((contract) => seen.has(contract.S))).toBe(false);
+  });
+
+  it('serves a page of ten thousand, which is the cap this client clamps to', async () => {
+    const { contracts } = await alpaca.listOptionContracts({ underlying: 'SPY', limit: 50_000 });
+
+    expect(contracts.length).toBeGreaterThan(1_000);
+    expect(contracts.length).toBeLessThanOrEqual(10_000);
+  });
+});
+
 describe('option history', () => {
   let contract: TradedContract;
 

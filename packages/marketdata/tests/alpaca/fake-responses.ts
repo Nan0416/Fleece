@@ -92,3 +92,44 @@ export function optionSnapshots(...contracts: ReadonlyArray<FakeContract>): unkn
 export function conditionDictionary(entries: Record<string, string>): unknown {
   return entries;
 }
+
+export interface FakeListedContract {
+  readonly symbol: string;
+  readonly status?: string;
+  readonly tradable?: boolean;
+  readonly style?: string;
+  readonly multiplier?: string | null;
+  readonly size?: string;
+  readonly openInterest?: string | null;
+  readonly closePrice?: string | null;
+  readonly deliverables?: ReadonlyArray<unknown>;
+  /** Written over the payload last, for the fields a test wants malformed. */
+  readonly overrides?: Record<string, unknown>;
+}
+
+export function optionContracts(...contracts: ReadonlyArray<FakeListedContract>): unknown {
+  return {
+    option_contracts: contracts.map((contract) => ({
+      id: '2a2e1b2c-0000-4000-8000-000000000001',
+      symbol: contract.symbol,
+      name: contract.symbol,
+      status: contract.status ?? 'active',
+      tradable: contract.tradable ?? true,
+      expiration_date: '2026-09-18',
+      root_symbol: 'AAPL',
+      underlying_symbol: 'AAPL',
+      underlying_asset_id: 'b0b6dd9d-0000-4000-8000-000000000002',
+      type: 'call',
+      style: contract.style ?? 'american',
+      strike_price: '230',
+      multiplier: contract.multiplier === undefined ? '100' : contract.multiplier,
+      size: contract.size ?? '100',
+      open_interest: contract.openInterest === undefined ? '1234' : contract.openInterest,
+      open_interest_date: '2024-12-19',
+      close_price: contract.closePrice === undefined ? '1.25' : contract.closePrice,
+      close_price_date: '2024-12-19',
+      ...(contract.deliverables === undefined ? {} : { deliverables: contract.deliverables }),
+      ...contract.overrides,
+    })),
+  };
+}

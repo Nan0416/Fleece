@@ -175,3 +175,48 @@ export interface AlpacaOptionTradesResponse {
   readonly trades?: Record<string, ReadonlyArray<AlpacaOptionTrade> | null> | null;
   readonly next_page_token?: string | null;
 }
+
+/** From `/v2/options/contracts`, and only when `show_deliverables` asked for them. */
+export interface AlpacaOptionDeliverable {
+  readonly type?: string | null;
+  readonly symbol?: string | null;
+  readonly asset_id?: string | null;
+  readonly amount?: string | null;
+  readonly allocation_percentage?: string | null;
+  readonly settlement_type?: string | null;
+  readonly settlement_method?: string | null;
+  readonly delayed_settlement?: boolean | null;
+}
+
+/**
+ * From `/v2/options/contracts`, on the trading host rather than the data host — the same
+ * reach across that `marketHours` makes for the calendar. Numbers arrive as strings, and
+ * every field is nullable here because the normalizer is what establishes otherwise.
+ */
+export interface AlpacaOptionContract {
+  readonly id?: string | null;
+  readonly symbol?: string | null;
+  readonly name?: string | null;
+  readonly status?: string | null;
+  readonly tradable?: boolean | null;
+  readonly expiration_date?: string | null;
+  readonly root_symbol?: string | null;
+  readonly underlying_symbol?: string | null;
+  readonly underlying_asset_id?: string | null;
+  readonly type?: string | null;
+  readonly style?: string | null;
+  readonly strike_price?: string | null;
+  readonly multiplier?: string | null;
+  readonly size?: string | null;
+  readonly open_interest?: string | null;
+  readonly open_interest_date?: string | null;
+  readonly close_price?: string | null;
+  readonly close_price_date?: string | null;
+  readonly deliverables?: ReadonlyArray<AlpacaOptionDeliverable> | null;
+}
+
+/** A list rather than a map, unlike the option routes on the data host. */
+export interface AlpacaOptionContractsResponse {
+  readonly option_contracts?: ReadonlyArray<AlpacaOptionContract> | null;
+  readonly next_page_token?: string | null;
+}

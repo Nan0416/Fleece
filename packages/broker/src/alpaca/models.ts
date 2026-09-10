@@ -173,41 +173,6 @@ export interface AlpacaAsset {
   readonly easy_to_borrow: boolean;
 }
 
-/**
- * An option contract, from `/v2/options/contracts`.
- *
- * Options are not in `/v2/assets` — that endpoint 404s on an OCC symbol, and only says
- * of an underlying whether it has options at all. So an option instrument can be looked
- * up only here, which is why `getOptionContract` exists alongside `getAsset`.
- */
-export interface AlpacaOptionContract {
-  readonly id: string;
-  /** The OCC symbol, e.g. `AMZN261016C00280000`. */
-  readonly symbol: string;
-  readonly name: string;
-  readonly status: 'active' | 'inactive';
-  readonly tradable: boolean;
-  /** `YYYY-MM-DD`. */
-  readonly expiration_date: string;
-  readonly root_symbol: string;
-  readonly underlying_symbol: string;
-  readonly underlying_asset_id: string;
-  readonly type: 'call' | 'put';
-  readonly style: 'american' | 'european';
-  readonly strike_price: string;
-  /**
-   * Shares of the underlying per contract. '100' for every ordinary US equity option;
-   * a split or a merger can leave an adjusted contract with something else, which is
-   * the case `OPTION_CONTRACT_MULTIPLIER` does not cover.
-   */
-  readonly multiplier: string;
-  readonly size: string;
-  readonly open_interest?: string;
-  readonly open_interest_date?: string;
-  readonly close_price?: string;
-  readonly close_price_date?: string;
-}
-
 export interface AlpacaCredentials {
   readonly accessKey: string;
   readonly secretKey: string;
