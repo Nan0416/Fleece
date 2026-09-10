@@ -17,6 +17,8 @@ const logger = LoggerFactory.getLogger('OptionResearch');
 const SESSION = '2025-03-03';
 const UNDERLYING = 'SPY';
 const DAYS_TO_EXPIRY = 40;
+/** How far past 40 days out to keep looking for an expiration that actually traded. */
+const EXPIRATION_WINDOW_DAYS = 16;
 /** Roughly the three-month bill over that session. */
 const RISK_FREE_RATE = 0.043;
 /** SPY's trailing yield, near enough for a worked example. */
@@ -24,12 +26,12 @@ const DIVIDEND_YIELD = 0.012;
 const AT = '10:00:00';
 
 async function main(): Promise<void> {
-  const contracts = await loadContracts(SESSION, UNDERLYING, 'call', DAYS_TO_EXPIRY);
+  const contracts = await loadContracts(SESSION, UNDERLYING, 'call', DAYS_TO_EXPIRY, EXPIRATION_WINDOW_DAYS);
   if (contracts.length === 0) {
-    throw new Error(`No ${UNDERLYING} calls expiring near ${DAYS_TO_EXPIRY} days after ${SESSION}.`);
+    throw new Error(`No ${UNDERLYING} calls traded on ${SESSION} expiring ${DAYS_TO_EXPIRY} to ${DAYS_TO_EXPIRY + EXPIRATION_WINDOW_DAYS} days out.`);
   }
   const expiration = contracts[0].expiration;
-  logger.info(`${contracts.length} ${UNDERLYING} calls expiring ${expiration}, strikes ${contracts[0].strike} to ${contracts[contracts.length - 1].strike}.`);
+  logger.info(`${contracts.length} ${UNDERLYING} calls traded on ${SESSION} expiring ${expiration}, strikes ${contracts[0].strike} to ${contracts[contracts.length - 1].strike}.`);
 
   const minutes = await loadTradingMinuteBars(SESSION, UNDERLYING, contracts, { carryForward: true });
   const printed = minutes.reduce((most, minute) => Math.max(most, minute.optionPrices.size), 0);
