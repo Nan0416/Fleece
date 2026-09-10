@@ -7,14 +7,17 @@
     "build": "tsc --build tsconfig.json",
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
     "order-events": "npm run build && node dist/order-events.js",
-    "cancel-order": "npm run build && node dist/cancel-order.js"
+    "cancel-order": "npm run build && node dist/cancel-order.js",
+    "option-delta-surface": "npm run build && node dist/option-delta-surface.js"
   },
   "dependencies": {
     "@fleece/broker": "1.0.0",
+    "@fleece/marketdata": "1.0.0",
     "@fleece/utilities": "1.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "dotenv": "^17.4.2",
     "typescript": "^5.7.3"
   },
   "license": "MIT"

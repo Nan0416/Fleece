@@ -29,3 +29,7 @@ packages/playground/data/
 # every paragraph in these documents to say nothing about any of them. The rules the
 # code is held to live in md/GUIDELINES.md; the document itself is written, not built.
 *.md
+
+# Chart data and rendered PNGs, written by the playground scripts and regenerated on
+# demand. Python and TOML are not prettier's to format either.
+viz/
