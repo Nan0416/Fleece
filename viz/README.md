@@ -25,6 +25,7 @@ months, and the system Python here is ahead of them.
 | Script | Reads | Draws |
 | --- | --- | --- |
 | `option_delta_surface.py` | `data/option-delta-surface.json` | An option chain's delta as a surface over strike and expiration |
+| `option_iv_surface.py` | `data/option-iv-surface.json` | The same chain's implied volatility — the skew across strike, the term structure along expiry |
 
 Each one is two commands — write the data, then draw it:
 
@@ -32,6 +33,16 @@ Each one is two commands — write the data, then draw it:
 npm run option-delta-surface -w @fleece/playground
 uv run --project viz viz/option_delta_surface.py
 ```
+
+Run the volatility one **while the option market is open**, and it will tell you if you
+did not. Its writer checks the chain against put-call parity first: a call and a put on
+the same strike are one claim decomposed two ways, so they share an implied volatility,
+and two different numbers mean the greeks and the quotes they were solved from are
+looking at different underlying prices. That is the normal state of affairs after hours —
+OPRA stops quoting at the option close while the stock trades on — and it lands as a wall
+at the money that looks exactly like a finding. The writer refuses rather than draw it,
+and says by how much and in which direction. See the constants in
+`packages/playground/src/option-iv-surface.ts`.
 
 Every script saves a PNG next to its data and then opens an interactive window. Rotating
 a 3D surface is most of the value in one, so the window is the point and the PNG is the
