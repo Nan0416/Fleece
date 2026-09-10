@@ -10,9 +10,8 @@ export interface OptionPrice {
   /** The minute bar's close, per share. A contract cost this times its multiplier. */
   readonly price: number;
   /**
-   * The minute that close printed in. Equal to the enclosing `MarketMinute.timestamp`
-   * unless the price was carried forward, which is the only way to tell a live price
-   * from a stale one.
+   * The minute that close printed in, which is at or before the enclosing
+   * `MarketMinute.timestamp` — the only way to tell a fresh price from a stale one.
    */
   readonly at: number;
 }
@@ -22,26 +21,19 @@ export interface OptionPrice {
  * contract did.
  *
  * `stockSpotPrice` is absent for a minute the underlying itself did not print in, which
- * happens even in liquid names. `optionPrices` holds only the contracts that printed —
- * an option chain is mostly silent minute to minute, and an absent entry means nobody
- * traded it, not that it does not exist.
+ * happens even in liquid names.
+ *
+ * `optionPrices` holds every contract that has printed *by* this minute, at its last
+ * close, because an option chain is mostly silent minute to minute and a strategy needs
+ * its legs quoted at the same instant. A price is therefore not necessarily one anyone
+ * traded at this minute — `at` says which minute it came from. A contract absent from the
+ * map has not printed at all yet today.
  */
 export interface MarketMinute {
   readonly timestamp: number;
   readonly stockSpotPrice?: number;
   /** Keyed by OCC contract symbol. */
   readonly optionPrices: ReadonlyMap<string, OptionPrice>;
-}
-
-export interface MinuteBarsOptions {
-  /**
-   * Carry each contract's last close forward into the minutes it did not print in.
-   *
-   * Off by default, because a carried price is not a price anyone traded at. Turn it on
-   * when a strategy needs every leg quoted at the same instant, and read `at` to see how
-   * stale each one is — a contract in the wings can go an hour between prints.
-   */
-  readonly carryForward?: boolean;
 }
 
 /** Cached shape: JSON survives arrays and plain objects, not a `Map`. */
@@ -55,12 +47,7 @@ interface RawSession {
  * restating it, so adjusting the underlying's prints would put the two on different
  * footings within the same minute.
  */
-export async function loadTradingMinuteBars(
-  date: string,
-  underlying: string,
-  contracts: ReadonlyArray<OccSymbol>,
-  options: MinuteBarsOptions = {},
-): Promise<ReadonlyArray<MarketMinute>> {
+export async function loadTradingMinuteBars(date: string, underlying: string, contracts: ReadonlyArray<OccSymbol>): Promise<ReadonlyArray<MarketMinute>> {
   const ticker = underlying.trim().toUpperCase();
   const bySymbol = new Map(contracts.map((contract) => [contract.symbol, contract]));
   const symbols = [...bySymbol.keys()].sort();
@@ -91,13 +78,11 @@ export async function loadTradingMinuteBars(
   const timestamps = [...minutes.keys()].sort((left, right) => left - right);
   const carried = new Map<string, OptionPrice>();
   return timestamps.map((timestamp) => {
-    const printed = minutes.get(timestamp) ?? new Map<string, OptionPrice>();
-    if (options.carryForward !== true) {
-      return { timestamp, stockSpotPrice: spots.get(timestamp), optionPrices: printed };
-    }
-    for (const [symbol, price] of printed) {
+    for (const [symbol, price] of minutes.get(timestamp) ?? []) {
       carried.set(symbol, price);
     }
+    // Copied per minute: the running map keeps changing, and a caller holding an earlier
+    // minute must not find its prices quietly updated to a later one's.
     return { timestamp, stockSpotPrice: spots.get(timestamp), optionPrices: new Map(carried) };
   });
 }

@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   const expiration = contracts[0].expiration;
   logger.info(`${contracts.length} ${UNDERLYING} calls traded on ${SESSION} expiring ${expiration}, strikes ${contracts[0].strike} to ${contracts[contracts.length - 1].strike}.`);
 
-  const minutes = await loadTradingMinuteBars(SESSION, UNDERLYING, contracts, { carryForward: true });
+  const minutes = await loadTradingMinuteBars(SESSION, UNDERLYING, contracts);
   const printed = minutes.reduce((most, minute) => Math.max(most, minute.optionPrices.size), 0);
   logger.info(`${minutes.length} minutes on ${SESSION}, holding up to ${printed} of those contracts at once.`);
 
