@@ -22,7 +22,7 @@ const EXPIRATION_WINDOW_DAYS = 16;
 /** Roughly the three-month bill over that session. */
 const RISK_FREE_RATE = 0.043;
 /** SPY's trailing yield, near enough for a worked example. */
-const DIVIDEND_YIELD = 0.012;
+const DIVIDEND_YIELD = 0.0099;
 const AT = '10:00:00';
 
 async function main(): Promise<void> {
@@ -45,21 +45,21 @@ async function main(): Promise<void> {
   logger.info(`At ${easternClock.time(minute.timestamp)}, ${UNDERLYING} is ${minute.stockSpotPrice?.toFixed(2)} with ${minute.optionPrices.size} contracts quoted.`);
 
   const risks = findGreek(minute, RISK_FREE_RATE, DIVIDEND_YIELD);
-  logger.info(`Solved an implied volatility for ${risks.size} of them. Nearest the money:`);
+  logger.info(`Solved an implied volatility for ${risks.size} of them, by strike:`);
 
-  const spot = minute.stockSpotPrice ?? 0;
-  const nearest = [...risks.entries()].sort(([left], [right]) => Math.abs(strikeOf(left, minute) - spot) - Math.abs(strikeOf(right, minute) - spot)).slice(0, 8);
-  for (const [symbol, risk] of nearest) {
-    const carried = minute.optionPrices.get(symbol)?.at !== minute.timestamp;
+  // `contracts` is already in strike order, so walking it reads as a chain rather than
+  // in whatever order the contracts first printed.
+  for (const contract of contracts) {
+    const risk = risks.get(contract.symbol);
+    if (risk === undefined) {
+      continue;
+    }
+    const carried = minute.optionPrices.get(contract.symbol)?.at !== minute.timestamp;
     logger.info(
-      `  ${symbol}  strike ${String(strikeOf(symbol, minute)).padStart(6)}  px ${risk.price.toFixed(2).padStart(7)}  iv ${(risk.impliedVolatility * 100).toFixed(1).padStart(5)}%` +
+      `  ${contract.symbol}  strike ${String(contract.strike).padStart(6)}  px ${risk.price.toFixed(2).padStart(7)}  iv ${(risk.impliedVolatility * 100).toFixed(1).padStart(5)}%` +
         `  delta ${risk.delta.toFixed(3).padStart(6)}  gamma ${risk.gamma.toFixed(4)}  theta ${risk.thetaPerDay.toFixed(3)}  vega ${risk.vegaPerPoint.toFixed(3)}${carried ? '  (carried)' : ''}`,
     );
   }
-}
-
-function strikeOf(symbol: string, minute: { readonly optionPrices: ReadonlyMap<string, { readonly occSymbol: { readonly strike: number } }> }): number {
-  return minute.optionPrices.get(symbol)?.occSymbol.strike ?? 0;
 }
 
 main().catch((error: unknown) => {
