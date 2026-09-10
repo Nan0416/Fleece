@@ -4,22 +4,25 @@ Experiment scripts. One file per experiment under `src/`, each with its own npm 
 
 This package is deliberately outside the product: nothing imports it, and the root
 `npm run build` skips it, so a half-finished experiment can never break `serve`, the
-injector or the dividend job. It is also the one place in the repo where hardcoding a
-credential is allowed — see `src/credentials.ts`, and keep it to paper keys.
+injector or the dividend job.
 
 ## Setup
 
-```bash
-cp src/credentials.example.ts src/credentials.ts
+Put the keys in the repo-root `.env` — see `.env.example`, and `dev.md` for the table:
+
+```
+ALPACA_PAPER_ACCOUNT_ID=...
+ALPACA_PAPER_API_KEY=...
+ALPACA_PAPER_SECRET_KEY=...
 ```
 
-Then fill in `paperAccountInfo` in your copy — and `liveAccountInfo` too if you want
-the live scripts. `src/credentials.ts` is gitignored, so the keys stay local;
-`credentials.example.ts` is the committed template and holds only blanks.
+That is all of it. `src/credentials.ts` loads `.env` itself, so nothing has to be
+exported first, and there is no file to copy before the package compiles.
 
-Keep the two files' exports in step. The example is what a fresh clone compiles
-against — `packages/playground` is in the root `tsconfig.json`, so a missing
-`credentials.ts` breaks `tsc -b` for the whole repo, not just this package.
+Add `ALPACA_LIVE_ACCOUNT_ID`, `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_SECRET_KEY` if you
+want the live account. Only the account a script actually names is read, so leaving the
+live trio unset costs nothing.
+
 
 ## Scripts
 
@@ -27,33 +30,41 @@ against — `packages/playground` is in the root `tsconfig.json`, so a missing
 | --- | --- |
 | `npm run order-events -w @fleece/playground` | Opens the `trade_updates` stream and prints each order event as JSON. Ctrl-C to stop. |
 | `npm run cancel-order -w @fleece/playground -- <brokerOrderId>` | Cancels one order, printing it before and after. |
-| `npm run option-delta-surface -w @fleece/playground` | Writes an underlying's near-dated call chain, greeks and all, to `viz/data/` for the Python renderer to draw. |
+| `npm run option-chain -w @fleece/playground` | Writes an underlying's near-dated chain — both types, greeks, volatility and quote — to `viz/data/` for the Python renderer to draw. |
 
 ## Credentials: two kinds
 
-Broker keys come from `credentials.ts`, as above. Market-data keys come from the
-repo-root `.env` — `ALPACA_PAPER_API_KEY` and `ALPACA_PAPER_SECRET_KEY`, the same two
-names `npm run test:live` reads.
+Both come from the repo-root `.env` by way of `credentials.ts`, but a script asks for one
+or the other and the difference is what it can do.
 
-They are split because the risk is: `credentials.ts` names an account that can be traded
-and is hardcoded on purpose, so that reaching real money takes editing a file. A market
-data key cannot place an order, and the live suites had already put it in `.env`. Copying
-it into a second place would only mean two files to rotate.
+- **A broker account** — `paperAccount()` or `liveAccount()`, carrying an account id, a
+  key and the URLs to reach it. This can place and cancel orders.
+- **Market-data keys** — `marketDataKeys()`, the paper pair and nothing else. `option-chain`
+  takes these and no account at all, because market data is the one thing a paper key does
+  exactly as well as a live one: Alpaca serves the same bars and the same chain to both. A
+  script that only draws a picture should never be holding a key that can trade.
 
-`option-delta-surface` is the market-data kind, and takes no account at all.
+The paper pair is deliberately the same pair `npm run test:live` reads. Alpaca issues one
+set of paper keys that both trades and serves data, so giving them two names would mean
+writing the same secret down twice and rotating it in two places.
 
 ## Choosing an account
 
 Each script names its account near the top:
 
 ```ts
-const ACCOUNT = paperAccountInfo; // swap to liveAccountInfo
+const account = prepareAccount(paperAccount(), logger); // swap to liveAccount()
 ```
 
 Swapping is a one-line edit, which is deliberate — reaching real money should take
-changing the code, not remembering a flag. Whatever it picks, `prepareAccount` checks
-the account has a key and logs a warning when it is the live one, and `cancel-order`
-asks before it cancels anything live (`--yes` skips the question).
+changing the code, not remembering a flag. **No environment variable can move a script
+from paper to live**; the worst a wrong `.env` can do is fail to start.
+
+`paperAccount()` and `liveAccount()` are functions rather than constants so that nothing
+is read until a script asks for one: a script that only wants paper does not fail on a
+missing live key, and importing the module never throws on an empty `.env` (guideline 14).
+An account with no key refuses to build, naming the variable to set. `prepareAccount` then
+logs a warning if it is the live one.
 
 `AccountInfo` carries `wsUrl` and `restUrl` separately because Alpaca serves the
 websocket and the trading API from different hosts.

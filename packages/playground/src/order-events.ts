@@ -1,10 +1,10 @@
 /**
  * Opens an Alpaca trade_updates stream and prints every order event as JSON.
  *
- *   npm run order-events -w @fleece/playground        # paper
- *   npm run order-events:live -w @fleece/playground   # live
+ *   npm run order-events -w @fleece/playground
  *
- * Keys come from `credentials.ts`, which is gitignored — see `credentials.example.ts`.
+ * Keys come from the repo-root `.env`, by way of `credentials.ts`. The account is named in
+ * `main` below.
  *
  * Place, replace or cancel an order in that account and it shows up here. Note that
  * the stream is quiet outside market hours: Alpaca sends no `new` or `accepted` event
@@ -17,7 +17,8 @@
  */
 import { AlpacaOrder, WsAlpacaWsClient } from '@fleece/broker';
 import { LoggerFactory } from '@fleece/utilities';
-import { AccountInfo, liveAccountInfo, paperAccountInfo } from './credentials';
+import { prepareAccount } from './account';
+import { AccountInfo, paperAccount } from './credentials';
 
 const logger = LoggerFactory.getLogger('OrderEvents');
 
@@ -68,15 +69,7 @@ async function streamOrderEvents(account: AccountInfo): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const account = liveAccountInfo ?? paperAccountInfo;
-  const which = account.live ? 'liveAccountInfo' : 'paperAccountInfo';
-
-  if (account.apiKey === '' || account.secretKey === '') {
-    throw new Error(`No API key for the ${account.live ? 'live' : 'paper'} account. Fill in ${which} in packages/playground/src/credentials.ts.`);
-  }
-  if (account.live) {
-    logger.warn('Connecting to the LIVE account. This script only reads the stream, but the orders it prints are real.');
-  }
+  const account = prepareAccount(paperAccount(), logger); // swap to liveAccount()
 
   await streamOrderEvents(account);
 }

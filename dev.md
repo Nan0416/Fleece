@@ -44,9 +44,9 @@ it with `node`. `packages/playground/` exists for exactly that and is kept out o
 build so a half-finished experiment cannot break it.
 
 `npm run build` builds every package of the product, and is what CI runs.
-`npm run build:all` adds `playground` — which needs the gitignored
-`packages/playground/src/credentials.ts`, so it type-checks on your machine and not in
-CI.
+`npm run build:all` adds `playground`, which type-checks anywhere — the scripts read their
+credentials from the environment. It stays out of CI because a half-finished experiment
+should not be able to fail a build.
 
 ## What CI checks
 
@@ -136,6 +136,26 @@ is the list worth watching.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `FLEECE_POLYGON_API_KEY` | **required** | Polygon API key. No default: a job that runs to completion having recorded nothing looks like success |
+
+### The playground scripts (`packages/playground`)
+
+Read by `src/credentials.ts`, which is the only file in that package that touches
+`process.env`. It loads the repo-root `.env` itself, so nothing has to be exported first.
+
+Only the account a script actually names is read, so the live trio can stay unset until
+you want it. Which account a script uses is a one-line edit in the script — no variable
+here can move one from paper to live.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ALPACA_PAPER_ACCOUNT_ID` | **required for the paper account** | Alpaca account id |
+| `ALPACA_PAPER_API_KEY` / `ALPACA_PAPER_SECRET_KEY` | **required for the paper account** | The same pair the market-data suites below read. Alpaca issues one set of paper keys that both trades and serves data |
+| `ALPACA_LIVE_ACCOUNT_ID` | **required for the live account** | Alpaca account id. Real money |
+| `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_SECRET_KEY` | **required for the live account** | Real money. `prepareAccount` logs a warning whenever a script runs against these |
+
+The chart writers take the paper pair through `marketDataKeys()` rather than an account,
+because market data is the one thing a paper key does as well as a live one — so a script
+that only draws a picture never holds a key that can trade.
 
 ### Tests
 
