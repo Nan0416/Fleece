@@ -3,21 +3,21 @@
  *
  *   npm run cancel-order -w @fleece/playground -- <brokerOrderId>
  *
- * Swap `ACCOUNT` below to cancel on the live account instead; that is a deliberate
- * edit, which is the point. On a live account the script asks before it cancels, and
- * `--yes` skips the question.
+ * Keys come from the repo-root `.env`, by way of `credentials.ts`. Swap `paperAccount` for
+ * `liveAccount` below to cancel on the live account instead.
  *
  * Prints the order before and after, because cancelling tells you almost nothing on
  * its own — see the comments in `main`.
  */
 import { HttpAlpacaRestClient } from '@fleece/broker';
 import { LoggerFactory } from '@fleece/utilities';
-import { liveAccountInfo, paperAccountInfo } from './credentials';
+import { prepareAccount } from './account';
+import { paperAccount } from './credentials';
 
 const logger = LoggerFactory.getLogger('CancelOrder');
 
 async function main(): Promise<void> {
-  const account = paperAccountInfo ?? liveAccountInfo;
+  const account = prepareAccount(paperAccount(), logger); // swap to liveAccount()
 
   const client = new HttpAlpacaRestClient({
     account: { accountId: account.accountId, live: account.live },

@@ -66,8 +66,8 @@ packages compile to CommonJS, which is what makes the `dist` copy work.
 
 Everything is configured from the environment; see `dev.md`. There are no command-line
 flags to learn. `npm run build:all` additionally type-checks `packages/playground`, which
-the default build and CI both leave out — its scripts import a gitignored `credentials.ts`
-holding real broker keys, so it compiles on a laptop and nowhere else.
+the default build and CI both leave out — it is throwaway scripts nothing imports. Its
+credentials come from the environment, so it type-checks anywhere.
 
 ## Tests
 
