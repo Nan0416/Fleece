@@ -52,6 +52,15 @@ export function optionBars(symbol: string, ...entries: ReadonlyArray<{ t: string
   return { bars: { [symbol]: entries.map((entry) => ({ t: entry.t, o: 1, h: 3, l: 0.5, c: entry.c ?? 2, v: 100, n: 10, vw: 1.5 })) } };
 }
 
+/** Bars for several contracts at once, as the multi-symbol route keys them. */
+export function optionBarsBySymbol(bySymbol: Record<string, ReadonlyArray<{ t: string; c?: number }> | null>): unknown {
+  const bars: Record<string, unknown> = {};
+  for (const [symbol, entries] of Object.entries(bySymbol)) {
+    bars[symbol] = entries === null ? null : entries.map((entry) => ({ t: entry.t, o: 1, h: 3, l: 0.5, c: entry.c ?? 2, v: 100, n: 10, vw: 1.5 }));
+  }
+  return { bars };
+}
+
 /**
  * An option print: no trade id, no tape, and one condition character rather than a list.
  *

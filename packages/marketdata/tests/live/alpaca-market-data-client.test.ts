@@ -386,6 +386,19 @@ describe('the contract listing', () => {
     expect(contracts.every((contract) => contract.deliverables !== undefined && contract.deliverables.length > 0)).toBe(true);
   });
 
+  /**
+   * Alpaca writes an adjusted root with a *leading* digit — `1AAPL251219P00193000`, whose
+   * `root_symbol` is `1AAPL` — where the OCC convention describes a trailing one. Reading
+   * only the trailing form made this whole window throw on a single contract.
+   */
+  it('reads an adjusted contract whose root carries a leading digit', async () => {
+    const { contracts } = await alpaca.listOptionContracts({ underlying: 'AAPL', status: 'inactive', expirationFrom: '2024-07-01', limit: 30 });
+    const adjusted = contracts.filter((contract) => contract.contract.root !== contract.contract.underlying);
+
+    expect(adjusted.length).toBeGreaterThan(0);
+    expect(adjusted.every((contract) => contract.underlying === 'AAPL' && contract.contract.underlying === 'AAPL')).toBe(true);
+  });
+
   it('pages a listing too large for one answer, and the cursor moves', async () => {
     const first = await alpaca.listOptionContracts({ underlying: 'SPY', limit: 100 });
     expect(first.resumeFrom).toBeDefined();
@@ -437,6 +450,51 @@ describe('option history', () => {
 
     expect(bars).toHaveLength(1);
     expect(trades.reduce((total, trade) => total + trade.s, 0)).toBe(bars[0].v);
+  });
+});
+
+describe('option bars for many contracts', () => {
+  it('serves a whole expiry in one request, keyed by contract', async () => {
+    const { contracts } = await alpaca.listOptionContracts({
+      underlying: 'SPY',
+      status: 'inactive',
+      type: 'call',
+      expirationFrom: '2025-04-11',
+      expirationTo: '2025-04-11',
+      limit: 10_000,
+    });
+    expect(contracts.length).toBeGreaterThan(100);
+
+    const symbols = contracts.map((contract) => contract.S);
+    const { bars } = await alpaca.optionBarsBySymbol({ symbols, from: '2025-03-03', to: '2025-03-03', multiplier: 1, timespan: 'minute' });
+
+    // Most of a chain is silent all session: the wings never print. That is the reason
+    // a contract with no bars is absent here rather than carrying an empty list.
+    expect(bars.size).toBeGreaterThan(0);
+    expect(bars.size).toBeLessThan(symbols.length);
+    for (const [symbol, contractBars] of bars) {
+      expect(symbols).toContain(symbol);
+      expect(contractBars.every((bar) => bar.S === symbol && bar.c > 0)).toBe(true);
+    }
+  });
+
+  it('agrees with the one-contract call it now shares an implementation with', async () => {
+    const { contracts } = await alpaca.listOptionContracts({
+      underlying: 'SPY',
+      status: 'inactive',
+      type: 'call',
+      expirationFrom: '2025-04-11',
+      expirationTo: '2025-04-11',
+      strikeFrom: 570,
+      strikeTo: 580,
+      limit: 100,
+    });
+    const symbol = contracts[0].S;
+
+    const one = await alpaca.optionBars({ symbol, from: '2025-03-03', to: '2025-03-03', multiplier: 1, timespan: 'minute' });
+    const many = await alpaca.optionBarsBySymbol({ symbols: [symbol], from: '2025-03-03', to: '2025-03-03', multiplier: 1, timespan: 'minute' });
+
+    expect(many.bars.get(symbol) ?? []).toStrictEqual(one.bars);
   });
 });
 

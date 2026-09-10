@@ -5,7 +5,20 @@ import { DataProviderError } from '../../src/data-models';
 import { marketHoursCoverage } from '../../src/market-hours';
 import { FakeHttpClient } from '../fake-http-client';
 
-import { bars, calendar, conditionDictionary, corporateActions, optionBars, optionContracts, optionSnapshots, optionTrades, quotes, trades, withPageToken } from './fake-responses';
+import {
+  bars,
+  calendar,
+  conditionDictionary,
+  corporateActions,
+  optionBars,
+  optionBarsBySymbol,
+  optionContracts,
+  optionSnapshots,
+  optionTrades,
+  quotes,
+  trades,
+  withPageToken,
+} from './fake-responses';
 
 const SESSION = '2024-12-19';
 const at = (date: string, time: string): number => easternClock.timestamp(date, time);
@@ -741,6 +754,83 @@ describe('an option chain', () => {
   ])('rejects %s', async (_name, filters) => {
     const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
     await expect(client(http).optionChain({ underlying: 'AAPL', ...filters })).rejects.toThrow(InvalidRequestError);
+  });
+});
+
+describe('option bars for many contracts', () => {
+  const range = { from: SESSION, to: SESSION, multiplier: 1, timespan: 'minute' as const };
+
+  it('asks for every contract in one request rather than one each', async () => {
+    const http = new FakeHttpClient().reply(optionBarsBySymbol({ [CONTRACT]: [{ t: utc('2024-12-19T14:30:00Z') }], [PUT]: [{ t: utc('2024-12-19T14:30:00Z') }] }));
+    await client(http).optionBarsBySymbol({ ...range, symbols: [CONTRACT, PUT] });
+
+    expect(http.requests).toHaveLength(1);
+    expect(http.lastRequest.query['symbols']).toBe(`${CONTRACT},${PUT}`);
+  });
+
+  it('keys the answer by contract, with the symbol on every bar', async () => {
+    const http = new FakeHttpClient().reply(optionBarsBySymbol({ [CONTRACT]: [{ t: utc('2024-12-19T14:30:00Z'), c: 1.5 }], [PUT]: [{ t: utc('2024-12-19T14:31:00Z'), c: 2.5 }] }));
+    const { bars: got } = await client(http).optionBarsBySymbol({ ...range, symbols: [CONTRACT, PUT] });
+
+    expect([...got.keys()].sort()).toEqual([CONTRACT, PUT].sort());
+    expect(got.get(CONTRACT)?.map((bar) => [bar.S, bar.c])).toEqual([[CONTRACT, 1.5]]);
+    expect(got.get(PUT)?.map((bar) => [bar.S, bar.c])).toEqual([[PUT, 2.5]]);
+  });
+
+  it('leaves a contract that did not trade absent rather than empty', async () => {
+    const http = new FakeHttpClient().reply(optionBarsBySymbol({ [CONTRACT]: [{ t: utc('2024-12-19T14:30:00Z') }] }));
+    const { bars: got } = await client(http).optionBarsBySymbol({ ...range, symbols: [CONTRACT, PUT] });
+
+    expect(got.has(CONTRACT)).toBe(true);
+    // Absent, not `[]`: a caller cannot otherwise tell silence from a symbol nobody has.
+    expect(got.has(PUT)).toBe(false);
+  });
+
+  it('collapses a symbol asked for twice', async () => {
+    const http = new FakeHttpClient().reply(optionBarsBySymbol({ [CONTRACT]: [{ t: utc('2024-12-19T14:30:00Z') }] }));
+    await client(http).optionBarsBySymbol({ ...range, symbols: [CONTRACT, CONTRACT] });
+
+    expect(http.lastRequest.query['symbols']).toBe(CONTRACT);
+  });
+
+  it('spends no request on an empty list', async () => {
+    const http = new FakeHttpClient();
+    const { bars: got } = await client(http).optionBarsBySymbol({ ...range, symbols: [] });
+
+    expect(got.size).toBe(0);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('refuses a symbol that is not a contract before spending a request on any of them', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).optionBarsBySymbol({ ...range, symbols: [CONTRACT, 'AAPL'] })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('gathers a contract across pages rather than keeping only its last one', async () => {
+    const http = new FakeHttpClient().reply(
+      withPageToken(optionBarsBySymbol({ [CONTRACT]: [{ t: utc('2024-12-19T14:30:00Z'), c: 1 }] }), 'next'),
+      withPageToken(optionBarsBySymbol({ [CONTRACT]: [{ t: utc('2024-12-19T14:31:00Z'), c: 2 }], [PUT]: [{ t: utc('2024-12-19T14:31:00Z'), c: 9 }] }), null),
+    );
+    const { bars: got } = await client(http).optionBarsBySymbol({ ...range, symbols: [CONTRACT, PUT] });
+
+    expect(got.get(CONTRACT)?.map((bar) => bar.c)).toEqual([1, 2]);
+    expect(got.get(PUT)?.map((bar) => bar.c)).toEqual([9]);
+    expect(http.requests).toHaveLength(2);
+  });
+
+  it('chunks a list longer than one request should carry, and merges the chunks', async () => {
+    const many = Array.from({ length: 201 }, (_, index) => `AAPL260918C${String(100_000 + index * 1000).padStart(8, '0')}`);
+    const http = new FakeHttpClient().reply(
+      optionBarsBySymbol({ [many[0]]: [{ t: utc('2024-12-19T14:30:00Z') }] }),
+      optionBarsBySymbol({ [many[200]]: [{ t: utc('2024-12-19T14:30:00Z') }] }),
+    );
+    const { bars: got } = await client(http).optionBarsBySymbol({ ...range, symbols: many });
+
+    expect(http.requests).toHaveLength(2);
+    expect(http.requests[0].query['symbols'].split(',')).toHaveLength(200);
+    expect(http.requests[1].query['symbols'].split(',')).toHaveLength(1);
+    expect([...got.keys()].sort()).toEqual([many[0], many[200]].sort());
   });
 });
 
