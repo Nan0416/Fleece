@@ -8,7 +8,8 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
     "order-events": "npm run build && node dist/order-events.js",
     "cancel-order": "npm run build && node dist/cancel-order.js",
-    "option-delta-surface": "npm run build && node dist/option-delta-surface.js"
+    "option-delta-surface": "npm run build && node dist/option-delta-surface.js",
+    "option-iv-surface": "npm run build && node dist/option-iv-surface.js"
   },
   "dependencies": {
     "@fleece/broker": "1.0.0",
