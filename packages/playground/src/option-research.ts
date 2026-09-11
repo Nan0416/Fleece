@@ -55,10 +55,17 @@ async function main(): Promise<void> {
       continue;
     }
     const carried = minute.optionPrices.get(contract.symbol)?.at !== minute.timestamp;
-    logger.info(
-      `  ${contract.symbol}  strike ${String(contract.strike).padStart(6)}  px ${risk.price.toFixed(2).padStart(7)}  iv ${(risk.impliedVolatility * 100).toFixed(1).padStart(5)}%` +
-        `  delta ${risk.delta.toFixed(3).padStart(6)}  gamma ${risk.gamma.toFixed(4)}  theta ${risk.thetaPerDay.toFixed(3)}  vega ${risk.vegaPerPoint.toFixed(3)}${carried ? '  (carried)' : ''}`,
-    );
+    const columns = [
+      contract.symbol,
+      `strike ${String(contract.strike).padStart(6)}`,
+      `px ${risk.price.toFixed(2).padStart(7)}`,
+      `iv ${(risk.impliedVolatility * 100).toFixed(1).padStart(5)}%`,
+      `delta ${risk.delta.toFixed(3).padStart(6)}`,
+      `gamma ${risk.gamma.toFixed(4)}`,
+      `theta ${risk.thetaPerDay.toFixed(3)}`,
+      `vega ${risk.vegaPerPoint.toFixed(3)}`,
+    ];
+    logger.info(`  ${columns.join('  ')}${carried ? '  (carried)' : ''}`);
   }
 }
 

@@ -86,9 +86,12 @@ export function blackScholesPrice(input: BlackScholesInput): number {
     return Math.max(type === 'call' ? spot - strike : strike - spot, 0);
   }
   const [d1, d2] = d1d2(input);
-  const discountRate = Math.exp(-rate * tYears);
-  const discountYield = Math.exp(-dividendYield * tYears);
-  return type === 'call' ? spot * discountYield * normCdf(d1) - strike * discountRate * normCdf(d2) : strike * discountRate * normCdf(-d2) - spot * discountYield * normCdf(-d1);
+  const discountedSpot = spot * Math.exp(-dividendYield * tYears);
+  const discountedStrike = strike * Math.exp(-rate * tYears);
+  if (type === 'call') {
+    return discountedSpot * normCdf(d1) - discountedStrike * normCdf(d2);
+  }
+  return discountedStrike * normCdf(-d2) - discountedSpot * normCdf(-d1);
 }
 
 export function blackScholesGreeks(input: BlackScholesInput): Greeks {
@@ -102,18 +105,24 @@ export function blackScholesGreeks(input: BlackScholesInput): Greeks {
 
   const [d1, d2] = d1d2(input);
   const sqrtT = Math.sqrt(tYears);
-  const discountRate = Math.exp(-rate * tYears);
   const discountYield = Math.exp(-dividendYield * tYears);
+  const discountedSpot = spot * discountYield;
+  const discountedStrike = strike * Math.exp(-rate * tYears);
+
   const delta = type === 'call' ? discountYield * normCdf(d1) : discountYield * (normCdf(d1) - 1);
   const gamma = (discountYield * normPdf(d1)) / (spot * vol * sqrtT);
+  const vega = discountedSpot * normPdf(d1) * sqrtT;
+
+  // Theta is two things the names keep apart: optionality bleeding away as the window
+  // shortens, which always costs, and the carry on a position held rather than closed —
+  // dividends forgone against interest on a strike not yet paid, which reverses for a put.
+  const decay = (-discountedSpot * normPdf(d1) * vol) / (2 * sqrtT);
   const carry =
     type === 'call'
-      ? rate * strike * discountRate * normCdf(d2) - dividendYield * spot * discountYield * normCdf(d1)
-      : -rate * strike * discountRate * normCdf(-d2) + dividendYield * spot * discountYield * normCdf(-d1);
-  const thetaAnnual = (-spot * discountYield * normPdf(d1) * vol) / (2 * sqrtT) - carry;
-  const vega = spot * discountYield * normPdf(d1) * sqrtT;
+      ? dividendYield * discountedSpot * normCdf(d1) - rate * discountedStrike * normCdf(d2)
+      : rate * discountedStrike * normCdf(-d2) - dividendYield * discountedSpot * normCdf(-d1);
 
-  return { delta, gamma, thetaPerDay: thetaAnnual / DAYS_PER_YEAR, vegaPerPoint: vega / VOL_POINTS_PER_UNIT };
+  return { delta, gamma, thetaPerDay: (decay + carry) / DAYS_PER_YEAR, vegaPerPoint: vega / VOL_POINTS_PER_UNIT };
 }
 
 /**

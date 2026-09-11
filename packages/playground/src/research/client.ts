@@ -1,16 +1,16 @@
 /**
  * The market-data client these helpers share, and the disk cache behind it.
  *
- * Keys come from the repo-root `.env` — `ALPACA_PAPER_API_KEY` and
- * `ALPACA_PAPER_SECRET_KEY` — as the surface scripts do, and for the same reason: these
- * are market-data keys rather than broker keys.
+ * Keys come from `credentials.ts`, which is the one file in this package that reads the
+ * environment.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { AlpacaMarketDataClient } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
-import { config as loadEnv } from 'dotenv';
+
+import { marketDataKeys } from '../credentials';
 
 /** `dist/research/` at runtime, so four levels up is the repo root. */
 const ROOT = resolve(__dirname, '../../../..');
@@ -18,15 +18,10 @@ const CACHE = resolve(ROOT, 'packages/playground/data/research');
 
 let client: AlpacaMarketDataClient | undefined;
 
+/** Built once and kept, so a loop over sessions does not rebuild it per day. */
 export function marketDataClient(): AlpacaMarketDataClient {
   if (client === undefined) {
-    loadEnv({ path: resolve(ROOT, '.env'), quiet: true });
-    const apiKey = process.env['ALPACA_PAPER_API_KEY'];
-    const secretKey = process.env['ALPACA_PAPER_SECRET_KEY'];
-    if (apiKey === undefined || secretKey === undefined) {
-      throw new Error('The research helpers need ALPACA_PAPER_API_KEY and ALPACA_PAPER_SECRET_KEY in the repo-root .env.');
-    }
-    client = new AlpacaMarketDataClient({ apiKey, secretKey });
+    client = new AlpacaMarketDataClient(marketDataKeys());
   }
   return client;
 }
