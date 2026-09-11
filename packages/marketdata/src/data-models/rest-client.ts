@@ -174,6 +174,16 @@ export interface OptionBarsRequest {
   readonly timespan: Timespan;
 }
 
+/** As `OptionBarsRequest`, for many contracts at once. */
+export interface OptionBarsBySymbolRequest {
+  /** OCC contract symbols. Duplicates are collapsed. */
+  readonly symbols: ReadonlyArray<string>;
+  readonly from: DateOrTimestamp;
+  readonly to: DateOrTimestamp;
+  readonly multiplier: number;
+  readonly timespan: Timespan;
+}
+
 /** Either a whole trading day by `date`, or a `from`/`to` window, as `TradesRequest`. */
 export interface OptionTradesRequest {
   /** The OCC contract symbol. */
@@ -256,6 +266,11 @@ export interface OptionChainResponse {
 
 export interface OptionBarsResponse {
   readonly bars: ReadonlyArray<Bar>;
+}
+
+/** Keyed by contract symbol. A contract that did not trade in the window is absent, not empty. */
+export interface OptionBarsBySymbolResponse {
+  readonly bars: ReadonlyMap<string, ReadonlyArray<Bar>>;
 }
 
 export interface OptionTradesResponse {
@@ -357,6 +372,11 @@ export interface AlpacaMarketDataRestClient extends StockRestClient {
   listOptionContracts(request: OptionContractsRequest): Promise<OptionContractsResponse>;
   optionChain(request: OptionChainRequest): Promise<OptionChainResponse>;
   optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse>;
+  /**
+   * Many contracts in one call. A chain's worth of bars is one request rather than one
+   * per contract, which is the difference between a day of research and an afternoon.
+   */
+  optionBarsBySymbol(request: OptionBarsBySymbolRequest): Promise<OptionBarsBySymbolResponse>;
   optionTrades(request: OptionTradesRequest): Promise<OptionTradesResponse>;
   conditions(request: ConditionsRequest): Promise<ConditionsResponse>;
   exchanges(request: ExchangesRequest): Promise<ExchangesResponse>;

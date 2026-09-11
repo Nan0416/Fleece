@@ -11,12 +11,16 @@ import type { OccSymbol } from './data-models';
  * root carrying a trailing digit parses to the same expiry and strike as one without.
  *
  * That digit is how OCC writes an **adjusted** contract, one a split, a spinoff or a
- * special dividend re-issued, and it is why Alpaca validates against `\d{6,7}` rather
- * than `\d{6}`. An adjusted contract does not deliver 100 shares, which this system
- * models in `@fleece/models`'s asset classes and prices for in `@fleece/broker`, so
- * refusing to read one would be refusing to read exactly the contract that needs care.
+ * special dividend re-issued. It sits on **either side** of the letters, which is not a
+ * detail worth guessing at: Alpaca serves AAPL's re-issued December 2025 puts as
+ * `1AAPL251219P00193000` with `root_symbol` `1AAPL`, while the trailing form `AAPL1` is
+ * what the OCC convention describes. Both are read here.
+ *
+ * An adjusted contract does not deliver 100 shares, which this system models in
+ * `@fleece/models`'s asset classes and prices for in `@fleece/broker`, so refusing to
+ * read one would be refusing to read exactly the contract that needs care.
  */
-const OCC = /^([A-Z]{1,5})(\d?)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
+const OCC = /^(\d?)([A-Z]{1,5})(\d?)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
 
 /** Thousandths of a dollar, which is how OCC writes a strike. */
 const MILS_PER_DOLLAR = 1000;
@@ -26,7 +30,7 @@ export function parseOccSymbol(symbol: string): OccSymbol | undefined {
   if (match === null) {
     return undefined;
   }
-  const [, underlying, suffix, year, month, day, type, strike] = match;
+  const [, prefix, underlying, suffix, year, month, day, type, strike] = match;
   // The two-digit year is read as 20xx, which every listed option is: the format cannot
   // express 1999 and Alpaca's option history begins in 2024.
   const expiration = `20${year}-${month}-${day}`;
@@ -37,7 +41,7 @@ export function parseOccSymbol(symbol: string): OccSymbol | undefined {
   return {
     symbol,
     underlying,
-    root: `${underlying}${suffix}`,
+    root: `${prefix}${underlying}${suffix}`,
     expiration,
     type: type === 'C' ? 'call' : 'put',
     strike: strikeMils / MILS_PER_DOLLAR,

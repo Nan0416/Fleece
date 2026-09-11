@@ -2,6 +2,7 @@ import { FetchHttpClient, InvalidRequestError, LoggerFactory, easternClock, type
 
 import {
   DataProviderError,
+  type Bar,
   type BarsRequest,
   type BarsResponse,
   type DailyBarsRequest,
@@ -15,6 +16,8 @@ import {
   type ConditionsResponse,
   type ExchangesRequest,
   type ExchangesResponse,
+  type OptionBarsBySymbolRequest,
+  type OptionBarsBySymbolResponse,
   type OptionBarsRequest,
   type OptionBarsResponse,
   type OptionChainRequest,
@@ -95,6 +98,18 @@ const MAX_PAGES = 500;
 
 /** A chain page is capped lower than a bar or trade page. */
 const MAX_CHAIN_PAGE = 1_000;
+
+/**
+ * Contracts per bars request, which Alpaca documents as "a comma-separated list of
+ * contract symbols with a limit of 100".
+ *
+ * It does not enforce it today — 288 symbols go through intact, traded contracts at both
+ * ends of the list and none dropped. The documented number is used anyway, because the
+ * failure mode if enforcement ever arrives is silent: this route answers with a map, an
+ * absent symbol means "did not trade", and a truncated request is indistinguishable from
+ * a quiet chain.
+ */
+const MAX_BAR_SYMBOLS = 100;
 
 /** Alpaca's corporate-action history does not reach further back than this. */
 const EARLIEST_CORPORATE_ACTION = '2000-01-01';
@@ -358,18 +373,44 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
    * count here than from `bars`, deliberately.
    */
   async optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse> {
-    requireOccSymbol(request.symbol, 'fetch bars');
+    const { bars } = await this.optionBarsBySymbol({ ...request, symbols: [request.symbol] });
+    return { bars: bars.get(request.symbol) ?? [] };
+  }
+
+  /**
+   * The same window for many contracts, chunked and paged into one map.
+   *
+   * Absent rather than empty for a contract that did not trade: an option chain is mostly
+   * silent minute to minute — a SPY expiry 40 days out had prints in 83 of its 291 calls
+   * over a whole session — and a caller that cannot tell "no trade" from "no such
+   * contract" will read a gap as a price.
+   */
+  async optionBarsBySymbol(request: OptionBarsBySymbolRequest): Promise<OptionBarsBySymbolResponse> {
+    const symbols = [...new Set(request.symbols)];
+    for (const symbol of symbols) {
+      requireOccSymbol(symbol, 'fetch bars');
+    }
     const timeframe = resolveTimeframe(request.timespan, request.multiplier);
     const from = startOfDay(request.from);
     const to = endOfDay(request.to);
     requireForwardRange(from, to, 'option bars');
 
-    const raw = await this.page<AlpacaBar, AlpacaOptionBarsResponse>('/v1beta1/options/bars', request.symbol, (body) => body.bars, {
-      timeframe,
-      start: new Date(from).toISOString(),
-      end: new Date(to).toISOString(),
-    });
-    return { bars: raw.map((bar) => normalizeBar(request.symbol, bar)) };
+    const bars = new Map<string, ReadonlyArray<Bar>>();
+    for (let first = 0; first < symbols.length; first += MAX_BAR_SYMBOLS) {
+      const chunk = symbols.slice(first, first + MAX_BAR_SYMBOLS);
+      const raw = await this.pageBySymbol<AlpacaBar, AlpacaOptionBarsResponse>('/v1beta1/options/bars', chunk, (body) => body.bars, {
+        timeframe,
+        start: new Date(from).toISOString(),
+        end: new Date(to).toISOString(),
+      });
+      for (const [symbol, entries] of raw) {
+        bars.set(
+          symbol,
+          entries.map((bar) => normalizeBar(symbol, bar)),
+        );
+      }
+    }
+    return { bars };
   }
 
   async optionTrades(request: OptionTradesRequest): Promise<OptionTradesResponse> {
@@ -467,6 +508,40 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
     }
 
     throw new DataProviderError(SOURCE, `has more than ${MAX_PAGES} pages of corporate actions for ${symbol}. Ask for a shorter range.`);
+  }
+
+  /** As `page`, but accumulating every symbol the answer is keyed by rather than one. */
+  private async pageBySymbol<T, R>(
+    path: string,
+    symbols: ReadonlyArray<string>,
+    read: (body: R) => Record<string, ReadonlyArray<T> | null> | null | undefined,
+    query: Query,
+  ): Promise<Map<string, T[]>> {
+    const results = new Map<string, T[]>();
+    let pageToken: string | undefined = undefined;
+
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const body: R = await this.get<R>(path, { ...query, symbols: symbols.join(','), page_token: pageToken });
+      for (const [symbol, entries] of Object.entries(read(body) ?? {})) {
+        if (entries === null || entries === undefined) {
+          continue;
+        }
+        const seen = results.get(symbol);
+        if (seen === undefined) {
+          results.set(symbol, [...entries]);
+        } else {
+          seen.push(...entries);
+        }
+      }
+
+      const next = cursor(body);
+      if (next === undefined) {
+        return results;
+      }
+      pageToken = next;
+    }
+
+    throw new DataProviderError(SOURCE, `has more than ${MAX_PAGES} pages of ${path}. Ask for a shorter window.`);
   }
 
   private async page<T, R>(path: string, symbol: string, read: (body: R) => Record<string, ReadonlyArray<T> | null> | null | undefined, query: Query): Promise<T[]> {

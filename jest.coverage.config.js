@@ -32,6 +32,11 @@ module.exports = {
   // `tests/core/data-integration/` and `tests/tracking/data-integration/`.
   testPathIgnorePatterns: [...base.testPathIgnorePatterns, '/data-integration/'],
 
+  // `playground` is experiment scripts: outside the product build, imported by nothing,
+  // and deliberately not held to a ratchet meant for shipped code. Its tests still run
+  // under `npm test` — it is the gate they stay out of, not the suite.
+  coveragePathIgnorePatterns: ['/node_modules/', '/packages/playground/'],
+
   /**
    * A ratchet, not a target.
    *
