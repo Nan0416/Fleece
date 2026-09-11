@@ -1,20 +1,29 @@
 import { Decimal, type DecimalInput } from '@fleece/utilities';
 
 import { BacktestAccountImpl, type RealizedPL, type Transaction } from '../../src/backtest/account';
+import { Time, type TimeSubscriber } from '../../src/backtest/time';
 
 const CALL = 'AAPL260918C00230000';
 const START = 10_000;
 const T0 = 1_700_000_000_000;
 const MINUTE = 60_000;
 
-function account(): BacktestAccountImpl {
-  return new BacktestAccountImpl(START, T0, MINUTE);
+interface Driven {
+  readonly clock: Time;
+  readonly book: BacktestAccountImpl;
+}
+
+function account(): Driven {
+  const clock = new Time(T0, MINUTE);
+  const book = new BacktestAccountImpl(START);
+  clock.subscribe(book);
+  return { clock, book };
 }
 
 /** Steps the clock one tick on and trades at the instant it lands on. */
-async function trade(book: BacktestAccountImpl, symbol: string, size: DecimalInput, price: DecimalInput): Promise<Transaction> {
-  await book.forward();
-  return book.record({ symbol, size, price, timestamp: book.timestamp() });
+async function trade({ clock, book }: Driven, symbol: string, size: DecimalInput, price: DecimalInput): Promise<Transaction> {
+  await clock.forward();
+  return book.record({ symbol, size, price, timestamp: clock.timestamp() });
 }
 
 function totalRealized(rows: ReadonlyArray<RealizedPL>): number {
@@ -24,37 +33,90 @@ function totalRealized(rows: ReadonlyArray<RealizedPL>): number {
 describe('BacktestAccountImpl', () => {
   describe('the clock', () => {
     it('starts on the beginning timestamp and advances one fidelity per step', async () => {
-      const book = account();
-      expect(book.timestamp()).toBe(T0);
+      const { clock } = account();
+      expect(clock.timestamp()).toBe(T0);
 
-      await book.forward();
-      expect(book.timestamp()).toBe(T0 + MINUTE);
+      await clock.forward();
+      expect(clock.timestamp()).toBe(T0 + MINUTE);
 
-      await book.forward();
-      await book.forward();
-      expect(book.timestamp()).toBe(T0 + 3 * MINUTE);
+      await clock.forward();
+      await clock.forward();
+      expect(clock.timestamp()).toBe(T0 + 3 * MINUTE);
     });
 
-    it('refuses a trade stamped anywhere but the instant it is standing on', async () => {
-      const book = account();
-      await book.forward();
-      const now = book.timestamp();
+    it('refuses a fidelity that would stall or rewind the clock', () => {
+      expect(() => new Time(T0, 0)).toThrow(/positive whole number/);
+      expect(() => new Time(T0, -MINUTE)).toThrow(/positive whole number/);
+      expect(() => new Time(T0, 0.5)).toThrow(/positive whole number/);
+    });
+
+    it('tells every subscriber the new time, in the order they subscribed', async () => {
+      const clock = new Time(T0, MINUTE);
+      const told: string[] = [];
+      const listener = (id: string): TimeSubscriber => ({
+        timeSubscriberId: id,
+        forward: async (timestamp: number) => {
+          told.push(`${id}@${timestamp}`);
+        },
+      });
+
+      clock.subscribe(listener('first'));
+      clock.subscribe(listener('second'));
+      await clock.forward();
+
+      expect(told).toEqual([`first@${T0 + MINUTE}`, `second@${T0 + MINUTE}`]);
+    });
+
+    it('replaces a subscriber that subscribes again rather than telling it twice', async () => {
+      const clock = new Time(T0, MINUTE);
+      let calls = 0;
+      const account = { timeSubscriberId: 'the-one', forward: async () => void calls++ };
+
+      clock.subscribe(account);
+      clock.subscribe(account);
+      await clock.forward();
+
+      expect(calls).toBe(1);
+    });
+
+    it('gives each account an id of its own, so two of them both get told', async () => {
+      const clock = new Time(T0, MINUTE);
+      const first = new BacktestAccountImpl(START);
+      const second = new BacktestAccountImpl(START);
+
+      expect(first.timeSubscriberId).not.toBe(second.timeSubscriberId);
+
+      clock.subscribe(first);
+      clock.subscribe(second);
+      await clock.forward();
+
+      const now = clock.timestamp();
+      expect(() => first.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now })).not.toThrow();
+      expect(() => second.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now })).not.toThrow();
+    });
+
+    it('refuses to be stepped to an instant it is already on or past', async () => {
+      const { clock, book } = account();
+      await clock.forward();
+
+      await expect(book.forward(clock.timestamp())).rejects.toThrow(/only ever stepped forward/);
+      await expect(book.forward(T0)).rejects.toThrow(/only ever stepped forward/);
+    });
+
+    it('refuses a trade stamped anywhere but the instant the clock is on', async () => {
+      const { clock, book } = account();
+      await clock.forward();
+      const now = clock.timestamp();
 
       expect(() => book.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now - MINUTE })).toThrow(/clock is on/);
       expect(() => book.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now + MINUTE })).toThrow(/clock is on/);
       expect(() => book.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now })).not.toThrow();
     });
 
-    it('refuses a fidelity that would stall or rewind the clock', () => {
-      expect(() => new BacktestAccountImpl(START, T0, 0)).toThrow(/positive whole number/);
-      expect(() => new BacktestAccountImpl(START, T0, -MINUTE)).toThrow(/positive whole number/);
-      expect(() => new BacktestAccountImpl(START, T0, 0.5)).toThrow(/positive whole number/);
-    });
-
     it('lets several trades land on one instant, which is what a spread is', async () => {
-      const book = account();
-      await book.forward();
-      const now = book.timestamp();
+      const { clock, book } = account();
+      await clock.forward();
+      const now = clock.timestamp();
 
       book.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now });
       book.record({ symbol: 'MSFT', size: 1, price: 20, timestamp: now });
@@ -66,11 +128,12 @@ describe('BacktestAccountImpl', () => {
 
   describe('bookkeeping', () => {
     it('closes the oldest lot first and leaves the newer one untouched', async () => {
-      const book = account();
-      await trade(book, 'AAPL', 10, 50);
-      await trade(book, 'AAPL', 10, 60);
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', 10, 50);
+      await trade(driven, 'AAPL', 10, 60);
 
-      const sale = await trade(book, 'AAPL', -4, 70);
+      const sale = await trade(driven, 'AAPL', -4, 70);
 
       expect(sale.realizedPL?.toString()).toBe('80'); // (70 - 50) x 4, not (70 - 55) x 4
       // 6 left of the 50 lot and all 10 of the 60 lot, so the blend is 56.25 rather than 55.
@@ -78,21 +141,23 @@ describe('BacktestAccountImpl', () => {
     });
 
     it('walks on to the next lot when the first one is not enough', async () => {
-      const book = account();
-      await trade(book, 'AAPL', 10, 50);
-      await trade(book, 'AAPL', 10, 60);
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', 10, 50);
+      await trade(driven, 'AAPL', 10, 60);
 
-      const sale = await trade(book, 'AAPL', -16, 70);
+      const sale = await trade(driven, 'AAPL', -16, 70);
 
       expect(sale.realizedPL?.toString()).toBe('260'); // (70 - 50) x 10 + (70 - 60) x 6
       expect(book.positions()).toEqual([{ symbol: 'AAPL', size: 4, averagePrice: 60 }]);
     });
 
     it('realizes only the closing half of a trade that carries the position through zero', async () => {
-      const book = account();
-      await trade(book, 'AAPL', 10, 50);
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', 10, 50);
 
-      const flip = await trade(book, 'AAPL', -15, 60);
+      const flip = await trade(driven, 'AAPL', -15, 60);
 
       expect(flip.realizedPL?.toString()).toBe('100'); // the 10 that closed, never the 5 that opened
       expect(book.positions()).toEqual([{ symbol: 'AAPL', size: -5, averagePrice: 60 }]);
@@ -100,9 +165,10 @@ describe('BacktestAccountImpl', () => {
     });
 
     it('reports a break-even close as zero realized, not as nothing realized', async () => {
-      const book = account();
-      const opening = await trade(book, 'AAPL', 10, 50);
-      const closing = await trade(book, 'AAPL', -10, 50);
+      const driven = account();
+      const { book } = driven;
+      const opening = await trade(driven, 'AAPL', 10, 50);
+      const closing = await trade(driven, 'AAPL', -10, 50);
 
       expect(opening.realizedPL).toBeUndefined();
       expect(closing.realizedPL?.toString()).toBe('0');
@@ -110,53 +176,58 @@ describe('BacktestAccountImpl', () => {
     });
 
     it('leaves a symbol it has only ever opened out of the realized rows entirely', async () => {
-      const book = account();
-      await trade(book, 'AAPL', 10, 50);
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', 10, 50);
 
       expect(book.realizedPLs()).toEqual([]);
       expect(book.symbols()).toEqual(['AAPL']);
     });
 
     it('raises cash on a short sale and realizes a gain when the cover is cheaper', async () => {
-      const book = account();
-      await trade(book, 'AAPL', -10, 50);
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', -10, 50);
       expect(book.cash.toString()).toBe('10500');
 
-      const cover = await trade(book, 'AAPL', 4, 45);
+      const cover = await trade(driven, 'AAPL', 4, 45);
 
       expect(cover.realizedPL?.toString()).toBe('20');
       expect(book.positions()).toEqual([{ symbol: 'AAPL', size: -6, averagePrice: 50 }]);
     });
 
     it('prices an option contract at a hundred times the premium it was given', async () => {
-      const book = account();
-      await trade(book, CALL, 2, '3.85');
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, CALL, 2, '3.85');
 
       expect(book.cash.toString()).toBe('9230'); // 10_000 - 770, not 10_000 - 7.70
       // Per share, the unit it was traded in — not the 385 a contract cost.
       expect(book.positions()).toEqual([{ symbol: CALL, size: 2, averagePrice: 3.85 }]);
 
-      const sale = await trade(book, CALL, -2, '5.00');
+      const sale = await trade(driven, CALL, -2, '5.00');
 
       expect(sale.realizedPL?.toString()).toBe('230'); // (5.00 - 3.85) x 2 x 100, exactly
     });
 
     it('drops a symbol from the positions once it is flat but keeps what it realized', async () => {
-      const book = account();
-      await trade(book, 'AAPL', 10, '50.1');
-      await trade(book, CALL, 3, '1.07');
-      await trade(book, 'AAPL', -10, '52.3');
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', 10, '50.1');
+      await trade(driven, CALL, 3, '1.07');
+      await trade(driven, 'AAPL', -10, '52.3');
 
       expect(book.positions()).toEqual([{ symbol: CALL, size: 3, averagePrice: 1.07 }]);
       expect(book.realizedPLs()).toEqual([{ symbol: 'AAPL', realizedPL: 22 }]);
     });
 
     it('leaves cash at the starting cash plus realized profit once every position is closed', async () => {
-      const book = account();
-      await trade(book, 'AAPL', 10, '50.1');
-      await trade(book, CALL, 3, '1.07');
-      await trade(book, 'AAPL', -10, '52.3');
-      await trade(book, CALL, -3, '0.94');
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', 10, '50.1');
+      await trade(driven, CALL, 3, '1.07');
+      await trade(driven, 'AAPL', -10, '52.3');
+      await trade(driven, CALL, -3, '0.94');
 
       expect(book.positions()).toEqual([]);
       expect(totalRealized(book.realizedPLs())).toBe(-17); // +22 on the stock, -39 on the calls
@@ -164,12 +235,13 @@ describe('BacktestAccountImpl', () => {
     });
 
     it('conserves the basis when a position opened once is closed in two pieces', async () => {
-      const book = account();
+      const driven = account();
+      const { book } = driven;
       // A price with more decimals than the apportionment can carry, so it has to round
       // and the remainder has to absorb what it gave up.
-      const opening = await trade(book, 'AAPL', 3, '0.3333333333333333');
-      const first = await trade(book, 'AAPL', -1, '0.5');
-      const second = await trade(book, 'AAPL', -2, '0.5');
+      const opening = await trade(driven, 'AAPL', 3, '0.3333333333333333');
+      const first = await trade(driven, 'AAPL', -1, '0.5');
+      const second = await trade(driven, 'AAPL', -2, '0.5');
 
       const realized = (first.realizedPL ?? Decimal.ZERO).add(second.realizedPL ?? Decimal.ZERO);
       const roundTrip = first.totalCost.add(second.totalCost).neg().sub(opening.totalCost);
@@ -180,11 +252,12 @@ describe('BacktestAccountImpl', () => {
     });
 
     it('reports one realized row per symbol, and none for a symbol never traded', async () => {
-      const book = account();
-      await trade(book, 'AAPL', 1, 10);
-      await trade(book, 'AAPL', -1, 12);
-      await trade(book, 'MSFT', 1, 10);
-      await trade(book, 'MSFT', -1, 9);
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', 1, 10);
+      await trade(driven, 'AAPL', -1, 12);
+      await trade(driven, 'MSFT', 1, 10);
+      await trade(driven, 'MSFT', -1, 9);
 
       expect(book.realizedPLs()).toEqual([
         { symbol: 'AAPL', realizedPL: 2 },
@@ -195,7 +268,8 @@ describe('BacktestAccountImpl', () => {
     });
 
     it('reports nothing rather than throwing before anything has been traded', () => {
-      const book = account();
+      const driven = account();
+      const { book } = driven;
 
       expect(book.symbols()).toEqual([]);
       expect(book.positions()).toEqual([]);
@@ -204,8 +278,9 @@ describe('BacktestAccountImpl', () => {
     });
 
     it('hands back a fresh array each call, so a caller cannot reach in and edit the book', async () => {
-      const book = account();
-      await trade(book, 'AAPL', 10, 50);
+      const driven = account();
+      const { book } = driven;
+      await trade(driven, 'AAPL', 10, 50);
 
       expect(book.positions()).not.toBe(book.positions());
       expect(book.symbols()).not.toBe(book.symbols());

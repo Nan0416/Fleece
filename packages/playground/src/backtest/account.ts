@@ -1,5 +1,8 @@
 import { parseOccSymbol } from '@fleece/marketdata';
 import { Decimal, derivePremium, LEDGER_SCALE, sumDecimals, type DecimalInput } from '@fleece/utilities';
+import { nanoid } from 'nanoid';
+
+import type { TimeSubscriber } from './time';
 
 /**
  * One open FIFO lot: a signed size and the dollars behind it, with the multiplier already
@@ -52,10 +55,7 @@ export interface BacktestPortfolio {
  * The driving view: the clock and the write path on top of the read one. Handing a
  * reporter `BacktestPortfolio` instead is what stops it advancing time by accident.
  */
-export interface BacktestAccount extends BacktestPortfolio {
-  readonly timeFidelity: number; // in ms
-  timestamp(): number;
-  forward(): Promise<void>;
+export interface BacktestAccount extends BacktestPortfolio, TimeSubscriber {
   record(trade: Trade): Transaction;
 }
 
@@ -88,19 +88,23 @@ function closingSize(lotSize: Decimal, remaining: Decimal): Decimal {
  * FIFO: a trade closes the oldest lots of the opposite sign first, and whatever is left
  * over opens a new one at the trade's own price.
  *
- * The account is also the clock: `forward` steps it one `timeFidelity` on, and a trade
- * must be stamped with the instant it is standing on.
+ * A `Time` drives it, and a trade must be stamped with the instant the clock is on — so
+ * the clock is the one place the current time comes from.
  *
- *     const account = new BacktestAccountImpl(10_000, t0, 60_000); // one-minute steps
- *     await account.forward();
- *     account.record({ symbol: 'AAPL', size: 10, price: 50, timestamp: account.timestamp() });
- *     await account.forward();
- *     account.record({ symbol: 'AAPL', size: -15, price: 60, timestamp: account.timestamp() });
+ *     const clock = new Time(t0, 60_000); // one-minute steps
+ *     const account = new BacktestAccountImpl(10_000);
+ *     clock.subscribe(account);
+ *
+ *     await clock.forward();
+ *     account.record({ symbol: 'AAPL', size: 10, price: 50, timestamp: clock.timestamp() });
+ *     await clock.forward();
+ *     account.record({ symbol: 'AAPL', size: -15, price: 60, timestamp: clock.timestamp() });
  *     account.cash.toString(); // '10400'  — 10_000 - 500 + 900
  *     account.positions();     // [{ symbol: 'AAPL', size: -5, averagePrice: 60 }]
  *     account.realizedPLs();   // [{ symbol: 'AAPL', realizedPL: 100 }]
  */
 export class BacktestAccountImpl implements BacktestAccount {
+  readonly timeSubscriberId: string;
   readonly initialCashPosition: Decimal;
 
   private cashPosition: Decimal;
@@ -110,32 +114,23 @@ export class BacktestAccountImpl implements BacktestAccount {
 
   private currentTimestamp: number;
 
-  constructor(
-    initialCashPosition: DecimalInput,
-    readonly beginningTimestamp: number,
-    readonly timeFidelity: number,
-  ) {
-    // A fidelity that does not advance the clock makes `forward` a no-op, so a driver
-    // looping until an end time never reaches it. A fractional one accumulates float
-    // error across a long run, which puts the clock off the minute boundaries the bars
-    // are on.
-    if (!Number.isInteger(timeFidelity) || timeFidelity <= 0) {
-      throw new Error(`timeFidelity must be a positive whole number of milliseconds, got ${timeFidelity}. One minute is 60_000.`);
-    }
+  constructor(initialCashPosition: DecimalInput) {
     this.initialCashPosition = Decimal.of(initialCashPosition);
     this.cashPosition = this.initialCashPosition;
-    this.currentTimestamp = beginningTimestamp;
+    this.currentTimestamp = 0;
 
     this.symbolToLots = new Map();
     this.symbolToTransactions = new Map();
+
+    this.timeSubscriberId = nanoid();
   }
 
-  timestamp(): number {
-    return this.currentTimestamp;
-  }
-
-  async forward(): Promise<void> {
-    this.currentTimestamp += this.timeFidelity;
+  async forward(timestamp: number): Promise<void> {
+    if (this.currentTimestamp >= timestamp) {
+      throw new Error(`The clock moved to ${timestamp}, which is not past the ${this.currentTimestamp} this account is already on. A subscriber is only ever stepped forward.`);
+    }
+    this.currentTimestamp = timestamp;
+    // todo: in the future, we can log the account unrealized PL, etc.
   }
 
   record(trade: Trade): Transaction {
