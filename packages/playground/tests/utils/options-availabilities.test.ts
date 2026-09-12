@@ -118,6 +118,32 @@ function busy(days: number): { client: FakeClient; symbols: string[] } {
   return { client, symbols };
 }
 
+/**
+ * Contracts that have all expired by `NOW`, so the incremental rule is free to settle
+ * them, spread over `days` debut days. `count` above `SWEEP_BATCH` gives the daily pass
+ * more than one batch, which is what makes a single failing batch a partial failure
+ * rather than the whole sweep.
+ */
+function expired(count: number, days: number): { client: FakeClient; symbols: string[] } {
+  const daily = new Map<string, string>();
+  const minutes = new Map<string, number>();
+  const symbols: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const symbol = `AMZN240419C0${String(100000 + index * 1000).padStart(7, '0')}`;
+    const date = marketHourByOffset(index % days);
+    symbols.push(symbol);
+    daily.set(symbol, date);
+    minutes.set(symbol, easternClock.timestamp(date, '10:00:00'));
+  }
+  const client = new FakeClient(daily, minutes);
+  // Expired before today, so Alpaca reports every one of them inactive.
+  client.listOptionContracts = async (request: { status?: string }) => {
+    client.listings += 1;
+    return request.status === 'inactive' ? { contracts: symbols.map((symbol) => ({ S: symbol })) } : { contracts: [] };
+  };
+  return { client, symbols };
+}
+
 /** Consecutive trading days from a known one, so every date has a session behind it. */
 function marketHourByOffset(offset: number): string {
   let date = '2024-03-04';
@@ -242,6 +268,33 @@ describe('OptionsAvailabilitiesHelperImpl', () => {
       const daily = client.requests.filter((request) => request.timespan === 'day');
       expect(daily).toHaveLength(1);
       expect(daily[0].symbols).toEqual([QUIET]);
+    });
+  });
+
+  describe('an empty listing', () => {
+    it('refuses to overwrite a swept chain, rather than recording an underlying with no options', async () => {
+      const client = fake();
+      const { helper: subject, cachePath } = helper(client);
+      await subject.save('AMZN');
+      const before = readFileSync(resolve(cachePath, 'AMZN.json'), 'utf8');
+
+      // An empty page — a transient upstream fault normalised into one, or a listing
+      // Alpaca has aged out. Neither is an underlying that stopped having options.
+      client.listOptionContracts = async () => ({ contracts: [] });
+
+      await expect(subject.save('AMZN')).rejects.toThrow(/Refusing to overwrite a swept chain with an empty one/);
+      expect(readFileSync(resolve(cachePath, 'AMZN.json'), 'utf8')).toBe(before);
+    });
+
+    it('still writes one when there was nothing there to lose', async () => {
+      const client = fake();
+      client.listOptionContracts = async () => ({ contracts: [] });
+      const { helper: subject, cachePath } = helper(client);
+
+      await subject.save('AMZN');
+
+      const written = JSON.parse(readFileSync(resolve(cachePath, 'AMZN.json'), 'utf8'));
+      expect(written.availabilities).toEqual([]);
     });
   });
 
@@ -463,6 +516,63 @@ describe('OptionsAvailabilitiesHelperImpl', () => {
       const daily = client.requests.filter((request) => request.timespan === 'day');
       expect(daily).toHaveLength(1);
       expect(daily[0].symbols).toEqual([symbols[2]]);
+    });
+
+    it('asks again about an expired contract whose daily batch failed, rather than settling it as never printed', async () => {
+      const { client, symbols } = expired(201, 1);
+      const { helper: subject } = helper(client);
+      const alone = symbols[200]; // the second daily batch is this contract on its own
+      client.failOn = [alone];
+
+      await subject.save('AMZN');
+
+      client.failOn = [];
+      client.requests.length = 0;
+      await subject.save('AMZN');
+
+      // Expired and with no first print, it looks exactly like a contract that never
+      // traded — and settling on that would drop it from every later run because one
+      // request met a rate limit.
+      const daily = client.requests.filter((request) => request.timespan === 'day');
+      expect(daily).toHaveLength(1);
+      expect(daily[0].symbols).toEqual([alone]);
+    });
+
+    it('asks again about an expired contract whose minute sweep failed, rather than settling it as never printed', async () => {
+      const { client, symbols } = expired(5, 5);
+      const { helper: subject } = helper(client);
+      client.failOn = [marketHourByOffset(2)]; // the third day's minute request
+
+      await subject.save('AMZN');
+
+      client.failOn = [];
+      client.requests.length = 0;
+      await subject.save('AMZN');
+
+      // The daily pass found its debut, so this one is known to have printed; only the
+      // minute is missing, which is a failed request rather than an answer.
+      const daily = client.requests.filter((request) => request.timespan === 'day');
+      expect(daily).toHaveLength(1);
+      expect(daily[0].symbols).toEqual([symbols[2]]);
+    });
+
+    it('settles an expired contract the sweep did answer about, rather than asking every run', async () => {
+      const client = new FakeClient(new Map(), new Map()); // nothing ever printed
+      client.listOptionContracts = async (request: { status?: string }) => {
+        client.listings += 1;
+        return request.status === 'inactive' ? { contracts: [{ S: 'AMZN240419C00100000' }] } : { contracts: [] };
+      };
+      const { helper: subject, cachePath } = helper(client);
+
+      await subject.save('AMZN');
+      client.requests.length = 0;
+      await subject.save('AMZN');
+
+      // A sweep asked and was told there are no bars, which for an expired contract is the
+      // final answer. The marker is what separates that from a request that never landed.
+      const written = JSON.parse(readFileSync(resolve(cachePath, 'AMZN.json'), 'utf8'));
+      expect(written.availabilities[0].sweptAt).toBe(NOW);
+      expect(client.requests).toHaveLength(0);
     });
 
     it('refuses to write a cache when every request failed, rather than recording a chain that never traded', async () => {

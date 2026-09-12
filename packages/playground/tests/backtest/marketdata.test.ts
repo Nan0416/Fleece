@@ -1,7 +1,8 @@
-import { marketHour, requireOccSymbol, type AlpacaMarketDataClient, type Bar, type OccSymbol, type StockSplit } from '@fleece/marketdata';
+import { marketHour, marketHoursCoverage, requireOccSymbol, type AlpacaMarketDataClient, type Bar, type OccSymbol, type StockSplit } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
 
-import { BacktestMarketDataImpl } from '../../src/backtest/marketdata';
+import { BacktestMarketDataImpl, type BacktestMarketDataView } from '../../src/backtest/marketdata';
+import type { TimeSubscriber } from '../../src/backtest/time';
 import type { OptionsAvailabilitiesHelper } from '../../src/utils/options-availabilities';
 
 const JAN_CALL_200 = requireOccSymbol('AMZN260116C00200000', 'build a fixture');
@@ -369,6 +370,19 @@ describe('BacktestMarketDataImpl', () => {
       expect(() => new BacktestMarketDataImpl(client, RUN_FROM, RUN_FROM, availabilities())).toThrow(/no window to load/);
       expect(() => new BacktestMarketDataImpl(client, RUN_FROM, RUN_TO, availabilities(), -1)).toThrow(/must not be negative/);
     });
+
+    it('refuses a run the market-hours table does not cover, rather than answering with an empty market', () => {
+      const client = new FakeClient([], [dailyBar(DAY, 10)]) as unknown as AlpacaMarketDataClient;
+      const pastTheTable = at(marketHoursCoverage.to, '16:00:00') + 24 * 60 * 60_000;
+      const beforeTheTable = at(marketHoursCoverage.from, '09:30:00');
+
+      // `marketHour` answers undefined outside the table rather than throwing, so every
+      // daily bar past the end would go undated and be dropped: a symbol that looks as
+      // though it stopped trading, on a run that reports a number anyway.
+      expect(() => new BacktestMarketDataImpl(client, pastTheTable - 60_000, pastTheTable, availabilities())).toThrow(/market-hours table covers/);
+      // And at the near end, where it is the buffer rather than the run that reaches out.
+      expect(() => new BacktestMarketDataImpl(client, beforeTheTable, RUN_TO, availabilities(), BUFFER_MS)).toThrow(/market-hours table covers/);
+    });
   });
 
   describe('before the clock starts', () => {
@@ -376,7 +390,34 @@ describe('BacktestMarketDataImpl', () => {
       const subject = build(new FakeClient());
 
       await expect(subject.minuteBars({ symbol: 'AMZN', from: DAY })).rejects.toThrow(/clock has not started/);
+      await expect(subject.dailyBars({ symbol: 'AMZN', from: DAY })).rejects.toThrow(/clock has not started/);
+      await expect(subject.optionMinuteBars({ symbol: JAN_CALL_200.symbol, from: DAY })).rejects.toThrow(/clock has not started/);
+      await expect(subject.optionDailyBars({ symbol: JAN_CALL_200.symbol, from: DAY })).rejects.toThrow(/clock has not started/);
       await expect(subject.listActiveOptionContracts({ underlying: 'AMZN' })).rejects.toThrow(/clock has not started/);
+    });
+
+    it('says the clock has not started rather than answering that a symbol never split', async () => {
+      const client = new FakeClient([], [], [SPLIT]);
+      const subject = build(client);
+
+      // Not an empty list: nothing has executed before the clock starts, so a caller would
+      // read "AMZN never split" and price an unadjusted series as though it were adjusted.
+      await expect(subject.stockSplits({ symbol: 'AMZN' })).rejects.toThrow(/clock has not started/);
+      // And it refuses before spending the round trip, not after.
+      expect(client.requests).toHaveLength(0);
+    });
+
+    it('leaves the clock off the view a strategy is handed', () => {
+      const view: BacktestMarketDataView = build(new FakeClient());
+
+      // @ts-expect-error `init` and `forward` belong to `BacktestMarketData`, which the
+      // driver holds, and not to the view a strategy is given. A strategy that could step
+      // only the market data would be reading bars the run has not reached, and the number
+      // it reported would look entirely plausible. `BacktestPortfolio` narrows the account
+      // for the same reason.
+      const stepping: TimeSubscriber = view;
+
+      expect(stepping.timeSubscriberId).toBeDefined();
     });
 
     it('refuses to be stepped to an instant it is already on or past', async () => {

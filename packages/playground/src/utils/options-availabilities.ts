@@ -43,6 +43,16 @@ export interface OptionContractAvailability {
   readonly firstTradingMinuteTimestamp?: number;
   /** The regular close on expiration day, which is when the contract stops trading. */
   readonly expirationTimestamp: number;
+  /**
+   * When a sweep last got an *answer* about this contract, and absent when every request
+   * that would have answered it failed.
+   *
+   * This is what tells "swept, and it never printed" apart from "never successfully
+   * asked". Both look like a missing `firstTradingMinuteTimestamp`, and only the first is
+   * safe to settle on once the contract has expired: settling on the second would drop the
+   * contract from every later run because one request met a rate limit.
+   */
+  readonly sweptAt?: number;
 }
 
 export interface OptionContractAvailabilities {
@@ -111,6 +121,7 @@ function toAvailability(value: unknown, field: string): OptionContractAvailabili
     symbol: assertNonEmptyString(record.symbol, `${field}.symbol`),
     firstTradingMinuteTimestamp: assertOptionalInteger(record.firstTradingMinuteTimestamp, `${field}.firstTradingMinuteTimestamp`),
     expirationTimestamp: assertNumber(record.expirationTimestamp, `${field}.expirationTimestamp`),
+    sweptAt: assertOptionalInteger(record.sweptAt, `${field}.sweptAt`),
   };
 }
 
@@ -159,12 +170,30 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     } catch (error: unknown) {
       logger.warn(`Sweeping ${ticker} from scratch: ${String(error)}`);
     }
+
+    // An empty listing is not an empty chain: Alpaca serving an empty page, or an upstream
+    // fault normalised into one, would otherwise write a file with nothing in it over a
+    // sweep that cost hundreds of requests, and every option strategy would then silently
+    // trade nothing. The same reasoning as `requireSomethingSucceeded`, one pass earlier.
+    if (listed.length === 0 && previous !== undefined && previous.availabilities.length > 0) {
+      throw new Error(
+        `${ticker} listed no contracts, but ${this.file(ticker)} holds ${previous.availabilities.length}. Refusing to overwrite a swept chain with an empty one. Delete the file if ${ticker} really has no options.`,
+      );
+    }
+
     const cached = new Map((previous?.availabilities ?? []).map((entry) => [entry.symbol, entry]));
     const settled: OptionContractAvailability[] = [];
     const pending: OccSymbol[] = [];
     for (const contract of listed) {
       const known = cached.get(contract.symbol);
-      if (known !== undefined && (known.firstTradingMinuteTimestamp !== undefined || known.expirationTimestamp < refreshedAt)) {
+      // A first print cannot change, so it settles on its own. Expiry only settles an
+      // answer a sweep actually got: `sweptAt` absent means nothing was ever learned about
+      // this contract, and treating that as "never printed" is how one 429 deletes a
+      // strike from every later run. A cache written before `sweptAt` existed has none, so
+      // its unprinted contracts are asked about once more rather than trusted.
+      const settledByPrint = known?.firstTradingMinuteTimestamp !== undefined;
+      const settledByExpiry = known?.sweptAt !== undefined && known.expirationTimestamp < refreshedAt;
+      if (known !== undefined && (settledByPrint || settledByExpiry)) {
         settled.push(known);
       } else {
         pending.push(contract);
@@ -172,7 +201,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     }
     logger.info(`${ticker}: ${settled.length} already settled, ${pending.length} to sweep.`);
 
-    const firstDates = await this.sweepFirstTradingDates(pending);
+    const { firstDates, answered } = await this.sweepFirstTradingDates(pending);
     const firstMinutes = await this.sweepFirstTradingMinutes(firstDates);
 
     const availabilities = [...settled];
@@ -184,10 +213,17 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
         logger.warn(`${contract.symbol} expires ${contract.expiration}, which the market-hours table does not cover. Left out.`);
         continue;
       }
+      // Answered means a sweep reached a conclusion about this contract: the daily pass
+      // came back, and either it found no day at all — so the contract never printed — or
+      // the minute pass dated the day it did find. Anything else is a request that failed,
+      // and goes back in the file unmarked so the next run asks again.
+      const firstMinute = firstMinutes.get(contract.symbol);
+      const resolved = answered.has(contract.symbol) && (!firstDates.has(contract.symbol) || firstMinute !== undefined);
       availabilities.push({
         symbol: contract.symbol,
-        firstTradingMinuteTimestamp: firstMinutes.get(contract.symbol),
+        firstTradingMinuteTimestamp: firstMinute,
         expirationTimestamp: session.closeAt,
+        sweptAt: resolved ? refreshedAt : undefined,
       });
     }
 
@@ -240,10 +276,15 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     return [...bySymbol.values()];
   }
 
-  /** The day each contract first printed on, from one daily sweep of the whole chain. */
-  private async sweepFirstTradingDates(contracts: ReadonlyArray<OccSymbol>): Promise<ReadonlyMap<string, string>> {
+  /**
+   * The day each contract first printed on, from one daily sweep of the whole chain, along
+   * with which contracts the sweep actually got an answer about — a batch that failed
+   * leaves its contracts out of both, and an unanswered contract is never settled.
+   */
+  private async sweepFirstTradingDates(contracts: ReadonlyArray<OccSymbol>): Promise<{ firstDates: ReadonlyMap<string, string>; answered: ReadonlySet<string> }> {
     const today = easternClock.date(this.now());
     const firstDates = new Map<string, string>();
+    const answered = new Set<string>();
 
     const batches: Array<ReadonlyArray<OccSymbol>> = [];
     for (let first = 0; first < contracts.length; first += SWEEP_BATCH) {
@@ -268,6 +309,12 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
             firstDates.set(symbol, easternClock.date(at));
           }
         }
+        // The whole batch, not just the contracts that printed: a contract the response
+        // has no bars for was asked about and has its answer, which is that it never
+        // traded on any day.
+        for (const contract of batch) {
+          answered.add(contract.symbol);
+        }
       } catch (error: unknown) {
         // Left unresolved rather than fatal. An unresolved contract is never settled, so
         // the next run asks about it again — where losing the whole sweep to one bad
@@ -280,7 +327,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     });
 
     requireSomethingSucceeded(failed, batches.length, 'daily');
-    return firstDates;
+    return { firstDates, answered };
   }
 
   /**

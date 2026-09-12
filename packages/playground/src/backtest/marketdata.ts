@@ -1,6 +1,7 @@
 import {
   adjustPrice,
   marketHour,
+  marketHoursCoverage,
   splitRatios,
   type AlpacaMarketDataClient,
   type Bar,
@@ -67,7 +68,16 @@ export interface OptionDailyBarsRequest {
   readonly to?: DateOrTimestamp;
 }
 
-export interface BacktestMarketData extends TimeSubscriber {
+/**
+ * The read view, for anything that consumes market data rather than drives the run.
+ *
+ * Handing a strategy this instead of `BacktestMarketData` is what stops it calling
+ * `forward` and stepping the data past the clock the account and every other subscriber
+ * are still on. That is lookahead — bars the run has not reached, admitted by `asOfNow`
+ * because the data's own clock says they are finished — and the numbers it produces look
+ * entirely plausible. `BacktestPortfolio` narrows the account for the same reason.
+ */
+export interface BacktestMarketDataView {
   minuteBars(request: MinuteBarsRequest): Promise<BarsResponse>;
   dailyBars(request: DailyBarsRequest): Promise<BarsResponse>;
   stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
@@ -75,6 +85,9 @@ export interface BacktestMarketData extends TimeSubscriber {
   optionDailyBars(request: OptionDailyBarsRequest): Promise<OptionBarsResponse>;
   listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse>;
 }
+
+/** The driving view: the clock on top of the read one, held by whoever owns the run. */
+export type BacktestMarketData = BacktestMarketDataView & TimeSubscriber;
 
 /**
  * The instant a bar is finished, and so the earliest a strategy may have seen its close.
@@ -146,6 +159,15 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
     this.loadToDate = easternClock.date(endingTimestamp);
     // A date widens to its whole Eastern day, so this is what the loaded window really opens at.
     this.loadFrom = easternClock.timestamp(this.loadFromDate, '00:00:00');
+    // Outside the table `marketHour` answers `undefined` for every date rather than
+    // throwing, so `endOfBar` dates no daily bar, `asOfNow` drops every one of them, and
+    // the run reads as a symbol that stopped trading. The window is fixed for the life of
+    // the run, so this is answerable here rather than as a silence thousands of steps in.
+    if (this.loadFromDate < marketHoursCoverage.from || this.loadToDate > marketHoursCoverage.to) {
+      throw new Error(
+        `The run loads ${this.loadFromDate} to ${this.loadToDate}, outside the ${marketHoursCoverage.from} to ${marketHoursCoverage.to} the market-hours table covers. Refresh packages/marketdata/src/market-hours-data.json, or move the run inside it.`,
+      );
+    }
   }
 
   async init(timestamp: number): Promise<void> {
@@ -173,6 +195,10 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
 
   /** Only the splits that have already executed. One still ahead has not moved a price yet. */
   async stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse> {
+    // Before the clock starts nothing has executed, so this would answer "never split" —
+    // and a caller that believes it prices an unadjusted series as though it were adjusted.
+    // The guard runs before the fetch, so asking too early costs no round trip either.
+    this.requireStarted();
     const executed = (await this.splits(request.symbol)).filter((split) => this.hasExecuted(split));
     return { splits: request.executionDate === undefined ? executed : executed.filter((split) => split.executionDate === request.executionDate) };
   }

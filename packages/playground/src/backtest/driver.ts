@@ -1,10 +1,10 @@
 import { BacktestAccount, BacktestPortfolio, Trade } from './account';
-import { BacktestMarketData } from './marketdata';
+import { BacktestMarketData, BacktestMarketDataView } from './marketdata';
 import { Time } from './time';
 
 export interface Strategy {
   readonly strategyId: string;
-  evaluate(timestamp: number, data: BacktestMarketData, portfolio: BacktestPortfolio): Promise<ReadonlyArray<Trade> | undefined>;
+  evaluate(timestamp: number, data: BacktestMarketDataView, portfolio: BacktestPortfolio): Promise<ReadonlyArray<Trade> | undefined>;
 }
 
 export interface BacktestDriverProps {
@@ -52,7 +52,7 @@ export class BacktestDriver {
       const strategy = this.strategies[i];
       const trades = (await strategy.evaluate(this.time.timestamp, this.marketData, this.account)) ?? [];
       for (let j = 0; j < trades.length; j++) {
-        await this.account.record(trades[j]);
+        this.account.record(trades[j]);
       }
     }
   }
