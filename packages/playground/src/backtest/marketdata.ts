@@ -9,14 +9,12 @@ import {
   type DateOrTimestamp,
   type MinuteBarsRequest,
   type OccSymbol,
-  type OptionBarsRequest,
   type OptionBarsResponse,
   type OptionType,
   type SplitRatio,
   type StockSplit,
   type StockSplitsRequest,
   type StockSplitsResponse,
-  type Timespan,
 } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
 import { nanoid } from 'nanoid';
@@ -25,8 +23,10 @@ import type { OptionsAvailabilitiesHelper } from '../utils/options-availabilitie
 import type { TimeSubscriber } from './time';
 
 const MS_PER_MINUTE = 60_000;
-const MS_PER_HOUR = 60 * MS_PER_MINUTE;
-const MS_PER_DAY = 24 * MS_PER_HOUR;
+const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
+
+/** The two shapes a backtest reads. Both have an end this can date, which is why. */
+type BarSpan = 'minute' | 'day';
 
 /**
  * How far before the backtest's first instant to load, so an indicator has something to
@@ -51,11 +51,28 @@ export interface ListActiveOptionContractsResponse {
   readonly contracts: ReadonlyArray<OccSymbol>;
 }
 
+export interface OptionMinuteBarsRequest {
+  /** The OCC contract symbol. */
+  readonly symbol: string;
+  readonly from: DateOrTimestamp;
+  /** Defaults to the clock. */
+  readonly to?: DateOrTimestamp;
+}
+
+export interface OptionDailyBarsRequest {
+  /** The OCC contract symbol. */
+  readonly symbol: string;
+  readonly from: DateOrTimestamp;
+  /** Defaults to the clock. */
+  readonly to?: DateOrTimestamp;
+}
+
 export interface BacktestMarketData extends TimeSubscriber {
   minuteBars(request: MinuteBarsRequest): Promise<BarsResponse>;
   dailyBars(request: DailyBarsRequest): Promise<BarsResponse>;
   stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
-  optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse>;
+  optionMinuteBars(request: OptionMinuteBarsRequest): Promise<OptionBarsResponse>;
+  optionDailyBars(request: OptionDailyBarsRequest): Promise<OptionBarsResponse>;
   listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse>;
 }
 
@@ -68,25 +85,8 @@ export interface BacktestMarketData extends TimeSubscriber {
  * look profitable. A daily bar ends at its own session close — 16:00, or 13:00 on a half
  * day, which no rule derives and the market-hours table has.
  */
-function endOfBar(bar: Bar, timespan: Timespan, multiplier: number): number | undefined {
-  switch (timespan) {
-    case 'minute':
-      return bar.t + multiplier * MS_PER_MINUTE;
-    case 'hour':
-      return bar.t + multiplier * MS_PER_HOUR;
-    case 'day':
-      return marketHour(bar.t)?.closeAt;
-    default:
-      return undefined;
-  }
-}
-
-function requireDatableTimespan(timespan: Timespan, what: string): void {
-  if (timespan !== 'minute' && timespan !== 'hour' && timespan !== 'day') {
-    throw new Error(
-      `A backtest cannot serve ${timespan} ${what}: there is no saying when such a bar finished, and a bar admitted early is a strategy reading the future. Ask for minute, hour or day.`,
-    );
-  }
+function endOfBar(bar: Bar, span: BarSpan): number | undefined {
+  return span === 'minute' ? bar.t + MS_PER_MINUTE : marketHour(bar.t)?.closeAt;
 }
 
 /** A date names its whole Eastern day; a timestamp is the instant itself. */
@@ -150,7 +150,6 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
 
   async init(timestamp: number): Promise<void> {
     this.currentTimestamp = timestamp;
-    // todo: preload data?
   }
 
   async forward(timestamp: number): Promise<void> {
@@ -162,14 +161,14 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
 
   async minuteBars(request: MinuteBarsRequest): Promise<BarsResponse> {
     const key = `minute|${request.symbol}|${request.marketHoursOnly ?? 'default'}`;
-    const bars = await this.loadedBars(key, request.from, 'minute', async (from, to) => await this.client.minuteBars({ ...request, from, to, adjustForSplit: false }));
-    return { bars: await this.asOfNow(request.symbol, bars, 'minute', 1, request.from, request.to, request.adjustForSplit) };
+    const bars = await this.loadedBars(key, request.from, async (from, to) => await this.client.minuteBars({ ...request, from, to, adjustForSplit: false }));
+    return { bars: await this.asOfNow(request.symbol, bars, 'minute', request.from, request.to, request.adjustForSplit) };
   }
 
   async dailyBars(request: DailyBarsRequest): Promise<BarsResponse> {
     const key = `day|${request.symbol}`;
-    const bars = await this.loadedBars(key, request.from, 'day', async (from, to) => await this.client.dailyBars({ ...request, from, to, adjustForSplit: false }));
-    return { bars: await this.asOfNow(request.symbol, bars, 'day', 1, request.from, request.to, request.adjustForSplit) };
+    const bars = await this.loadedBars(key, request.from, async (from, to) => await this.client.dailyBars({ ...request, from, to, adjustForSplit: false }));
+    return { bars: await this.asOfNow(request.symbol, bars, 'day', request.from, request.to, request.adjustForSplit) };
   }
 
   /** Only the splits that have already executed. One still ahead has not moved a price yet. */
@@ -179,15 +178,16 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
   }
 
   /**
-   * No split adjustment, and not by omission: a split re-issues an option under a new
-   * symbol with a new strike and multiplier rather than restating its history, which is
-   * why `OptionBarsRequest` carries no `adjustForSplit` to honour.
+   * Neither of these adjusts for a split, and not by omission: a split re-issues an option
+   * under a new symbol with a new strike and multiplier rather than restating its history,
+   * so the prints under the old symbol stand as they printed.
    */
-  async optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse> {
-    requireDatableTimespan(request.timespan, 'option bars');
-    const key = `option|${request.symbol}|${request.timespan}|${request.multiplier}`;
-    const bars = await this.loadedBars(key, request.from, request.timespan, async (from, to) => await this.client.optionBars({ ...request, from, to }));
-    return { bars: await this.asOfNow(request.symbol, bars, request.timespan, request.multiplier, request.from, request.to, false) };
+  async optionMinuteBars(request: OptionMinuteBarsRequest): Promise<OptionBarsResponse> {
+    return { bars: await this.optionBars(request, 'minute') };
+  }
+
+  async optionDailyBars(request: OptionDailyBarsRequest): Promise<OptionBarsResponse> {
+    return { bars: await this.optionBars(request, 'day') };
   }
 
   async listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse> {
@@ -210,8 +210,7 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
    * clock — and what comes back beyond the clock is not visible anyway: `asOfNow` decides
    * that, not the request.
    */
-  private loadedBars(key: string, from: DateOrTimestamp, timespan: Timespan, fetch: (from: string, to: string) => Promise<BarsResponse>): Promise<ReadonlyArray<Bar>> {
-    requireDatableTimespan(timespan, 'bars');
+  private loadedBars(key: string, from: DateOrTimestamp, fetch: (from: string, to: string) => Promise<BarsResponse>): Promise<ReadonlyArray<Bar>> {
     if (windowStart(from) < this.loadFrom) {
       throw new Error(
         `Bars were asked for from ${easternClock.datetime(windowStart(from))}, before the ${this.loadFromDate} this run loaded from. Widen historyBufferMs: answering from what happens to be loaded is a short series, not a short answer.`,
@@ -232,11 +231,16 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
     return loading;
   }
 
+  private async optionBars(request: OptionMinuteBarsRequest, span: BarSpan): Promise<ReadonlyArray<Bar>> {
+    const key = `option|${span}|${request.symbol}`;
+    const bars = await this.loadedBars(key, request.from, async (from, to) => await this.client.optionBars({ symbol: request.symbol, from, to, multiplier: 1, timespan: span }));
+    return await this.asOfNow(request.symbol, bars, span, request.from, request.to, false);
+  }
+
   private async asOfNow(
     symbol: string,
     bars: ReadonlyArray<Bar>,
-    timespan: Timespan,
-    multiplier: number,
+    span: BarSpan,
     from: DateOrTimestamp,
     to: DateOrTimestamp | undefined,
     adjustForSplit: boolean | undefined,
@@ -245,7 +249,7 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
     const start = windowStart(from);
     const end = windowEnd(to);
     const visible = bars.filter((bar) => {
-      const finished = endOfBar(bar, timespan, multiplier);
+      const finished = endOfBar(bar, span);
       return finished !== undefined && finished <= this.currentTimestamp && bar.t >= start && (end === undefined || bar.t <= end);
     });
     return adjustForSplit === true ? await this.adjusted(symbol, visible) : visible;

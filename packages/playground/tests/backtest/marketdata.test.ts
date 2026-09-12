@@ -33,6 +33,7 @@ interface Recorded {
   readonly from: unknown;
   readonly to: unknown;
   readonly adjustForSplit?: boolean;
+  readonly timespan?: string;
 }
 
 class FakeClient {
@@ -55,8 +56,8 @@ class FakeClient {
     return { bars: this.days };
   }
 
-  async optionBars(request: { from: unknown; to: unknown }): Promise<unknown> {
-    this.requests.push({ kind: 'option', from: request.from, to: request.to });
+  async optionBars(request: { from: unknown; to: unknown; timespan: string }): Promise<unknown> {
+    this.requests.push({ kind: 'option', from: request.from, to: request.to, timespan: request.timespan });
     return { bars: this.options };
   }
 
@@ -247,34 +248,49 @@ describe('BacktestMarketDataImpl', () => {
   describe('optionBars', () => {
     const bars = [minuteBar(DAY, '09:30:00', 3.5), minuteBar(DAY, '09:31:00', 3.6)];
 
-    it('leaves out the bar still in progress', async () => {
+    it('leaves out the minute bar still in progress', async () => {
       const subject = await marketData(new FakeClient([], [], [], bars), at(DAY, '09:31:00'));
 
-      const { bars: seen } = await subject.optionBars({ symbol: JAN_CALL_200.symbol, from: DAY, to: DAY, multiplier: 1, timespan: 'minute' });
+      const { bars: seen } = await subject.optionMinuteBars({ symbol: JAN_CALL_200.symbol, from: DAY });
 
       expect(seen.map((bar) => bar.c)).toEqual([3.5]);
     });
 
-    it('counts a multi-minute bar as finished only once every minute of it has passed', async () => {
-      const fiveMinute = [{ ...minuteBar(DAY, '09:30:00', 3.5) }];
-      const tooEarly = await marketData(new FakeClient([], [], [], fiveMinute), at(DAY, '09:34:00'));
-      const onTime = await marketData(new FakeClient([], [], [], fiveMinute), at(DAY, '09:35:00'));
+    it('leaves out a daily bar whose session has not closed', async () => {
+      const days = [dailyBar(DAY, 3.5)];
+      const during = await marketData(new FakeClient([], [], [], days), at(DAY, '15:59:59'));
+      const afterClose = await marketData(new FakeClient([], [], [], days), marketHour(DAY)?.closeAt ?? 0);
 
-      const request = { symbol: JAN_CALL_200.symbol, from: DAY, to: DAY, multiplier: 5, timespan: 'minute' } as const;
-      expect((await tooEarly.optionBars(request)).bars).toEqual([]);
-      expect((await onTime.optionBars(request)).bars).toHaveLength(1);
+      expect((await during.optionDailyBars({ symbol: JAN_CALL_200.symbol, from: DAY })).bars).toEqual([]);
+      expect((await afterClose.optionDailyBars({ symbol: JAN_CALL_200.symbol, from: DAY })).bars).toHaveLength(1);
     });
 
-    it('refuses a timespan whose end it cannot date, rather than guessing', async () => {
-      const subject = await marketData(new FakeClient(), at(DAY, '12:00:00'));
+    it('asks the client for the span the method names, one contract at a time', async () => {
+      const client = new FakeClient([], [], [], bars);
+      const subject = await marketData(client, at(DAY, '16:00:00'));
 
-      await expect(subject.optionBars({ symbol: JAN_CALL_200.symbol, from: DAY, to: DAY, multiplier: 1, timespan: 'week' })).rejects.toThrow(/cannot serve week option bars/);
+      await subject.optionMinuteBars({ symbol: JAN_CALL_200.symbol, from: DAY });
+      await subject.optionDailyBars({ symbol: JAN_CALL_200.symbol, from: DAY });
+
+      expect(client.requests.filter((request) => request.kind === 'option').map((request) => request.timespan)).toEqual(['minute', 'day']);
+    });
+
+    it('keeps minute and daily bars for one contract apart rather than serving one for the other', async () => {
+      const client = new FakeClient([], [], [], bars);
+      const subject = await marketData(client, at(DAY, '16:00:00'));
+
+      await subject.optionMinuteBars({ symbol: JAN_CALL_200.symbol, from: DAY });
+      await subject.optionMinuteBars({ symbol: JAN_CALL_200.symbol, from: DAY });
+      await subject.optionDailyBars({ symbol: JAN_CALL_200.symbol, from: DAY });
+
+      // One fetch per span, not one per call and not one shared between the two.
+      expect(client.requests.filter((request) => request.kind === 'option')).toHaveLength(2);
     });
 
     it('never adjusts for a split, because a split re-issues a contract rather than restating it', async () => {
       const subject = await marketData(new FakeClient([], [], [SPLIT], bars), at(AFTER_SPLIT, '12:00:00'));
 
-      const { bars: seen } = await subject.optionBars({ symbol: JAN_CALL_200.symbol, from: DAY, to: AFTER_SPLIT, multiplier: 1, timespan: 'minute' });
+      const { bars: seen } = await subject.optionMinuteBars({ symbol: JAN_CALL_200.symbol, from: DAY });
 
       expect(seen.map((bar) => bar.c)).toEqual([3.5, 3.6]);
     });
