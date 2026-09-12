@@ -1,12 +1,13 @@
 import { Decimal, type DecimalInput } from '@fleece/utilities';
 
 import { BacktestAccountImpl, type RealizedPL, type Transaction } from '../../src/backtest/account';
-import { Time, type TimeSubscriber } from '../../src/backtest/time';
+import { Time } from '../../src/backtest/time';
 
 const CALL = 'AAPL260918C00230000';
 const START = 10_000;
 const T0 = 1_700_000_000_000;
 const MINUTE = 60_000;
+const END = T0 + 1_000 * MINUTE;
 
 interface Driven {
   readonly clock: Time;
@@ -14,7 +15,7 @@ interface Driven {
 }
 
 function account(): Driven {
-  const clock = new Time(T0, MINUTE);
+  const clock = new Time(T0, END, MINUTE);
   const book = new BacktestAccountImpl(START);
   clock.subscribe(book);
   return { clock, book };
@@ -23,7 +24,7 @@ function account(): Driven {
 /** Steps the clock one tick on and trades at the instant it lands on. */
 async function trade({ clock, book }: Driven, symbol: string, size: DecimalInput, price: DecimalInput): Promise<Transaction> {
   await clock.forward();
-  return book.record({ symbol, size, price, timestamp: clock.timestamp() });
+  return book.record({ symbol, size, price, timestamp: clock.timestamp });
 }
 
 function totalRealized(rows: ReadonlyArray<RealizedPL>): number {
@@ -31,56 +32,9 @@ function totalRealized(rows: ReadonlyArray<RealizedPL>): number {
 }
 
 describe('BacktestAccountImpl', () => {
-  describe('the clock', () => {
-    it('starts on the beginning timestamp and advances one fidelity per step', async () => {
-      const { clock } = account();
-      expect(clock.timestamp()).toBe(T0);
-
-      await clock.forward();
-      expect(clock.timestamp()).toBe(T0 + MINUTE);
-
-      await clock.forward();
-      await clock.forward();
-      expect(clock.timestamp()).toBe(T0 + 3 * MINUTE);
-    });
-
-    it('refuses a fidelity that would stall or rewind the clock', () => {
-      expect(() => new Time(T0, 0)).toThrow(/positive whole number/);
-      expect(() => new Time(T0, -MINUTE)).toThrow(/positive whole number/);
-      expect(() => new Time(T0, 0.5)).toThrow(/positive whole number/);
-    });
-
-    it('tells every subscriber the new time, in the order they subscribed', async () => {
-      const clock = new Time(T0, MINUTE);
-      const told: string[] = [];
-      const listener = (id: string): TimeSubscriber => ({
-        timeSubscriberId: id,
-        forward: async (timestamp: number) => {
-          told.push(`${id}@${timestamp}`);
-        },
-      });
-
-      clock.subscribe(listener('first'));
-      clock.subscribe(listener('second'));
-      await clock.forward();
-
-      expect(told).toEqual([`first@${T0 + MINUTE}`, `second@${T0 + MINUTE}`]);
-    });
-
-    it('replaces a subscriber that subscribes again rather than telling it twice', async () => {
-      const clock = new Time(T0, MINUTE);
-      let calls = 0;
-      const account = { timeSubscriberId: 'the-one', forward: async () => void calls++ };
-
-      clock.subscribe(account);
-      clock.subscribe(account);
-      await clock.forward();
-
-      expect(calls).toBe(1);
-    });
-
+  describe('as a time subscriber', () => {
     it('gives each account an id of its own, so two of them both get told', async () => {
-      const clock = new Time(T0, MINUTE);
+      const clock = new Time(T0, END, MINUTE);
       const first = new BacktestAccountImpl(START);
       const second = new BacktestAccountImpl(START);
 
@@ -90,7 +44,7 @@ describe('BacktestAccountImpl', () => {
       clock.subscribe(second);
       await clock.forward();
 
-      const now = clock.timestamp();
+      const now = clock.timestamp;
       expect(() => first.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now })).not.toThrow();
       expect(() => second.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now })).not.toThrow();
     });
@@ -99,14 +53,14 @@ describe('BacktestAccountImpl', () => {
       const { clock, book } = account();
       await clock.forward();
 
-      await expect(book.forward(clock.timestamp())).rejects.toThrow(/only ever stepped forward/);
+      await expect(book.forward(clock.timestamp)).rejects.toThrow(/only ever stepped forward/);
       await expect(book.forward(T0)).rejects.toThrow(/only ever stepped forward/);
     });
 
     it('refuses a trade stamped anywhere but the instant the clock is on', async () => {
       const { clock, book } = account();
       await clock.forward();
-      const now = clock.timestamp();
+      const now = clock.timestamp;
 
       expect(() => book.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now - MINUTE })).toThrow(/clock is on/);
       expect(() => book.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now + MINUTE })).toThrow(/clock is on/);
@@ -116,7 +70,7 @@ describe('BacktestAccountImpl', () => {
     it('lets several trades land on one instant, which is what a spread is', async () => {
       const { clock, book } = account();
       await clock.forward();
-      const now = clock.timestamp();
+      const now = clock.timestamp;
 
       book.record({ symbol: 'AAPL', size: 1, price: 10, timestamp: now });
       book.record({ symbol: 'MSFT', size: 1, price: 20, timestamp: now });

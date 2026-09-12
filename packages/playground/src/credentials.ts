@@ -9,6 +9,7 @@
  * | `ALPACA_PAPER_API_KEY` / `ALPACA_PAPER_SECRET_KEY` | The paper account, and the market data the chart writers read |
  * | `ALPACA_LIVE_ACCOUNT_ID` | The live account's Alpaca account id |
  * | `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_SECRET_KEY` | The live account |
+ * | `MARKETDATA_CACHE_PATH` | Where sweeps of Alpaca's market data are kept between runs |
  *
  * A script names its account by calling one of these, so no environment variable can move
  * one from paper to live.
@@ -19,9 +20,12 @@ import { ALPACA_REST_LIVE_URL, ALPACA_REST_PAPER_URL, ALPACA_WS_LIVE_URL, ALPACA
 import { getenv } from '@fleece/utilities';
 import { config as loadEnv } from 'dotenv';
 
-// `dist/` at runtime, so three levels up is the repo root. `dotenv` does not throw when
-// the file is absent, so importing this module is safe with no `.env` at all.
-loadEnv({ path: resolve(__dirname, '../../..', '.env'), quiet: true });
+/** `dist/` at runtime, so three levels up is the repo root. */
+const REPO_ROOT = resolve(__dirname, '../../..');
+
+// `dotenv` does not throw when the file is absent, so importing this module is safe with
+// no `.env` at all.
+loadEnv({ path: resolve(REPO_ROOT, '.env'), quiet: true });
 
 export interface AccountInfo {
   readonly accountId: string;
@@ -72,4 +76,8 @@ export function marketDataKeys(): { readonly apiKey: string; readonly secretKey:
     apiKey: credential('ALPACA_PAPER_API_KEY', 'paper'),
     secretKey: credential('ALPACA_PAPER_SECRET_KEY', 'paper'),
   };
+}
+
+export function getCachePath(): string {
+  return getenv('MARKETDATA_CACHE_PATH');
 }

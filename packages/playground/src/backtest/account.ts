@@ -122,7 +122,11 @@ export class BacktestAccountImpl implements BacktestAccount {
     this.symbolToLots = new Map();
     this.symbolToTransactions = new Map();
 
-    this.timeSubscriberId = nanoid();
+    this.timeSubscriberId = 'account' + nanoid();
+  }
+
+  async init(timestamp: number) {
+    this.currentTimestamp = timestamp;
   }
 
   async forward(timestamp: number): Promise<void> {

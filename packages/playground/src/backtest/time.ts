@@ -1,5 +1,6 @@
 export interface TimeSubscriber {
   readonly timeSubscriberId: string;
+  init(timestamp: number): Promise<void>;
   forward(timestamp: number): Promise<void>;
 }
 
@@ -22,6 +23,7 @@ export class Time {
 
   constructor(
     readonly beginningTimestamp: number,
+    readonly endingTimestamp: number,
     readonly timeFidelity: number,
   ) {
     // A fidelity that does not advance the clock makes `forward` a no-op, so a driver
@@ -31,20 +33,37 @@ export class Time {
     if (!Number.isInteger(timeFidelity) || timeFidelity <= 0) {
       throw new Error(`timeFidelity must be a positive whole number of milliseconds, got ${timeFidelity}. One minute is 60_000.`);
     }
+    // An end at or before the beginning takes no steps at all, and a run that visits no
+    // instant looks exactly like a strategy that chose never to trade.
+    if (endingTimestamp <= beginningTimestamp) {
+      throw new Error(`endingTimestamp ${endingTimestamp} is not after beginningTimestamp ${beginningTimestamp}, so the run would take no steps.`);
+    }
     this._timestamp = beginningTimestamp;
     this.subscribers = [];
   }
 
-  timestamp(): number {
+  get timestamp(): number {
     return this._timestamp;
   }
 
-  async forward(): Promise<void> {
-    this._timestamp += this.timeFidelity;
+  async init(): Promise<void> {
+    for (const subscriber of this.subscribers) {
+      await subscriber.init(this._timestamp);
+    }
+  }
+
+  /** False once the next step would pass `endingTimestamp`, which is what ends a run. */
+  async forward(): Promise<boolean> {
+    const next = this._timestamp + this.timeFidelity;
+    if (next > this.endingTimestamp) {
+      return false;
+    }
+    this._timestamp = next;
 
     for (const subscriber of this.subscribers) {
       await subscriber.forward(this._timestamp);
     }
+    return true;
   }
 
   /** Subscribing again under the same id replaces the earlier registration rather than doubling it. */

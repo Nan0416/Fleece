@@ -129,3 +129,7 @@ viz/.venv/
 # session per contract set — `packages/playground/data/` otherwise holds committed
 # fixtures, so the cache gets its own line rather than the directory.
 packages/playground/data/research/
+
+# The option availability sweep, one file per underlying. Derived and refetchable, but
+# expensive enough that it is kept between runs rather than rebuilt.
+packages/playground/data/options-availability/
