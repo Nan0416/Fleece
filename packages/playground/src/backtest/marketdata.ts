@@ -26,6 +26,14 @@ import type { TimeSubscriber } from './time';
 
 const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+/**
+ * How far before the backtest's first instant to load, so an indicator has something to
+ * warm up on. Thirty days covers a 20-day moving average on daily bars; a 200-day one
+ * wants nearer a year, and says so by throwing rather than by averaging what it found.
+ */
+const DEFAULT_HISTORY_BUFFER_MS = 30 * MS_PER_DAY;
 
 export interface ListActiveOptionContractsRequest {
   /** The underlying ticker, not a contract symbol. */
@@ -49,12 +57,6 @@ export interface BacktestMarketData extends TimeSubscriber {
   stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
   optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse>;
   listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse>;
-}
-
-/** One symbol's bars for a window, kept until the day they were fetched through is over. */
-interface CachedBars {
-  readonly throughDate: string;
-  readonly bars: ReadonlyArray<Bar>;
 }
 
 /**
@@ -87,8 +89,9 @@ function requireDatableTimespan(timespan: Timespan, what: string): void {
   }
 }
 
-function easternDate(value: DateOrTimestamp): string {
-  return typeof value === 'string' ? value : easternClock.date(value);
+/** A date names its whole Eastern day; a timestamp is the instant itself. */
+function windowStart(value: DateOrTimestamp): number {
+  return typeof value === 'number' ? value : easternClock.timestamp(value, '00:00:00');
 }
 
 /** A date names its whole Eastern day; a timestamp is the instant itself. */
@@ -116,15 +119,33 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
   readonly timeSubscriberId: string;
 
   private currentTimestamp: number;
-  private readonly barsByKey = new Map<string, CachedBars>();
+  private readonly barsByKey = new Map<string, Promise<ReadonlyArray<Bar>>>();
   private readonly splitsBySymbol = new Map<string, Promise<ReadonlyArray<StockSplit>>>();
+
+  /** The one window every bars request is served from, fixed for the life of the run. */
+  private readonly loadFromDate: string;
+  private readonly loadToDate: string;
+  private readonly loadFrom: number;
 
   constructor(
     private readonly client: AlpacaMarketDataClient,
+    beginningTimestamp: number,
+    endingTimestamp: number,
     private readonly optionsHelper: OptionsAvailabilitiesHelper,
+    historyBufferMs: number = DEFAULT_HISTORY_BUFFER_MS,
   ) {
+    if (endingTimestamp <= beginningTimestamp) {
+      throw new Error(`endingTimestamp ${endingTimestamp} is not after beginningTimestamp ${beginningTimestamp}, so there is no window to load.`);
+    }
+    if (historyBufferMs < 0) {
+      throw new Error(`historyBufferMs must not be negative, got ${historyBufferMs}. It is how far before the run to load, so an indicator has something to warm up on.`);
+    }
     this.timeSubscriberId = 'marketdata' + nanoid();
     this.currentTimestamp = 0;
+    this.loadFromDate = easternClock.date(beginningTimestamp - historyBufferMs);
+    this.loadToDate = easternClock.date(endingTimestamp);
+    // A date widens to its whole Eastern day, so this is what the loaded window really opens at.
+    this.loadFrom = easternClock.timestamp(this.loadFromDate, '00:00:00');
   }
 
   async init(timestamp: number): Promise<void> {
@@ -141,20 +162,14 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
 
   async minuteBars(request: MinuteBarsRequest): Promise<BarsResponse> {
     const key = `minute|${request.symbol}|${request.marketHoursOnly ?? 'default'}`;
-    const bars = await this.stockBars(
-      key,
-      request.symbol,
-      request.from,
-      'minute',
-      async (from, to) => await this.client.minuteBars({ ...request, from, to, adjustForSplit: false }),
-    );
-    return { bars: await this.asOfNow(request.symbol, bars, 'minute', 1, request.to, request.adjustForSplit) };
+    const bars = await this.loadedBars(key, request.from, 'minute', async (from, to) => await this.client.minuteBars({ ...request, from, to, adjustForSplit: false }));
+    return { bars: await this.asOfNow(request.symbol, bars, 'minute', 1, request.from, request.to, request.adjustForSplit) };
   }
 
   async dailyBars(request: DailyBarsRequest): Promise<BarsResponse> {
     const key = `day|${request.symbol}`;
-    const bars = await this.stockBars(key, request.symbol, request.from, 'day', async (from, to) => await this.client.dailyBars({ ...request, from, to, adjustForSplit: false }));
-    return { bars: await this.asOfNow(request.symbol, bars, 'day', 1, request.to, request.adjustForSplit) };
+    const bars = await this.loadedBars(key, request.from, 'day', async (from, to) => await this.client.dailyBars({ ...request, from, to, adjustForSplit: false }));
+    return { bars: await this.asOfNow(request.symbol, bars, 'day', 1, request.from, request.to, request.adjustForSplit) };
   }
 
   /** Only the splits that have already executed. One still ahead has not moved a price yet. */
@@ -171,8 +186,8 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
   async optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse> {
     requireDatableTimespan(request.timespan, 'option bars');
     const key = `option|${request.symbol}|${request.timespan}|${request.multiplier}`;
-    const bars = await this.stockBars(key, request.symbol, request.from, request.timespan, async (from, to) => await this.client.optionBars({ ...request, from, to }));
-    return { bars: await this.asOfNow(request.symbol, bars, request.timespan, request.multiplier, request.to, false) };
+    const bars = await this.loadedBars(key, request.from, request.timespan, async (from, to) => await this.client.optionBars({ ...request, from, to }));
+    return { bars: await this.asOfNow(request.symbol, bars, request.timespan, request.multiplier, request.from, request.to, false) };
   }
 
   async listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse> {
@@ -187,34 +202,34 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
   }
 
   /**
-   * Fetched through the current day rather than the requested `to`, so one call serves
-   * every minute of a session: the whole day comes back and the clock decides which of it
-   * is visible. Keying the fetch on the caller's own `to` would re-ask on every step,
-   * since a rolling window's end moves with the clock.
+   * The whole backtest window, buffer included, fetched once per symbol and shape.
+   *
+   * The window does not move, so the key does not carry one and a request's own `from` and
+   * `to` only narrow what has already been loaded. Fetching what the caller asked for
+   * instead would re-ask on every step, because a rolling window's end moves with the
+   * clock — and what comes back beyond the clock is not visible anyway: `asOfNow` decides
+   * that, not the request.
    */
-  private async stockBars(
-    key: string,
-    symbol: string,
-    from: DateOrTimestamp,
-    timespan: Timespan,
-    fetch: (from: string, to: string) => Promise<BarsResponse>,
-  ): Promise<ReadonlyArray<Bar>> {
+  private loadedBars(key: string, from: DateOrTimestamp, timespan: Timespan, fetch: (from: string, to: string) => Promise<BarsResponse>): Promise<ReadonlyArray<Bar>> {
     requireDatableTimespan(timespan, 'bars');
-    const through = easternClock.date(this.requireStarted());
-    const fromDate = easternDate(from);
-    if (fromDate > through) {
-      // A window that has not started yet. Asking the client would be a backwards range.
-      return [];
+    if (windowStart(from) < this.loadFrom) {
+      throw new Error(
+        `Bars were asked for from ${easternClock.datetime(windowStart(from))}, before the ${this.loadFromDate} this run loaded from. Widen historyBufferMs: answering from what happens to be loaded is a short series, not a short answer.`,
+      );
     }
 
-    const cacheKey = `${key}|${fromDate}`;
-    const cached = this.barsByKey.get(cacheKey);
-    if (cached !== undefined && cached.throughDate === through) {
-      return cached.bars;
+    const already = this.barsByKey.get(key);
+    if (already !== undefined) {
+      return already;
     }
-    const { bars } = await fetch(fromDate, through);
-    this.barsByKey.set(cacheKey, { throughDate: through, bars });
-    return bars;
+    const loading = fetch(this.loadFromDate, this.loadToDate)
+      .then((response) => response.bars)
+      .catch((error: unknown) => {
+        this.barsByKey.delete(key);
+        throw error;
+      });
+    this.barsByKey.set(key, loading);
+    return loading;
   }
 
   private async asOfNow(
@@ -222,13 +237,16 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
     bars: ReadonlyArray<Bar>,
     timespan: Timespan,
     multiplier: number,
+    from: DateOrTimestamp,
     to: DateOrTimestamp | undefined,
     adjustForSplit: boolean | undefined,
   ): Promise<ReadonlyArray<Bar>> {
+    this.requireStarted();
+    const start = windowStart(from);
     const end = windowEnd(to);
     const visible = bars.filter((bar) => {
       const finished = endOfBar(bar, timespan, multiplier);
-      return finished !== undefined && finished <= this.currentTimestamp && (end === undefined || bar.t <= end);
+      return finished !== undefined && finished <= this.currentTimestamp && bar.t >= start && (end === undefined || bar.t <= end);
     });
     return adjustForSplit === true ? await this.adjusted(symbol, visible) : visible;
   }

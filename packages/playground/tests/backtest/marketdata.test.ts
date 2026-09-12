@@ -70,9 +70,19 @@ function availabilities(chain: ReadonlyArray<OccSymbol> = CHAIN): OptionsAvailab
   return { cachePath: '/nowhere', save: async () => {}, availableOptions: async () => chain };
 }
 
-async function marketData(client: FakeClient, now: number): Promise<BacktestMarketDataImpl> {
+/** The run's own window. Wide enough that these tests step around inside it. */
+const RUN_FROM = at(DAY, '09:30:00');
+const RUN_TO = at(AFTER_SPLIT, '16:00:00');
+const BUFFER_DAYS = 10;
+const BUFFER_MS = BUFFER_DAYS * 24 * 60 * 60_000;
+
+function build(client: FakeClient, bufferMs: number = BUFFER_MS): BacktestMarketDataImpl {
   // The fake implements the slice of the client this class touches, which the compiler cannot know.
-  const subject = new BacktestMarketDataImpl(client as unknown as AlpacaMarketDataClient, availabilities());
+  return new BacktestMarketDataImpl(client as unknown as AlpacaMarketDataClient, RUN_FROM, RUN_TO, availabilities(), bufferMs);
+}
+
+async function marketData(client: FakeClient, now: number, bufferMs: number = BUFFER_MS): Promise<BacktestMarketDataImpl> {
+  const subject = build(client, bufferMs);
   await subject.init(now);
   return subject;
 }
@@ -108,37 +118,46 @@ describe('BacktestMarketDataImpl', () => {
       expect(seen.map((bar) => bar.c)).toEqual([10, 11]);
     });
 
-    it('asks the client for unadjusted bars, whatever the caller wanted', async () => {
+    it('asks the client for unadjusted bars over the run window, whatever the caller wanted', async () => {
       const client = new FakeClient(bars, [], [SPLIT]);
       const subject = await marketData(client, at(DAY, '16:00:00'));
 
       await subject.minuteBars({ symbol: 'AMZN', from: DAY, adjustForSplit: true });
 
-      expect(client.requests.filter((request) => request.kind === 'minute')).toEqual([{ kind: 'minute', from: DAY, to: DAY, adjustForSplit: false }]);
+      // The buffer reaches ten days before the run, and the far end is the run's own end.
+      expect(client.requests.filter((request) => request.kind === 'minute')).toEqual([
+        { kind: 'minute', from: easternClock.date(RUN_FROM - BUFFER_MS), to: easternClock.date(RUN_TO), adjustForSplit: false },
+      ]);
     });
 
-    it('fetches once a day however many minutes ask, and again when the day turns', async () => {
+    it('fetches the run window once, however many minutes and days ask', async () => {
       const client = new FakeClient(bars);
       const subject = await marketData(client, at(DAY, '09:31:00'));
 
       await subject.minuteBars({ symbol: 'AMZN', from: DAY });
       await subject.forward(at(DAY, '09:32:00'));
       await subject.minuteBars({ symbol: 'AMZN', from: DAY });
-      expect(client.requests.filter((request) => request.kind === 'minute')).toHaveLength(1);
-
       await subject.forward(at(NEXT, '09:31:00'));
       await subject.minuteBars({ symbol: 'AMZN', from: DAY });
-      expect(client.requests.filter((request) => request.kind === 'minute')).toHaveLength(2);
+      await subject.forward(at(AFTER_SPLIT, '09:31:00'));
+      await subject.minuteBars({ symbol: 'AMZN', from: DAY });
+
+      // The window does not move, so neither does the answer to "have I got this yet".
+      expect(client.requests.filter((request) => request.kind === 'minute')).toHaveLength(1);
     });
 
     it('answers with nothing for a window that has not started yet', async () => {
-      const client = new FakeClient(bars);
-      const subject = await marketData(client, at(DAY, '09:31:00'));
+      const subject = await marketData(new FakeClient(bars), at(DAY, '09:31:00'));
 
-      const { bars: seen } = await subject.minuteBars({ symbol: 'AMZN', from: AFTER_SPLIT });
+      expect((await subject.minuteBars({ symbol: 'AMZN', from: AFTER_SPLIT })).bars).toEqual([]);
+    });
 
-      expect(seen).toEqual([]);
-      expect(client.requests).toEqual([]); // never asked: the range would run backwards
+    it('narrows to the requested window inside the one it loaded', async () => {
+      const subject = await marketData(new FakeClient(bars), at(DAY, '16:00:00'));
+
+      const { bars: seen } = await subject.minuteBars({ symbol: 'AMZN', from: at(DAY, '09:31:00') });
+
+      expect(seen.map((bar) => bar.c)).toEqual([11, 12]);
     });
   });
 
@@ -303,9 +322,42 @@ describe('BacktestMarketDataImpl', () => {
     });
   });
 
+  describe('the loaded window', () => {
+    it('reaches back by the buffer, so an indicator has something to warm up on', async () => {
+      const client = new FakeClient([dailyBar(DAY, 10)]);
+      const subject = await marketData(client, at(DAY, '16:00:00'));
+
+      // Five days before the run starts, which only the buffer makes reachable.
+      await subject.dailyBars({ symbol: 'AMZN', from: easternClock.shiftDate(DAY, -5) });
+
+      expect(client.requests.filter((request) => request.kind === 'day')).toHaveLength(1);
+    });
+
+    it('refuses a request reaching back before the buffer rather than answering a short series', async () => {
+      const subject = await marketData(new FakeClient(), at(DAY, '16:00:00'));
+
+      // An SMA20 quietly computed from twelve bars is wrong in a way nothing reports.
+      await expect(subject.dailyBars({ symbol: 'AMZN', from: easternClock.shiftDate(DAY, -BUFFER_DAYS - 5) })).rejects.toThrow(/Widen historyBufferMs/);
+    });
+
+    it('takes a buffer of zero, which then admits only the run itself', async () => {
+      const subject = await marketData(new FakeClient(), at(DAY, '16:00:00'), 0);
+
+      await expect(subject.dailyBars({ symbol: 'AMZN', from: DAY })).resolves.toBeDefined();
+      await expect(subject.dailyBars({ symbol: 'AMZN', from: easternClock.shiftDate(DAY, -1) })).rejects.toThrow(/Widen historyBufferMs/);
+    });
+
+    it('refuses a run window that is empty or a buffer that runs backwards', () => {
+      const client = new FakeClient() as unknown as AlpacaMarketDataClient;
+      expect(() => new BacktestMarketDataImpl(client, RUN_TO, RUN_FROM, availabilities())).toThrow(/no window to load/);
+      expect(() => new BacktestMarketDataImpl(client, RUN_FROM, RUN_FROM, availabilities())).toThrow(/no window to load/);
+      expect(() => new BacktestMarketDataImpl(client, RUN_FROM, RUN_TO, availabilities(), -1)).toThrow(/must not be negative/);
+    });
+  });
+
   describe('before the clock starts', () => {
     it('says the clock has not started rather than answering with an empty market', async () => {
-      const subject = new BacktestMarketDataImpl(new FakeClient() as unknown as AlpacaMarketDataClient, availabilities());
+      const subject = build(new FakeClient());
 
       await expect(subject.minuteBars({ symbol: 'AMZN', from: DAY })).rejects.toThrow(/clock has not started/);
       await expect(subject.listActiveOptionContracts({ underlying: 'AMZN' })).rejects.toThrow(/clock has not started/);
