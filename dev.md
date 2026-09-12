@@ -152,6 +152,7 @@ here can move one from paper to live.
 | `ALPACA_PAPER_API_KEY` / `ALPACA_PAPER_SECRET_KEY` | **required for the paper account** | The same pair the market-data suites below read. Alpaca issues one set of paper keys that both trades and serves data |
 | `ALPACA_LIVE_ACCOUNT_ID` | **required for the live account** | Alpaca account id. Real money |
 | `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_SECRET_KEY` | **required for the live account** | Real money. `prepareAccount` logs a warning whenever a script runs against these |
+| `MARKETDATA_CACHE_PATH` | **required for `npm run option-availability`** | Where the sweep is kept, one file per underlying |
 
 The chart writers take the paper pair through `marketDataKeys()` rather than an account,
 because market data is the one thing a paper key does as well as a live one — so a script
