@@ -9,6 +9,7 @@ import { OptionsAvailabilitiesHelperImpl } from '../../src/utils/options-availab
 
 const CALL = 'AMZN260116C00200000';
 const PUT = 'AMZN260116P00150000';
+const UNTABLED = 'AMZN290119C00200000'; // expires past the market-hours table
 const QUIET = 'AMZN260320C00300000'; // listed, never printed
 const NO_MINUTES = 'AMZN260320P00100000'; // a daily bar with no minute bars behind it
 const ADJUSTED = '1AMZN260116C00200000';
@@ -52,7 +53,7 @@ class FakeClient {
   async listOptionContracts(request: { status?: string; startAfter?: string }): Promise<unknown> {
     this.listings += 1;
     if (request.status === 'inactive') {
-      return { contracts: [{ S: QUIET }, { S: NO_MINUTES }] };
+      return { contracts: [{ S: QUIET }, { S: NO_MINUTES }, { S: UNTABLED }] };
     }
     // Paged, so the resumeFrom loop is exercised rather than assumed.
     if (request.startAfter === undefined) {
@@ -178,7 +179,7 @@ describe('OptionsAvailabilitiesHelperImpl', () => {
       await subject.save('AMZN');
 
       const written = JSON.parse(readFileSync(resolve(cachePath, 'AMZN.json'), 'utf8'));
-      expect(written.availabilities.map((entry: { symbol: string }) => entry.symbol)).toEqual([CALL, PUT, QUIET, NO_MINUTES].sort());
+      expect(written.availabilities.map((entry: { symbol: string }) => entry.symbol)).toEqual([CALL, PUT, QUIET, NO_MINUTES, UNTABLED].sort());
     });
 
     it('leaves out an adjusted contract, which does not deliver 100 shares', async () => {
@@ -199,7 +200,7 @@ describe('OptionsAvailabilitiesHelperImpl', () => {
 
       const daily = client.requests.filter((request) => request.timespan === 'day');
       expect(daily).toHaveLength(1);
-      expect(daily[0].symbols).toHaveLength(4);
+      expect(daily[0].symbols).toHaveLength(5);
       // Reaching back before any option history, so a backfill is picked up without an edit.
       expect(daily[0].from < '2024-02-01').toBe(true);
     });
@@ -265,9 +266,10 @@ describe('OptionsAvailabilitiesHelperImpl', () => {
       // CALL, PUT and NO_MINUTES have printed, so they are settled for good. QUIET has not
       // and does not expire until 2026, so it is the only one asked about again.
       expect(firstPass).toBe(3);
+      // Neither printed and neither has expired, so these two are all that can still change.
       const daily = client.requests.filter((request) => request.timespan === 'day');
       expect(daily).toHaveLength(1);
-      expect(daily[0].symbols).toEqual([QUIET]);
+      expect([...daily[0].symbols].sort()).toEqual([QUIET, UNTABLED].sort());
     });
   });
 
@@ -426,7 +428,7 @@ describe('OptionsAvailabilitiesHelperImpl', () => {
       await subject.save('AMZN');
 
       const written = JSON.parse(readFileSync(resolve(cachePath, 'AMZN.json'), 'utf8'));
-      expect(written.availabilities).toHaveLength(4);
+      expect(written.availabilities).toHaveLength(5);
     });
 
     it('is told apart from a file that cannot be opened at all', async () => {
@@ -582,6 +584,19 @@ describe('OptionsAvailabilitiesHelperImpl', () => {
 
       await expect(subject.save('AMZN')).rejects.toThrow(/All 1 daily sweep requests failed/);
       expect(() => readFileSync(resolve(cachePath, 'AMZN.json'), 'utf8')).toThrow();
+    });
+  });
+
+  describe('an expiry the market-hours table does not cover', () => {
+    it('is recorded at the regular close rather than dropped out of the file entirely', async () => {
+      const client = fake();
+      const { helper: subject, cachePath } = helper(client);
+
+      await subject.save('AMZN');
+
+      const written = JSON.parse(readFileSync(resolve(cachePath, 'AMZN.json'), 'utf8'));
+      const entry = written.availabilities.find((each: { symbol: string }) => each.symbol === UNTABLED);
+      expect(entry.expirationTimestamp).toBe(easternClock.timestamp('2029-01-19', '16:00:00'));
     });
   });
 });

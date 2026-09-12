@@ -30,6 +30,9 @@ const SWEEP_BATCH = 200;
  */
 const SWEEP_CONCURRENCY = 10;
 
+/** What an equity option stops trading at, on every day the market-hours table does not name. */
+const REGULAR_CLOSE = '16:00:00';
+
 export interface OptionContractAvailability {
   readonly symbol: string;
   /**
@@ -206,12 +209,15 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
 
     const availabilities = [...settled];
     for (const contract of pending) {
+      // Outside the market-hours table there is no session to read a close from — a LEAP
+      // past the table's last year, or an expiry on a date it does not hold. Dropping the
+      // contract left nothing recorded, so every later run swept it again and dropped it
+      // again. The regular close is what it expires at on all but a half day, and being
+      // three hours generous on one of those beats never settling at all.
       const session = marketHour(contract.expiration);
+      const expirationTimestamp = session?.closeAt ?? easternClock.timestamp(contract.expiration, REGULAR_CLOSE);
       if (session === undefined) {
-        // Outside the market-hours table, so there is no close to expire at. One contract
-        // must not abandon the rest of a sweep that cost hundreds of requests.
-        logger.warn(`${contract.symbol} expires ${contract.expiration}, which the market-hours table does not cover. Left out.`);
-        continue;
+        logger.warn(`${contract.symbol} expires ${contract.expiration}, which the market-hours table does not cover. Taking the regular ${REGULAR_CLOSE} close.`);
       }
       // Answered means a sweep reached a conclusion about this contract: the daily pass
       // came back, and either it found no day at all — so the contract never printed — or
@@ -222,7 +228,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
       availabilities.push({
         symbol: contract.symbol,
         firstTradingMinuteTimestamp: firstMinute,
-        expirationTimestamp: session.closeAt,
+        expirationTimestamp,
         sweptAt: resolved ? refreshedAt : undefined,
       });
     }

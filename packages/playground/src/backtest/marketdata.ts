@@ -237,6 +237,9 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
    * that, not the request.
    */
   private loadedBars(key: string, from: DateOrTimestamp, fetch: (from: string, to: string) => Promise<BarsResponse>): Promise<ReadonlyArray<Bar>> {
+    // Every bar method comes through here, and it comes through before the fetch, so
+    // asking ahead of the clock costs a clear error rather than a round trip and then one.
+    this.requireStarted();
     if (windowStart(from) < this.loadFrom) {
       throw new Error(
         `Bars were asked for from ${easternClock.datetime(windowStart(from))}, before the ${this.loadFromDate} this run loaded from. Widen historyBufferMs: answering from what happens to be loaded is a short series, not a short answer.`,
@@ -271,7 +274,6 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
     to: DateOrTimestamp | undefined,
     adjustForSplit: boolean | undefined,
   ): Promise<ReadonlyArray<Bar>> {
-    this.requireStarted();
     const start = windowStart(from);
     const end = windowEnd(to);
     const visible = bars.filter((bar) => {

@@ -386,6 +386,18 @@ describe('BacktestMarketDataImpl', () => {
   });
 
   describe('before the clock starts', () => {
+    it('refuses before asking the client, so a question asked too early costs no round trip', async () => {
+      const client = new FakeClient([minuteBar(DAY, '09:30:00', 10)], [], [SPLIT]);
+      const subject = build(client);
+
+      await expect(subject.minuteBars({ symbol: 'AMZN', from: DAY })).rejects.toThrow(/clock has not started/);
+      await expect(subject.dailyBars({ symbol: 'AMZN', from: DAY })).rejects.toThrow(/clock has not started/);
+      await expect(subject.optionMinuteBars({ symbol: JAN_CALL_200.symbol, from: DAY })).rejects.toThrow(/clock has not started/);
+      await expect(subject.stockSplits({ symbol: 'AMZN' })).rejects.toThrow(/clock has not started/);
+
+      expect(client.requests).toEqual([]);
+    });
+
     it('says the clock has not started rather than answering with an empty market', async () => {
       const subject = build(new FakeClient());
 

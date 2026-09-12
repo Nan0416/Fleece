@@ -1,6 +1,6 @@
-import { BacktestAccount, BacktestPortfolio, Trade } from './account';
-import { BacktestMarketData, BacktestMarketDataView } from './marketdata';
-import { Time } from './time';
+import type { BacktestAccount, BacktestPortfolio, Trade } from './account';
+import type { BacktestMarketData, BacktestMarketDataView } from './marketdata';
+import type { Time } from './time';
 
 export interface Strategy {
   readonly strategyId: string;
@@ -29,16 +29,16 @@ export class BacktestDriver {
     this.time.subscribe(this.account);
   }
 
-  addStrategy(strategy: Strategy) {
+  addStrategy(strategy: Strategy): void {
     this.removeStrategy(strategy.strategyId);
     this.strategies.push(strategy);
   }
 
-  removeStrategy(strategyId: string) {
+  removeStrategy(strategyId: string): void {
     this.strategies = this.strategies.filter((item) => item.strategyId !== strategyId);
   }
 
-  async run() {
+  async run(): Promise<void> {
     await this.time.init();
     await this.runStrategies();
 
@@ -47,7 +47,7 @@ export class BacktestDriver {
     }
   }
 
-  private async runStrategies() {
+  private async runStrategies(): Promise<void> {
     for (let i = 0; i < this.strategies.length; i++) {
       const strategy = this.strategies[i];
       const trades = (await strategy.evaluate(this.time.timestamp, this.marketData, this.account)) ?? [];
