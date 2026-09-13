@@ -198,6 +198,45 @@ describe('Clock', () => {
     });
   });
 
+  describe('shiftMonths', () => {
+    it('moves forward and backward by calendar months, across a year end', () => {
+      expect(easternClock.shiftMonths('2026-03-15', 1)).toBe('2026-04-15');
+      expect(easternClock.shiftMonths('2026-03-15', -1)).toBe('2026-02-15');
+      expect(easternClock.shiftMonths('2026-12-01', 1)).toBe('2027-01-01');
+      expect(easternClock.shiftMonths('2026-01-01', -1)).toBe('2025-12-01');
+      expect(easternClock.shiftMonths('2026-03-15', 0)).toBe('2026-03-15');
+    });
+
+    it('lands on the last day of a shorter month rather than spilling into the next', () => {
+      expect(easternClock.shiftMonths('2026-01-31', 1)).toBe('2026-02-28');
+      expect(easternClock.shiftMonths('2028-01-31', 1)).toBe('2028-02-29');
+      expect(easternClock.shiftMonths('2026-05-31', -1)).toBe('2026-04-30');
+    });
+
+    it('rejects anything that is not an ISO date', () => {
+      expect(() => easternClock.shiftMonths('2026-3-5', 1)).toThrow(/YYYY-MM-DD/);
+      expect(() => easternClock.shiftMonths('2026-02-31', 1)).toThrow(/No such date/);
+    });
+  });
+
+  describe('shiftYears', () => {
+    it('moves forward and backward by calendar years', () => {
+      expect(easternClock.shiftYears('2026-03-15', 1)).toBe('2027-03-15');
+      expect(easternClock.shiftYears('2026-03-15', -16)).toBe('2010-03-15');
+      expect(easternClock.shiftYears('2026-01-01', 0)).toBe('2026-01-01');
+    });
+
+    it('lands a leap day on the 28th in a year without one', () => {
+      expect(easternClock.shiftYears('2028-02-29', 1)).toBe('2029-02-28');
+      expect(easternClock.shiftYears('2028-02-29', 4)).toBe('2032-02-29');
+    });
+
+    it('rejects anything that is not an ISO date', () => {
+      expect(() => easternClock.shiftYears('not a date', 1)).toThrow(/YYYY-MM-DD/);
+      expect(() => easternClock.shiftYears('2026-02-30', 1)).toThrow(/No such date/);
+    });
+  });
+
   describe('nextDate', () => {
     it('advances one day by default', () => {
       expect(easternClock.nextDate('2026-06-15')).toBe('2026-06-16');

@@ -70,6 +70,14 @@ export class Clock {
     return this.wallClock(date, '00:00:00').add(days, 'days').format(DATE_FORMAT);
   }
 
+  shiftYears(date: string, years: number): string {
+    return this.wallClock(date, '00:00:00').add(years, 'years').format(DATE_FORMAT);
+  }
+
+  shiftMonths(date: string, months: number): string {
+    return this.wallClock(date, '00:00:00').add(months, 'months').format(DATE_FORMAT);
+  }
+
   nextDate(date: string = this.date(), days: number = 1): string {
     return this.shiftDate(date, days);
   }

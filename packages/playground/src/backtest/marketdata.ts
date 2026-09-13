@@ -1,8 +1,9 @@
 import {
   adjustPrice,
+  endOfDay,
   marketHour,
-  marketHoursCoverage,
   splitRatios,
+  startOfDay,
   type AlpacaMarketDataClient,
   type Bar,
   type BarsResponse,
@@ -24,17 +25,19 @@ import type { OptionsAvailabilitiesHelper } from '../utils/options-availabilitie
 import type { TimeSubscriber } from './time';
 
 const MS_PER_MINUTE = 60_000;
-const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
 
 /** The two shapes a backtest reads. Both have an end this can date, which is why. */
 type BarSpan = 'minute' | 'day';
 
-/**
- * How far before the backtest's first instant to load, so an indicator has something to
- * warm up on. Thirty days covers a 20-day moving average on daily bars; a 200-day one
- * wants nearer a year, and says so by throwing rather than by averaging what it found.
- */
-const DEFAULT_HISTORY_BUFFER_MS = 30 * MS_PER_DAY;
+interface TimeWindow {
+  readonly startTimestamp: number;
+  readonly endTimestamp: number;
+}
+
+interface BarSegment {
+  readonly timeWindow: TimeWindow;
+  barsPromise?: Promise<ReadonlyArray<Bar>>;
+}
 
 export interface ListActiveOptionContractsRequest {
   /** The underlying ticker, not a contract symbol. */
@@ -52,6 +55,13 @@ export interface ListActiveOptionContractsResponse {
   readonly contracts: ReadonlyArray<OccSymbol>;
 }
 
+/**
+ * Always regular hours, which is the client's default for minute bars. The flag is left off
+ * rather than passed through because segments are cached by symbol alone: whichever request
+ * came first would decide which hours every later one got back.
+ */
+export type BacktestMinuteBarsRequest = Omit<MinuteBarsRequest, 'marketHoursOnly'>;
+
 export interface OptionMinuteBarsRequest {
   /** The OCC contract symbol. */
   readonly symbol: string;
@@ -68,17 +78,8 @@ export interface OptionDailyBarsRequest {
   readonly to?: DateOrTimestamp;
 }
 
-/**
- * The read view, for anything that consumes market data rather than drives the run.
- *
- * Handing a strategy this instead of `BacktestMarketData` is what stops it calling
- * `forward` and stepping the data past the clock the account and every other subscriber
- * are still on. That is lookahead — bars the run has not reached, admitted by `asOfNow`
- * because the data's own clock says they are finished — and the numbers it produces look
- * entirely plausible. `BacktestPortfolio` narrows the account for the same reason.
- */
-export interface BacktestMarketDataView {
-  minuteBars(request: MinuteBarsRequest): Promise<BarsResponse>;
+export interface MarketData {
+  minuteBars(request: BacktestMinuteBarsRequest): Promise<BarsResponse>;
   dailyBars(request: DailyBarsRequest): Promise<BarsResponse>;
   stockSplits(request: StockSplitsRequest): Promise<StockSplitsResponse>;
   optionMinuteBars(request: OptionMinuteBarsRequest): Promise<OptionBarsResponse>;
@@ -86,88 +87,97 @@ export interface BacktestMarketDataView {
   listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse>;
 }
 
-/** The driving view: the clock on top of the read one, held by whoever owns the run. */
-export type BacktestMarketData = BacktestMarketDataView & TimeSubscriber;
+export type BacktestMarketData = MarketData & TimeSubscriber;
 
-/**
- * The instant a bar is finished, and so the earliest a strategy may have seen its close.
- *
- * A bar is an interval, not an instant: the minute bar stamped 10:00 covers 10:00 to
- * 10:01 and its close is not known until 10:01. Admitting it at 10:00 hands every
- * strategy a minute of the future on every bar, which is enough to make almost anything
- * look profitable. A daily bar ends at its own session close — 16:00, or 13:00 on a half
- * day, which no rule derives and the market-hours table has.
- */
-function endOfBar(bar: Bar, span: BarSpan): number | undefined {
-  return span === 'minute' ? bar.t + MS_PER_MINUTE : marketHour(bar.t)?.closeAt;
-}
-
-/** A date names its whole Eastern day; a timestamp is the instant itself. */
-function windowStart(value: DateOrTimestamp): number {
-  return typeof value === 'number' ? value : easternClock.timestamp(value, '00:00:00');
-}
-
-/** A date names its whole Eastern day; a timestamp is the instant itself. */
-function windowEnd(value: DateOrTimestamp | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined;
+function endOfBar(bar: Bar, span: BarSpan): number {
+  if (span === 'minute') {
+    return bar.t + MS_PER_MINUTE;
+  } else {
+    const marketClosedAt = marketHour(bar.t)?.closeAt;
+    if (typeof marketClosedAt !== 'number') {
+      throw new Error(`${easternClock.datetime(bar.t)} doesn't have market hour data.`);
+    }
+    return marketClosedAt;
   }
-  return typeof value === 'number' ? value : easternClock.timestamp(value, '23:59:59');
 }
 
 /**
- * Market data as of one instant, over `AlpacaMarketDataClient`.
+ * The inputs whose window shares some stretch of time with `timeWindow`, both ends exclusive,
+ * so two windows that only touch at an end do not overlap.
  *
- * Everything here exists to answer with what was knowable then rather than what is known
- * now. Bars are filtered to those that had finished, splits to those that had executed,
- * and an adjustment applies only the splits already behind the clock — asking Alpaca for
- * adjusted bars would hand back a series restated for a split months in the future, and
- * nothing about the numbers would look wrong.
+ * The same objects come back, not copies, so a caller writing to one writes to the cache.
  *
- *     const data = new BacktestMarketDataImpl(client, availabilities);
- *     clock.subscribe(data);
- *     await data.dailyBars({ symbol: 'AMZN', from: '2024-03-01' }); // nothing after the clock
+ * @param inputs sorted by start time and not overlapping each other, so their ends are sorted too.
+ * @param timeWindow exclusive at both ends. One that does not end after it starts overlaps nothing.
  */
+export function findOverlaps<T extends { readonly timeWindow: TimeWindow }>(inputs: T[], timeWindow: TimeWindow): T[] {
+  if (timeWindow.endTimestamp <= timeWindow.startTimestamp) {
+    return [];
+  }
+
+  // The first input that ends after the window starts.
+  let low = 0;
+  let high = inputs.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (inputs[mid].timeWindow.endTimestamp <= timeWindow.startTimestamp) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+
+  const overlaps: T[] = [];
+  for (let i = low; i < inputs.length && inputs[i].timeWindow.startTimestamp < timeWindow.endTimestamp; i++) {
+    overlaps.push(inputs[i]);
+  }
+  return overlaps;
+}
+
+/**
+ * Back-to-back segments from 2010-01-01 to 2027-01-01, each a calendar month or year, none
+ * of them fetched yet.
+ *
+ * Every boundary is midnight in New York rather than UTC, so no trading day is split
+ * between two segments. Each segment ends at the instant the next one starts, which
+ * `findOverlaps` reads as no overlap because both ends are exclusive.
+ *
+ * New objects on every call: `minuteBars` writes each segment's `barsPromise`, so two
+ * symbols sharing one list would serve each other's bars.
+ */
+export function generatePlaceholderBarSegments(windowSize: '1Year' | '1Month'): BarSegment[] {
+  const from = '2010-01-01';
+  const to = '2027-01-01';
+
+  const segments: BarSegment[] = [];
+  let start = from;
+  while (start < to) {
+    const end = windowSize === '1Year' ? easternClock.shiftYears(start, 1) : easternClock.shiftMonths(start, 1);
+    segments.push({
+      timeWindow: {
+        startTimestamp: easternClock.timestamp(start, '00:00:00'),
+        endTimestamp: easternClock.timestamp(end, '00:00:00'),
+      },
+      barsPromise: undefined,
+    });
+    start = end;
+  }
+  return segments;
+}
+
 export class BacktestMarketDataImpl implements BacktestMarketData {
   readonly timeSubscriberId: string;
 
   private currentTimestamp: number;
-  private readonly barsByKey = new Map<string, Promise<ReadonlyArray<Bar>>>();
+  private readonly barsByKey = new Map<string, BarSegment[]>();
   private readonly splitsBySymbol = new Map<string, Promise<ReadonlyArray<StockSplit>>>();
-
-  /** The one window every bars request is served from, fixed for the life of the run. */
-  private readonly loadFromDate: string;
-  private readonly loadToDate: string;
-  private readonly loadFrom: number;
 
   constructor(
     private readonly client: AlpacaMarketDataClient,
-    beginningTimestamp: number,
-    endingTimestamp: number,
     private readonly optionsHelper: OptionsAvailabilitiesHelper,
-    historyBufferMs: number = DEFAULT_HISTORY_BUFFER_MS,
   ) {
-    if (endingTimestamp <= beginningTimestamp) {
-      throw new Error(`endingTimestamp ${endingTimestamp} is not after beginningTimestamp ${beginningTimestamp}, so there is no window to load.`);
-    }
-    if (historyBufferMs < 0) {
-      throw new Error(`historyBufferMs must not be negative, got ${historyBufferMs}. It is how far before the run to load, so an indicator has something to warm up on.`);
-    }
     this.timeSubscriberId = 'marketdata' + nanoid();
     this.currentTimestamp = 0;
-    this.loadFromDate = easternClock.date(beginningTimestamp - historyBufferMs);
-    this.loadToDate = easternClock.date(endingTimestamp);
-    // A date widens to its whole Eastern day, so this is what the loaded window really opens at.
-    this.loadFrom = easternClock.timestamp(this.loadFromDate, '00:00:00');
-    // Outside the table `marketHour` answers `undefined` for every date rather than
-    // throwing, so `endOfBar` dates no daily bar, `asOfNow` drops every one of them, and
-    // the run reads as a symbol that stopped trading. The window is fixed for the life of
-    // the run, so this is answerable here rather than as a silence thousands of steps in.
-    if (this.loadFromDate < marketHoursCoverage.from || this.loadToDate > marketHoursCoverage.to) {
-      throw new Error(
-        `The run loads ${this.loadFromDate} to ${this.loadToDate}, outside the ${marketHoursCoverage.from} to ${marketHoursCoverage.to} the market-hours table covers. Refresh packages/marketdata/src/market-hours-data.json, or move the run inside it.`,
-      );
-    }
   }
 
   async init(timestamp: number): Promise<void> {
@@ -181,16 +191,19 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
     this.currentTimestamp = timestamp;
   }
 
-  async minuteBars(request: MinuteBarsRequest): Promise<BarsResponse> {
-    const key = `minute|${request.symbol}|${request.marketHoursOnly ?? 'default'}`;
-    const bars = await this.loadedBars(key, request.from, async (from, to) => await this.client.minuteBars({ ...request, from, to, adjustForSplit: false }));
-    return { bars: await this.asOfNow(request.symbol, bars, 'minute', request.from, request.to, request.adjustForSplit) };
+  async minuteBars(request: BacktestMinuteBarsRequest): Promise<BarsResponse> {
+    const bars = await this.segmentedBars(`stock-minute|${request.symbol}`, '1Month', 'minute', request, (segment) =>
+      this.client.minuteBars({ symbol: request.symbol, from: segment.startTimestamp, to: segment.endTimestamp - 1, adjustForSplit: false }),
+    );
+    return { bars: request.adjustForSplit === true ? await this.adjusted(request.symbol, bars) : bars };
   }
 
+  /** A year a segment: a year of daily bars is about 252 of them, which is one request. */
   async dailyBars(request: DailyBarsRequest): Promise<BarsResponse> {
-    const key = `day|${request.symbol}`;
-    const bars = await this.loadedBars(key, request.from, async (from, to) => await this.client.dailyBars({ ...request, from, to, adjustForSplit: false }));
-    return { bars: await this.asOfNow(request.symbol, bars, 'day', request.from, request.to, request.adjustForSplit) };
+    const bars = await this.segmentedBars(`stock-day|${request.symbol}`, '1Year', 'day', request, (segment) =>
+      this.client.dailyBars({ symbol: request.symbol, from: segment.startTimestamp, to: segment.endTimestamp - 1, adjustForSplit: false }),
+    );
+    return { bars: request.adjustForSplit === true ? await this.adjusted(request.symbol, bars) : bars };
   }
 
   /** Only the splits that have already executed. One still ahead has not moved a price yet. */
@@ -209,11 +222,17 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
    * so the prints under the old symbol stand as they printed.
    */
   async optionMinuteBars(request: OptionMinuteBarsRequest): Promise<OptionBarsResponse> {
-    return { bars: await this.optionBars(request, 'minute') };
+    const bars = await this.segmentedBars(`option-minute|${request.symbol}`, '1Month', 'minute', request, (segment) =>
+      this.client.optionBars({ symbol: request.symbol, from: segment.startTimestamp, to: segment.endTimestamp - 1, multiplier: 1, timespan: 'minute' }),
+    );
+    return { bars };
   }
 
   async optionDailyBars(request: OptionDailyBarsRequest): Promise<OptionBarsResponse> {
-    return { bars: await this.optionBars(request, 'day') };
+    const bars = await this.segmentedBars(`option-day|${request.symbol}`, '1Year', 'day', request, (segment) =>
+      this.client.optionBars({ symbol: request.symbol, from: segment.startTimestamp, to: segment.endTimestamp - 1, multiplier: 1, timespan: 'day' }),
+    );
+    return { bars };
   }
 
   async listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse> {
@@ -228,59 +247,64 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
   }
 
   /**
-   * The whole backtest window, buffer included, fetched once per symbol and shape.
+   * The bars of one series inside the requested window that have finished by the clock,
+   * fetched a segment at a time, each segment once.
    *
-   * The window does not move, so the key does not carry one and a request's own `from` and
-   * `to` only narrow what has already been loaded. Fetching what the caller asked for
-   * instead would re-ask on every step, because a rolling window's end moves with the
-   * clock — and what comes back beyond the clock is not visible anyway: `asOfNow` decides
-   * that, not the request.
+   * `fetch` is handed the segment and asks for one millisecond short of its end. The client
+   * treats `to` as inclusive, and a daily bar is stamped at midnight in New York, which is
+   * exactly where one segment ends and the next starts: asking for the whole segment would
+   * return that day's bar from both.
    */
-  private loadedBars(key: string, from: DateOrTimestamp, fetch: (from: string, to: string) => Promise<BarsResponse>): Promise<ReadonlyArray<Bar>> {
-    // Every bar method comes through here, and it comes through before the fetch, so
-    // asking ahead of the clock costs a clear error rather than a round trip and then one.
-    this.requireStarted();
-    if (windowStart(from) < this.loadFrom) {
+  private async segmentedBars(
+    key: string,
+    windowSize: '1Year' | '1Month',
+    span: BarSpan,
+    request: { readonly from: DateOrTimestamp; readonly to?: DateOrTimestamp },
+    fetch: (segment: TimeWindow) => Promise<{ readonly bars: ReadonlyArray<Bar> }>,
+  ): Promise<Bar[]> {
+    // Before the clock starts every bar is filtered out, which reads as a symbol with no data.
+    const now = this.requireStarted();
+
+    const barSegments = this.barsByKey.get(key) ?? generatePlaceholderBarSegments(windowSize);
+    this.barsByKey.set(key, barSegments);
+
+    const requestedTimeWindow: TimeWindow = {
+      startTimestamp: startOfDay(request.from),
+      endTimestamp: endOfDay(request.to ?? now),
+    };
+
+    // Past the segments `findOverlaps` returns only the part they cover: a short series, and
+    // nothing to say so. Checked against the clock rather than `to`, since a `to` still ahead
+    // of it asks for nothing more than the clock allows.
+    const loadedFrom = barSegments[0].timeWindow.startTimestamp;
+    const loadedTo = barSegments[barSegments.length - 1].timeWindow.endTimestamp;
+    if (requestedTimeWindow.startTimestamp < loadedFrom || Math.min(requestedTimeWindow.endTimestamp, now) > loadedTo) {
       throw new Error(
-        `Bars were asked for from ${easternClock.datetime(windowStart(from))}, before the ${this.loadFromDate} this run loaded from. Widen historyBufferMs: answering from what happens to be loaded is a short series, not a short answer.`,
+        `${key} bars were asked for from ${easternClock.datetime(requestedTimeWindow.startTimestamp)} to ${easternClock.datetime(Math.min(requestedTimeWindow.endTimestamp, now))}, outside the ${easternClock.datetime(loadedFrom)} to ${easternClock.datetime(loadedTo)} a backtest loads. Widen the range in generatePlaceholderBarSegments.`,
       );
     }
 
-    const already = this.barsByKey.get(key);
-    if (already !== undefined) {
-      return already;
+    const loading = findOverlaps(barSegments, requestedTimeWindow).map(
+      (segment) =>
+        (segment.barsPromise ??= fetch(segment.timeWindow)
+          .then((response) => response.bars)
+          .catch((error: unknown) => {
+            // Left in place, the rejection would answer every later request for this segment
+            // without asking again, for the rest of the run.
+            segment.barsPromise = undefined;
+            throw error;
+          })),
+    );
+
+    let visibleBars: Bar[] = [];
+    for (const bars of loading) {
+      visibleBars = visibleBars.concat((await bars).filter((bar) => this.filterBar(bar, span, requestedTimeWindow)));
     }
-    const loading = fetch(this.loadFromDate, this.loadToDate)
-      .then((response) => response.bars)
-      .catch((error: unknown) => {
-        this.barsByKey.delete(key);
-        throw error;
-      });
-    this.barsByKey.set(key, loading);
-    return loading;
+    return visibleBars;
   }
 
-  private async optionBars(request: OptionMinuteBarsRequest, span: BarSpan): Promise<ReadonlyArray<Bar>> {
-    const key = `option|${span}|${request.symbol}`;
-    const bars = await this.loadedBars(key, request.from, async (from, to) => await this.client.optionBars({ symbol: request.symbol, from, to, multiplier: 1, timespan: span }));
-    return await this.asOfNow(request.symbol, bars, span, request.from, request.to, false);
-  }
-
-  private async asOfNow(
-    symbol: string,
-    bars: ReadonlyArray<Bar>,
-    span: BarSpan,
-    from: DateOrTimestamp,
-    to: DateOrTimestamp | undefined,
-    adjustForSplit: boolean | undefined,
-  ): Promise<ReadonlyArray<Bar>> {
-    const start = windowStart(from);
-    const end = windowEnd(to);
-    const visible = bars.filter((bar) => {
-      const finished = endOfBar(bar, span);
-      return finished !== undefined && finished <= this.currentTimestamp && bar.t >= start && (end === undefined || bar.t <= end);
-    });
-    return adjustForSplit === true ? await this.adjusted(symbol, visible) : visible;
+  private filterBar(bar: Bar, span: BarSpan, requestedTimeWindow: TimeWindow): boolean {
+    return bar.t >= requestedTimeWindow.startTimestamp && endOfBar(bar, span) < Math.min(requestedTimeWindow.endTimestamp, this.currentTimestamp);
   }
 
   /**
