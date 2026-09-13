@@ -1,8 +1,8 @@
 import { Decimal } from '@fleece/utilities';
 
-import type { BacktestAccount, Trade, Transaction } from '../../src/backtest/account';
+import type { BacktestAccount, BacktestPortfolio, Trade, Transaction } from '../../src/backtest/account';
 import { BacktestDriver, type Strategy } from '../../src/backtest/driver';
-import type { BacktestMarketData } from '../../src/backtest/marketdata';
+import type { BacktestMarketData, MarketData } from '../../src/backtest/marketdata';
 import { Time } from '../../src/backtest/time';
 
 const T0 = 1_700_000_000_000;
@@ -73,6 +73,9 @@ function strategy(
   return {
     strategyId,
     seen,
+    // A strategy reads these itself; the driver only calls `evaluate`, so nothing here touches them.
+    data: {} as MarketData,
+    portfolio: {} as BacktestPortfolio,
     evaluate: async (timestamp: number) => {
       seen.push(timestamp);
       log.push(`${strategyId}:evaluate@${timestamp}`);
