@@ -2,7 +2,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { marketHour, parseOccSymbol, type AlpacaMarketDataClient, type Bar, type OccSymbol, type OptionContractStatus } from '@fleece/marketdata';
-import { assertArray, assertNonEmptyString, assertNumber, assertOptionalInteger, assertRecord, easternClock, LoggerFactory, mapWithConcurrency } from '@fleece/utilities';
+import { easternClock, LoggerFactory, mapWithConcurrency } from '@fleece/utilities';
+import { z } from 'zod';
 
 const logger = LoggerFactory.getLogger('OptionsAvailabilities');
 
@@ -80,14 +81,18 @@ function earliest(bars: ReadonlyArray<Bar>): number | undefined {
   return bars.reduce<number | undefined>((first, bar) => (first === undefined || bar.t < first ? bar.t : first), undefined);
 }
 
-function toAvailability(value: unknown, field: string): OptionContractAvailability {
-  const record = assertRecord(value, field);
-  return {
-    symbol: assertNonEmptyString(record.symbol, `${field}.symbol`),
-    firstTradingMinuteTimestamp: assertOptionalInteger(record.firstTradingMinuteTimestamp, `${field}.firstTradingMinuteTimestamp`),
-    expirationTimestamp: assertNumber(record.expirationTimestamp, `${field}.expirationTimestamp`),
-  };
-}
+/** Typed against the interface, so the two cannot drift apart. */
+const AVAILABILITIES_SCHEMA: z.ZodType<OptionContractAvailabilities> = z.object({
+  underlying: z.string().min(1),
+  refreshedAt: z.number(),
+  availabilities: z.array(
+    z.object({
+      symbol: z.string().min(1),
+      firstTradingMinuteTimestamp: z.number().int().optional(),
+      expirationTimestamp: z.number(),
+    }),
+  ),
+});
 
 /**
  * Which option contracts of an underlying could actually have been traded at a given
@@ -391,12 +396,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     }
 
     try {
-      const record = assertRecord(JSON.parse(text), `${ticker} availability cache`);
-      return {
-        underlying: assertNonEmptyString(record.underlying, 'underlying'),
-        refreshedAt: assertNumber(record.refreshedAt, 'refreshedAt'),
-        availabilities: assertArray(record.availabilities, 'availabilities').map((entry, index) => toAvailability(entry, `availabilities[${index}]`)),
-      };
+      return AVAILABILITIES_SCHEMA.parse(JSON.parse(text));
     } catch (error: unknown) {
       throw new Error(`${file} is not a readable availability cache: ${String(error)}. Delete it to sweep ${ticker} again from scratch.`);
     }

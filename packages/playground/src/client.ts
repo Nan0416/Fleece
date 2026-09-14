@@ -12,6 +12,7 @@ import { easternClock } from '@fleece/utilities';
 
 import { getCachePath, marketDataKeys } from './credentials';
 import { OptionsAvailabilitiesHelper, OptionsAvailabilitiesHelperImpl } from './utils/options-availabilities';
+import { OptionsQuoteSpreadHelper, OptionsQuoteSpreadHelperImpl } from './utils/options-quote-spread';
 
 /** `packages/playground/dist/` at runtime, so three levels up is the repo root. */
 const ROOT = resolve(__dirname, '../../..');
@@ -29,6 +30,10 @@ export function marketDataClient(): AlpacaMarketDataClient {
 
 export function optionsAvailabilitiesHelper(alpacaMarketDataClient: AlpacaMarketDataClient): OptionsAvailabilitiesHelper {
   return new OptionsAvailabilitiesHelperImpl(getCachePath(), alpacaMarketDataClient);
+}
+
+export function optionsQuoteSpreadHelper(alpacaMarketDataClient: AlpacaMarketDataClient): OptionsQuoteSpreadHelper {
+  return new OptionsQuoteSpreadHelperImpl(getCachePath(), alpacaMarketDataClient);
 }
 
 /** Whether a date is far enough back that nothing about it can still change. */

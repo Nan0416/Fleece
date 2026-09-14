@@ -11,13 +11,15 @@
     "option-chain": "npm run build && node dist/option-chain.js",
     "option-research": "npm run build && node dist/option-research.js",
     "option-availability": "npm run build && node dist/option-availability.js",
+    "option-quote-spread": "npm run build && node dist/option-quote-spread.js",
     "watchlist": "npm run build && node dist/watchlist.js"
   },
   "dependencies": {
     "@fleece/broker": "1.0.0",
     "@fleece/marketdata": "1.0.0",
     "@fleece/utilities": "1.0.0",
-    "nanoid": "^3.3.11"
+    "nanoid": "^3.3.11",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
