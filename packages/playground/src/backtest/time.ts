@@ -7,20 +7,29 @@ export interface TimeSubscriber {
 }
 
 const logger = LoggerFactory.getLogger('Time');
+
+/**
+ * The clock as a strategy sees it: the instant the run is on, and no way to move it. Only
+ * the driver steps a `BacktestTime`.
+ */
+export interface Time {
+  readonly timestamp: number;
+}
+
 /**
  * The backtest clock. `forward` steps it one `timeFidelity` on and then tells each
  * subscriber, in subscription order and one at a time, so a run replays identically
  * rather than depending on which promise happens to settle first.
  *
- *     const clock = new Time(t0, 60_000); // one-minute steps
+ *     const clock = new BacktestTime(t0, t0 + 60 * 60_000, 60_000); // an hour, in one-minute steps
  *     clock.subscribe(account);
  *     await clock.forward();
- *     clock.timestamp(); // t0 + 60_000, and the account has already been told
+ *     clock.timestamp; // t0 + 60_000, and the account has already been told
  *
  * A subscriber that throws stops the run with the clock already advanced. That is
  * deliberate: a backtest that carries on past a bad number reports a plausible one.
  */
-export class Time {
+export class BacktestTime implements Time {
   private _timestamp: number;
   private subscribers: TimeSubscriber[];
 

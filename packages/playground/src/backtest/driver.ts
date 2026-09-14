@@ -1,17 +1,20 @@
 import { nanoid } from 'nanoid';
 import type { BacktestAccount, BacktestPortfolio, Trade } from './account';
 import type { BacktestMarketData, MarketData } from './marketdata';
-import type { Time } from './time';
+import type { BacktestTime, Time } from './time';
 
 export interface Strategy {
   readonly strategyId: string;
+  readonly timestamp: number;
   readonly data: MarketData;
   readonly portfolio: BacktestPortfolio;
-  evaluate(timestamp: number): Promise<ReadonlyArray<Trade> | undefined>;
+
+  tick(): Promise<ReadonlyArray<Trade> | undefined>;
 }
 
 export abstract class BaseStrategy implements Strategy {
   readonly strategyId: string;
+  private _time?: Time;
   private _data?: MarketData;
   private _portfolio?: BacktestPortfolio;
 
@@ -28,31 +31,42 @@ export abstract class BaseStrategy implements Strategy {
     this._portfolio = portfolio;
   }
 
+  bindTime(time: Time): void {
+    this._time = time;
+  }
+
   get data(): MarketData {
     if (this._data === undefined) {
-      throw new Error(`Strategy ${this.strategyId} has no market data yet. Add it to a BacktestDriver with addStrategy before it evaluates.`);
+      throw new Error(`Strategy ${this.strategyId} has no market data yet. Add it to a BacktestDriver with addStrategy before it ticks.`);
     }
     return this._data;
   }
 
   get portfolio(): BacktestPortfolio {
     if (this._portfolio === undefined) {
-      throw new Error(`Strategy ${this.strategyId} has no portfolio yet. Add it to a BacktestDriver with addStrategy before it evaluates.`);
+      throw new Error(`Strategy ${this.strategyId} has no portfolio yet. Add it to a BacktestDriver with addStrategy before it ticks.`);
     }
     return this._portfolio;
   }
 
-  abstract evaluate(timestamp: number): Promise<ReadonlyArray<Trade> | undefined>;
+  get timestamp(): number {
+    if (this._time === undefined) {
+      throw new Error(`Strategy ${this.strategyId} has no time yet. Add it to a BacktestDriver with addStrategy before it ticks.`);
+    }
+    return this._time.timestamp;
+  }
+
+  abstract tick(): Promise<ReadonlyArray<Trade> | undefined>;
 }
 
 export interface BacktestDriverProps {
-  readonly time: Time;
+  readonly time: BacktestTime;
   readonly marketData: BacktestMarketData;
   readonly account: BacktestAccount;
 }
 
 export class BacktestDriver {
-  private readonly time: Time;
+  private readonly time: BacktestTime;
   private readonly marketData: BacktestMarketData;
   private readonly account: BacktestAccount;
 
@@ -70,6 +84,7 @@ export class BacktestDriver {
   addStrategy(strategy: BaseStrategy): void {
     this.removeStrategy(strategy.strategyId);
     this.strategies.push(strategy);
+    strategy.bindTime(this.time);
     strategy.bindMarketData(this.marketData);
     strategy.bindPortfolio(this.account);
   }
@@ -89,7 +104,7 @@ export class BacktestDriver {
   private async runStrategies(): Promise<void> {
     for (let i = 0; i < this.strategies.length; i++) {
       const strategy = this.strategies[i];
-      const trades = (await strategy.evaluate(this.time.timestamp)) ?? [];
+      const trades = (await strategy.tick()) ?? [];
       for (let j = 0; j < trades.length; j++) {
         this.account.record(trades[j]);
       }

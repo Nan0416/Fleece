@@ -4,14 +4,15 @@ import { BacktestMarketDataImpl } from './marketdata';
 import { dayOfWeek, easternClock, LoggerFactory } from '@fleece/utilities';
 import { marketState } from '@fleece/marketdata';
 import { marketDataClient, optionsAvailabilitiesHelper } from '../research';
-import { Time } from './time';
+import { BacktestTime } from './time';
 
 const MS_PER_DAY = 3600_000 * 24;
 const SYMBOL = 'AAPL';
 const logger = LoggerFactory.getLogger('SampleStrategy');
 
 export class SampleStrategy extends BaseStrategy {
-  async evaluate(timestamp: number): Promise<ReadonlyArray<Trade> | undefined> {
+  async tick(): Promise<ReadonlyArray<Trade> | undefined> {
+    const timestamp = this.timestamp;
     if (marketState(timestamp) === 'open' && easternClock.time(timestamp) === '10:30:30') {
       const stockPrice = await this.printStockPrice(timestamp);
       if (dayOfWeek(easternClock.date(timestamp)) === 'Wednesday' && typeof stockPrice === 'number') {
@@ -85,7 +86,7 @@ export class SampleStrategy extends BaseStrategy {
 }
 
 async function main(): Promise<void> {
-  const time = new Time(easternClock.timestamp('2025-01-01'), easternClock.timestamp('2026-08-31', '23:59:59'), 30_000);
+  const time = new BacktestTime(easternClock.timestamp('2025-01-01'), easternClock.timestamp('2026-08-31', '23:59:59'), 30_000);
   const client = marketDataClient();
   const optionsHelper = optionsAvailabilitiesHelper(client);
   const marketData = new BacktestMarketDataImpl(client, optionsHelper);
