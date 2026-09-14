@@ -88,17 +88,17 @@ function closingSize(lotSize: Decimal, remaining: Decimal): Decimal {
  * FIFO: a trade closes the oldest lots of the opposite sign first, and whatever is left
  * over opens a new one at the trade's own price.
  *
- * A `Time` drives it, and a trade must be stamped with the instant the clock is on — so
- * the clock is the one place the current time comes from.
+ * A `BacktestTime` drives it, and a trade must be stamped with the instant the clock is
+ * on — so the clock is the one place the current time comes from.
  *
- *     const clock = new Time(t0, 60_000); // one-minute steps
+ *     const clock = new BacktestTime(t0, t0 + 60 * 60_000, 60_000); // an hour, in one-minute steps
  *     const account = new BacktestAccountImpl(10_000);
  *     clock.subscribe(account);
  *
  *     await clock.forward();
- *     account.record({ symbol: 'AAPL', size: 10, price: 50, timestamp: clock.timestamp() });
+ *     account.record({ symbol: 'AAPL', size: 10, price: 50, timestamp: clock.timestamp });
  *     await clock.forward();
- *     account.record({ symbol: 'AAPL', size: -15, price: 60, timestamp: clock.timestamp() });
+ *     account.record({ symbol: 'AAPL', size: -15, price: 60, timestamp: clock.timestamp });
  *     account.cash.toString(); // '10400'  — 10_000 - 500 + 900
  *     account.positions();     // [{ symbol: 'AAPL', size: -5, averagePrice: 60 }]
  *     account.realizedPLs();   // [{ symbol: 'AAPL', realizedPL: 100 }]

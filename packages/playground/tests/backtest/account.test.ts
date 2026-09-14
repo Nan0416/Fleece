@@ -1,7 +1,7 @@
 import { Decimal, type DecimalInput } from '@fleece/utilities';
 
 import { BacktestAccountImpl, type RealizedPL, type Transaction } from '../../src/backtest/account';
-import { Time } from '../../src/backtest/time';
+import { BacktestTime } from '../../src/backtest/time';
 
 const CALL = 'AAPL260918C00230000';
 const START = 10_000;
@@ -10,12 +10,12 @@ const MINUTE = 60_000;
 const END = T0 + 1_000 * MINUTE;
 
 interface Driven {
-  readonly clock: Time;
+  readonly clock: BacktestTime;
   readonly book: BacktestAccountImpl;
 }
 
 function account(): Driven {
-  const clock = new Time(T0, END, MINUTE);
+  const clock = new BacktestTime(T0, END, MINUTE);
   const book = new BacktestAccountImpl(START);
   clock.subscribe(book);
   return { clock, book };
@@ -34,7 +34,7 @@ function totalRealized(rows: ReadonlyArray<RealizedPL>): number {
 describe('BacktestAccountImpl', () => {
   describe('as a time subscriber', () => {
     it('gives each account an id of its own, so two of them both get told', async () => {
-      const clock = new Time(T0, END, MINUTE);
+      const clock = new BacktestTime(T0, END, MINUTE);
       const first = new BacktestAccountImpl(START);
       const second = new BacktestAccountImpl(START);
 

@@ -1,4 +1,4 @@
-import { Time, type TimeSubscriber } from '../../src/backtest/time';
+import { BacktestTime, type TimeSubscriber } from '../../src/backtest/time';
 
 const T0 = 1_700_000_000_000;
 const MINUTE = 60_000;
@@ -29,7 +29,7 @@ function recorder(): Recorder {
 
 describe('Time', () => {
   it('starts on the beginning timestamp and advances one fidelity per step', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
     expect(clock.timestamp).toBe(T0);
 
     await clock.forward();
@@ -41,19 +41,19 @@ describe('Time', () => {
   });
 
   it('refuses a fidelity that would stall or rewind the clock', () => {
-    expect(() => new Time(T0, END, 0)).toThrow(/positive whole number/);
-    expect(() => new Time(T0, END, -MINUTE)).toThrow(/positive whole number/);
+    expect(() => new BacktestTime(T0, END, 0)).toThrow(/positive whole number/);
+    expect(() => new BacktestTime(T0, END, -MINUTE)).toThrow(/positive whole number/);
     // A fractional one drifts the clock off the minute boundaries the bars sit on.
-    expect(() => new Time(T0, END, 0.5)).toThrow(/positive whole number/);
+    expect(() => new BacktestTime(T0, END, 0.5)).toThrow(/positive whole number/);
   });
 
   it('refuses an end still in the future, where there are no bars yet to replay', () => {
-    expect(() => new Time(T0, T0 + MINUTE, MINUTE, T0)).toThrow(/End the run at or before now/);
-    expect(() => new Time(T0, T0 + MINUTE, MINUTE, T0 + MINUTE)).not.toThrow();
+    expect(() => new BacktestTime(T0, T0 + MINUTE, MINUTE, T0)).toThrow(/End the run at or before now/);
+    expect(() => new BacktestTime(T0, T0 + MINUTE, MINUTE, T0 + MINUTE)).not.toThrow();
   });
 
   it('advances with nothing subscribed', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
 
     await clock.forward();
 
@@ -61,7 +61,7 @@ describe('Time', () => {
   });
 
   it('tells every subscriber the instant it moved to, in the order they subscribed', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
     const { log, listener } = recorder();
 
     clock.subscribe(listener('first'));
@@ -73,7 +73,7 @@ describe('Time', () => {
   });
 
   it('replaces a subscriber that subscribes again rather than telling it twice', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
     let calls = 0;
     const subscriber: TimeSubscriber = {
       timeSubscriberId: 'the-one',
@@ -91,7 +91,7 @@ describe('Time', () => {
   });
 
   it('moves a subscriber that subscribes again to the back of the order', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
     const { log, listener } = recorder();
     const first = listener('first');
 
@@ -104,7 +104,7 @@ describe('Time', () => {
   });
 
   it('dedupes on the id rather than on the object, so a rebuilt subscriber replaces the old one', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
     const { log, listener } = recorder();
 
     clock.subscribe(listener('same-id'));
@@ -115,7 +115,7 @@ describe('Time', () => {
   });
 
   it('tells a subscriber nothing about the steps taken before it subscribed', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
     const { log, listener } = recorder();
 
     await clock.forward();
@@ -127,7 +127,7 @@ describe('Time', () => {
   });
 
   it('stops the run when a subscriber throws, and tells no one after it', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
     const { log, listener } = recorder();
 
     clock.subscribe(listener('before'));
@@ -150,12 +150,12 @@ describe('Time', () => {
   });
 
   it('refuses an ending timestamp that is not after the beginning', () => {
-    expect(() => new Time(T0, T0, MINUTE)).toThrow(/no steps/);
-    expect(() => new Time(T0, T0 - MINUTE, MINUTE)).toThrow(/no steps/);
+    expect(() => new BacktestTime(T0, T0, MINUTE)).toThrow(/no steps/);
+    expect(() => new BacktestTime(T0, T0 - MINUTE, MINUTE)).toThrow(/no steps/);
   });
 
   it('stops rather than stepping past the ending timestamp', async () => {
-    const clock = new Time(T0, T0 + 3 * MINUTE, MINUTE);
+    const clock = new BacktestTime(T0, T0 + 3 * MINUTE, MINUTE);
 
     expect(await clock.forward()).toBe(true);
     expect(await clock.forward()).toBe(true);
@@ -165,7 +165,7 @@ describe('Time', () => {
   });
 
   it('leaves the clock where it is once the run is over, however often it is asked', async () => {
-    const clock = new Time(T0, T0 + MINUTE, MINUTE);
+    const clock = new BacktestTime(T0, T0 + MINUTE, MINUTE);
     const { log, listener } = recorder();
     clock.subscribe(listener('only'));
 
@@ -180,7 +180,7 @@ describe('Time', () => {
   it('steps a whole run to the end without overshooting an uneven fidelity', async () => {
     // 10 minutes of room and 3-minute steps: three steps land on 9, and a fourth would
     // pass the end.
-    const clock = new Time(T0, T0 + 10 * MINUTE, 3 * MINUTE);
+    const clock = new BacktestTime(T0, T0 + 10 * MINUTE, 3 * MINUTE);
     let steps = 0;
     while (await clock.forward()) {
       steps += 1;
@@ -191,7 +191,7 @@ describe('Time', () => {
   });
 
   it('tells every subscriber where the run begins, before any step is taken', async () => {
-    const clock = new Time(T0, END, MINUTE);
+    const clock = new BacktestTime(T0, END, MINUTE);
     const { log, listener } = recorder();
 
     clock.subscribe(listener('first'));

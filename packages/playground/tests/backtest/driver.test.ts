@@ -3,7 +3,7 @@ import { Decimal } from '@fleece/utilities';
 import type { BacktestAccount, Trade, Transaction } from '../../src/backtest/account';
 import { BacktestDriver, BaseStrategy } from '../../src/backtest/driver';
 import type { BacktestMarketData } from '../../src/backtest/marketdata';
-import { Time } from '../../src/backtest/time';
+import { BacktestTime } from '../../src/backtest/time';
 
 const T0 = 1_700_000_000_000;
 const MINUTE = 60_000;
@@ -63,7 +63,7 @@ function journal(): Journal {
   };
 }
 
-/** Records the instant it was handed, and trades whatever `orders` says at that instant. */
+/** Records the instant it reads off the driver's clock, and trades whatever `orders` says at that instant. */
 class RecordingStrategy extends BaseStrategy {
   readonly seen: number[] = [];
 
@@ -75,7 +75,8 @@ class RecordingStrategy extends BaseStrategy {
     super(strategyId);
   }
 
-  async evaluate(timestamp: number): Promise<ReadonlyArray<Trade> | undefined> {
+  async tick(): Promise<ReadonlyArray<Trade> | undefined> {
+    const timestamp = this.timestamp;
     this.seen.push(timestamp);
     this.log.push(`${this.strategyId}:evaluate@${timestamp}`);
     return this.orders(timestamp);
@@ -89,7 +90,7 @@ function strategy(strategyId: string, log: string[], orders: (timestamp: number)
 /** Two steps, so there is a first instant, a middle and an end to tell apart. */
 function driver(entries: Journal, endingTimestamp: number = T0 + 2 * MINUTE): { subject: BacktestDriver; account: FakeAccount } {
   const account = entries.account();
-  const subject = new BacktestDriver({ time: new Time(T0, endingTimestamp, MINUTE), marketData: entries.marketData(), account });
+  const subject = new BacktestDriver({ time: new BacktestTime(T0, endingTimestamp, MINUTE), marketData: entries.marketData(), account });
   return { subject, account };
 }
 
@@ -208,29 +209,36 @@ describe('BacktestDriver', () => {
     expect(entries.log.filter((entry) => entry.includes('evaluate'))).toEqual([`beta:evaluate@${T0 + MINUTE}`]);
   });
 
-  it("hands a strategy the driver's market data and account when it is added", () => {
+  it("hands a strategy the driver's clock, market data and account when it is added", async () => {
     const entries = journal();
     const marketData = entries.marketData();
     const account = entries.account();
-    const subject = new BacktestDriver({ time: new Time(T0, T0 + MINUTE, MINUTE), marketData, account });
+    const time = new BacktestTime(T0, T0 + MINUTE, MINUTE);
+    const subject = new BacktestDriver({ time, marketData, account });
     const alpha = strategy('alpha', entries.log);
 
     subject.addStrategy(alpha);
 
+    expect(alpha.timestamp).toBe(T0);
     expect(alpha.data).toBe(marketData);
     expect(alpha.portfolio).toBe(account);
+
+    // Bound to the clock itself rather than a copy of its reading, so it moves with the run.
+    await time.forward();
+    expect(alpha.timestamp).toBe(T0 + MINUTE);
   });
 
   it('says a strategy was never added, rather than handing it nothing to read', () => {
     const alpha = strategy('alpha', []);
 
+    expect(() => alpha.timestamp).toThrow(/alpha has no time yet.*addStrategy/);
     expect(() => alpha.data).toThrow(/alpha has no market data yet.*addStrategy/);
     expect(() => alpha.portfolio).toThrow(/alpha has no portfolio yet.*addStrategy/);
   });
 
   it('subscribes market data and the account itself, so a caller cannot forget to', async () => {
     const entries = journal();
-    const time = new Time(T0, T0 + MINUTE, MINUTE);
+    const time = new BacktestTime(T0, T0 + MINUTE, MINUTE);
     new BacktestDriver({ time, marketData: entries.marketData(), account: entries.account() });
 
     await time.init();
