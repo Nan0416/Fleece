@@ -3,7 +3,8 @@ import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { marketHour, marketState, parseOccSymbol, type AlpacaMarketDataClient, type Bar, type OccSymbol, type OptionSnapshot } from '@fleece/marketdata';
-import { assertArray, assertNonEmptyString, assertNumber, assertOptionalRecord, assertRecord, easternClock, LoggerFactory } from '@fleece/utilities';
+import { easternClock, LoggerFactory } from '@fleece/utilities';
+import { z } from 'zod';
 
 const logger = LoggerFactory.getLogger('OptionsQuoteSpread');
 
@@ -21,12 +22,24 @@ const MS_PER_DAY = 86_400_000;
 const DAYS_TO_EXPIRY_BOUNDS: ReadonlyArray<number> = [7, 30, 60, 180];
 
 /** Upper bounds of each out-of-the-money group, inclusive, as a fraction of spot. Negative is in the money. */
-const OUT_OF_THE_MONEY_BOUNDS: ReadonlyArray<number> = [-0.1, -0.025, 0.025, 0.1, 0.2];
+const OUT_OF_THE_MONEY_BOUNDS: ReadonlyArray<number> = [-0.2, -0.1, -0.025, 0.025, 0.1, 0.2];
 
 /** A group with fewer quotes than this answers from a wider one. */
 const MIN_SAMPLES = 20;
 
 const ALL = 'all';
+
+/** Only the fields the estimate reads; the rest of each raw snapshot is left unchecked. */
+const CAPTURE_SCHEMA = z.object({
+  capturedAt: z.number(),
+  underlyingBar: z.object({ c: z.number() }),
+  contracts: z.array(
+    z.object({
+      S: z.string(),
+      lq: z.object({ bp: z.number(), ap: z.number(), t: z.number() }).optional(),
+    }),
+  ),
+});
 
 /** One `save`, stored as one line of the underlying's file. */
 export interface ChainCapture {
@@ -146,10 +159,8 @@ function endsWithNewline(file: string): boolean {
   }
 }
 
-function samplesOf(value: unknown, ticker: string): ReadonlyArray<SpreadSample> {
-  const record = assertRecord(value, 'capture');
-  const capturedAt = assertNumber(record.capturedAt, 'capturedAt');
-  const spot = assertNumber(assertRecord(record.underlyingBar, 'underlyingBar').c, 'underlyingBar.c');
+function samplesOf(line: string, ticker: string): ReadonlyArray<SpreadSample> {
+  const { capturedAt, underlyingBar, contracts } = CAPTURE_SCHEMA.parse(JSON.parse(line));
   const session = marketHour(capturedAt);
   if (session === undefined) {
     throw new Error(`captured at ${easternClock.datetime(capturedAt)}, a date with no market session`);
@@ -157,31 +168,24 @@ function samplesOf(value: unknown, ticker: string): ReadonlyArray<SpreadSample> 
   const captureDate = easternClock.date(capturedAt);
 
   const samples: SpreadSample[] = [];
-  assertArray(record.contracts, 'contracts').forEach((entry, index) => {
-    const snapshot = assertRecord(entry, `contracts[${index}]`);
-    const contract = parseOccSymbol(assertNonEmptyString(snapshot.S, `contracts[${index}].S`));
+  for (const { S, lq } of contracts) {
+    const contract = parseOccSymbol(S);
     // Adjusted roots do not deliver 100 shares, so their premiums are not comparable.
-    if (contract === undefined || contract.underlying !== ticker || contract.root !== contract.underlying) {
-      return;
+    if (contract === undefined || contract.underlying !== ticker || contract.root !== contract.underlying || lq === undefined) {
+      continue;
     }
-    const quote = assertOptionalRecord(snapshot.lq, `contracts[${index}].lq`);
-    if (quote === undefined) {
-      return;
-    }
-    const bid = assertNumber(quote.bp, `contracts[${index}].lq.bp`);
-    const ask = assertNumber(quote.ap, `contracts[${index}].lq.ap`);
-    const quotedAt = assertNumber(quote.t, `contracts[${index}].lq.t`);
+    const { bp: bid, ap: ask, t: quotedAt } = lq;
     // A zero bid is a contract nobody would buy back, which is not one a backtest that saw it print trades.
     // A quote from before the open is left over from an earlier session.
     if (bid <= 0 || ask <= bid || quotedAt < session.openAt) {
-      return;
+      continue;
     }
     const daysToExpiry = daysBetween(captureDate, contract.expiration);
     if (daysToExpiry < 0) {
-      return;
+      continue;
     }
-    samples.push({ daysToExpiry, outOfTheMoney: outOfTheMoney(contract, spot), relativeSpread: (ask - bid) / ((ask + bid) / 2) });
-  });
+    samples.push({ daysToExpiry, outOfTheMoney: outOfTheMoney(contract, underlyingBar.c), relativeSpread: (ask - bid) / ((ask + bid) / 2) });
+  }
   return samples;
 }
 
@@ -193,10 +197,17 @@ function samplesOf(value: unknown, ticker: string): ReadonlyArray<SpreadSample> 
  *     await helper.save('AMZN');   // during regular hours, as often as wanted
  *     await helper.estimateQuote({ contract, underlyingPrice: 181.2, referencePrice: 12.3, timestamp });
  *
- * `save` appends the raw chain to `options-quote-spread/<TICKER>.jsonl`, one capture per line.
- * `estimateQuote` groups every captured quote by days to expiry and distance from the money,
- * takes each group's median `spread / mid`, and lays half that spread either side of the
- * reference price.
+ * `save` appends the raw Alpaca option chain and the spot price to
+ * `options-quote-spread/<TICKER>.jsonl`, one capture per line.
+ *
+ * On first read, every captured quote's `(ask - bid) / mid` is grouped at three tiers, and
+ * each group keeps its median:
+ *  1. days to expiry and moneyness, e.g. 7 to 30 days, 2.5% to 10% out of the money
+ *  2. days to expiry
+ *  3. all quotes
+ *
+ * `estimateQuote` picks the first tier whose group holds at least `MIN_SAMPLES` quotes, and
+ * lays half of `median × referencePrice`, at least one tick, either side of `referencePrice`.
  */
 export class OptionsQuoteSpreadHelperImpl implements OptionsQuoteSpreadHelper {
   /** Built from the file once per underlying; a minute-fidelity run asks thousands of times. */
@@ -320,7 +331,7 @@ export class OptionsQuoteSpreadHelperImpl implements OptionsQuoteSpreadHelper {
         }
         let samples: ReadonlyArray<SpreadSample>;
         try {
-          samples = samplesOf(JSON.parse(line), ticker);
+          samples = samplesOf(line, ticker);
         } catch (error: unknown) {
           throw new Error(`Line ${lineNumber} of ${file} is not a readable capture: ${String(error)}. Delete that line to keep the others.`);
         }

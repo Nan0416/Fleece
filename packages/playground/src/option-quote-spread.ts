@@ -27,17 +27,17 @@ async function load(): Promise<void> {
 
 async function read(): Promise<void> {
   const helper = optionsQuoteSpreadHelper(marketDataClient());
-  const contract = parseOccSymbol('AMZN250321C00230000');
+  const contract = parseOccSymbol('NVDA261023P00255000');
   if (contract === undefined) {
     throw new Error('Not an OCC contract symbol.');
   }
-  const quote = await helper.estimateQuote({ contract, underlyingPrice: 225, referencePrice: 6.2, timestamp: easternClock.timestamp('2025-02-10', '10:30:00') });
+  const quote = await helper.estimateQuote({ contract, underlyingPrice: 212, referencePrice: 42.79, timestamp: easternClock.timestamp('2025-02-10', '10:30:00') });
   console.log(`${contract.symbol}: bid ${quote.bid.toFixed(3)}, ask ${quote.ask.toFixed(3)}, spread ${quote.spread.toFixed(3)}`);
 }
 
 // Every task is referenced here, so the one not picked still compiles under `noUnusedLocals`.
 const TASKS = { load, read };
-const TASK: keyof typeof TASKS = 'load';
+const TASK: keyof typeof TASKS = 'read'; // 'load';
 
 TASKS[TASK]().catch((error: unknown) => {
   logger.error(`${String(error)}`);

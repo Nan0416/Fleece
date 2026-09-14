@@ -225,11 +225,14 @@ describe('OptionsQuoteSpreadHelperImpl.estimateQuote', () => {
     await expect(state.helper.estimateQuote({ contract: NEAR_CALL, underlyingPrice: SPOT, referencePrice: 10, timestamp: at })).rejects.toThrow(/Run save\('AMZN'\)/);
   });
 
-  it('names an unreadable line, and reads the file again once it is fixed', async () => {
+  it.each([
+    ['is not JSON', 'not json'],
+    ['is JSON in the wrong shape', '{"capturedAt":"10:30","underlyingBar":{"c":100},"contracts":[]}'],
+  ])('names a line that %s, and reads the file again once it is fixed', async (_, bad) => {
     const state = setup();
     await capture(state, atTheMoneyNear(0.1));
     const good = readFileSync(state.file, 'utf8');
-    appendFileSync(state.file, 'not json\n');
+    appendFileSync(state.file, `${bad}\n`);
 
     await expect(state.helper.estimateQuote({ contract: NEAR_CALL, underlyingPrice: SPOT, referencePrice: 10, timestamp: at })).rejects.toThrow(/Line 2 of .*AMZN\.jsonl/);
 
