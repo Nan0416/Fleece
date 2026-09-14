@@ -69,7 +69,7 @@ export interface BacktestAccount extends BacktestPortfolio, TimeSubscriber {
  */
 const OPTION_CONTRACT_MULTIPLIER = Decimal.of(100);
 
-function contractMultiplier(symbol: string): Decimal {
+export function contractMultiplier(symbol: string): Decimal {
   return parseOccSymbol(symbol) === undefined ? Decimal.ONE : OPTION_CONTRACT_MULTIPLIER;
 }
 
