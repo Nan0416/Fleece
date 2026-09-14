@@ -339,12 +339,14 @@ export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHist
   ) {}
 
   /**
-   * Sweeps the sessions after the last one in the file, never one already there.
+   * Sweeps the sessions after the last one in the file, through the latest completed trading
+   * day: the last session dated before today, so today's is left for the next save even once
+   * it has closed.
    *
-   * Only sessions that closed before the availability cache was last refreshed: that cache is
-   * where the contracts come from, and a session swept against a listing older than it would
-   * be missing the strikes added since — and stay that way, since a swept session is never
-   * swept again. Run the availability sweep first to reach further.
+   * The availability cache is where the contracts come from, so it is refreshed first unless
+   * it was refreshed on a later date than that day. A session swept against an older listing
+   * would be missing the strikes added since — and stay that way, since a swept session is
+   * never swept again.
    *
    * Written every 50 sessions, so a failure loses at most the sessions since the last write,
    * and the next `save` carries on from there.
@@ -354,29 +356,20 @@ export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHist
     const refreshedAt = this.now();
     const sessions = [...(this.readCache(ticker)?.sessions ?? [])];
 
-    let listedAt = await this.availabilities.refreshedAt(ticker);
-    if (listedAt === undefined) {
-      await this.availabilities.save(ticker);
-      listedAt = await this.availabilities.refreshedAt(ticker);
+    const through = latestCompletedSession(easternClock.date(refreshedAt));
+    if (through === undefined) {
+      throw new Error(`The market-hours table has no session in the fortnight before ${easternClock.date(refreshedAt)}. Refresh the table before sweeping.`);
     }
-    if (listedAt === undefined) {
-      throw new Error(`Swept ${ticker}'s option availability but it still reads as never swept, so there are no contracts to measure against.`);
-    }
+    await this.refreshAvailabilities(ticker, through.date);
 
-    const pending = sessionsAfter(sessions[sessions.length - 1]?.date, Math.min(refreshedAt, listedAt));
+    const pending = sessionsAfter(sessions[sessions.length - 1]?.date, through);
     if (pending.length === 0) {
       logger.info(
-        `${ticker}: nothing to sweep. The last session held is ${sessions[sessions.length - 1]?.date ?? 'none'}, and the availability cache was refreshed ${easternClock.datetime(listedAt)}.`,
+        `${ticker}: nothing to sweep. The last session held is ${sessions[sessions.length - 1]?.date ?? 'none'}, and the latest completed trading day is ${through.date}.`,
       );
       return;
     }
     const lastPending = pending[pending.length - 1];
-    const next = marketHourByIndex(lastPending.index + 1);
-    if (next !== undefined && next.closeAt <= refreshedAt && next.closeAt > listedAt) {
-      logger.warn(
-        `${ticker}: stopping at ${lastPending.date}, the last session to close before the availability cache was refreshed at ${easternClock.datetime(listedAt)}. Refresh it to sweep further.`,
-      );
-    }
     logger.info(`${ticker}: sweeping ${pending.length} sessions, ${pending[0].date} to ${lastPending.date}.`);
 
     try {
@@ -396,6 +389,25 @@ export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHist
       }
     } finally {
       this.loaded.delete(ticker);
+    }
+  }
+
+  /** Sweeps the availability cache unless it was last refreshed on a date after `through`. */
+  private async refreshAvailabilities(ticker: string, through: string): Promise<void> {
+    const listedAt = await this.availabilities.refreshedAt(ticker);
+    if (listedAt !== undefined && easternClock.date(listedAt) > through) {
+      return;
+    }
+    logger.info(
+      `${ticker}: option availability was ${listedAt === undefined ? 'never swept' : `last refreshed ${easternClock.datetime(listedAt)}`}, not after ${through}. Refreshing it first.`,
+    );
+    await this.availabilities.save(ticker);
+
+    const refreshed = await this.availabilities.refreshedAt(ticker);
+    if (refreshed === undefined || easternClock.date(refreshed) <= through) {
+      throw new Error(
+        `Refreshed ${ticker}'s option availability but it still reads as not refreshed after ${through}, so its listing may be missing contracts that session could trade.`,
+      );
     }
   }
 
@@ -523,13 +535,13 @@ export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHist
 }
 
 /**
- * The sessions after `lastDate`, or from the start of the history when there is none, that
- * closed by `closedBy`. Ends at the market-hours table's last session if that comes first.
+ * The sessions after `lastDate`, or from the start of the history when there is none,
+ * through `through`.
  */
-function sessionsAfter(lastDate: string | undefined, closedBy: number): ReadonlyArray<MarketHour> {
+function sessionsAfter(lastDate: string | undefined, through: MarketHour): ReadonlyArray<MarketHour> {
   let session = lastDate === undefined ? firstSessionFrom(HISTORY_FROM) : nextSession(lastDate);
   const sessions: MarketHour[] = [];
-  while (session !== undefined && session.closeAt <= closedBy) {
+  while (session !== undefined && session.index <= through.index) {
     sessions.push(session);
     session = marketHourByIndex(session.index + 1);
   }
@@ -542,6 +554,20 @@ function nextSession(date: string): MarketHour | undefined {
     throw new Error(`The implied volatility history ends on ${date}, which is not a session in the market-hours table. Delete the file to sweep again from scratch.`);
   }
   return marketHourByIndex(session.index + 1);
+}
+
+/**
+ * The last session dated before `today`, looking a fortnight back at most. On a Monday that is
+ * the Friday before, whether or not Monday's session has closed.
+ */
+export function latestCompletedSession(today: string): MarketHour | undefined {
+  for (let offset = 1; offset <= 14; offset += 1) {
+    const session = marketHour(easternClock.shiftDate(today, -offset));
+    if (session !== undefined) {
+      return session;
+    }
+  }
+  return undefined;
 }
 
 /** The first session on or after `date`, looking a fortnight ahead at most. */

@@ -8,6 +8,7 @@ import { easternClock } from '@fleece/utilities';
 import {
   ImpliedVolatilityHistoryHelperImpl,
   lastPrint,
+  latestCompletedSession,
   measureSample,
   sampleTimes,
   solvePoint,
@@ -228,22 +229,59 @@ class FakeClient {
   }
 }
 
-function availabilities(listedAt: number | undefined): OptionsAvailabilitiesHelper {
-  return { cachePath: '/nowhere', save: async () => {}, availableOptions: async () => CHAIN, refreshedAt: async () => listedAt };
+/** Answers from a fixed chain. A `save` moves its refresh time to the helper's clock, as a real sweep would. */
+class FakeAvailabilities implements OptionsAvailabilitiesHelper {
+  readonly cachePath = '/nowhere';
+  saves = 0;
+
+  constructor(
+    private listedAt: number | undefined,
+    private readonly now: number,
+  ) {}
+
+  async save(): Promise<void> {
+    this.saves += 1;
+    this.listedAt = this.now;
+  }
+
+  async availableOptions(): Promise<ReadonlyArray<OccSymbol>> {
+    return CHAIN;
+  }
+
+  async refreshedAt(): Promise<number | undefined> {
+    return this.listedAt;
+  }
 }
 
 function afterClose(date: string): number {
   return easternClock.timestamp(date, '20:00:00');
 }
 
-function helper(root: string, client: FakeClient, now: number, listedAt: number | undefined = now): ImpliedVolatilityHistoryHelperImpl {
+function morningOf(date: string): number {
+  return easternClock.timestamp(date, '08:00:00');
+}
+
+function helper(root: string, client: FakeClient, now: number, listed: FakeAvailabilities = new FakeAvailabilities(now, now)): ImpliedVolatilityHistoryHelperImpl {
   // The fake implements the slice of the client this class touches, which the compiler cannot know.
-  return new ImpliedVolatilityHistoryHelperImpl(root, client as unknown as AlpacaMarketDataClient, availabilities(listedAt), () => now, 1);
+  return new ImpliedVolatilityHistoryHelperImpl(root, client as unknown as AlpacaMarketDataClient, listed, () => now, 1);
 }
 
 function readHistory(root: string): ImpliedVolatilityHistory {
   return JSON.parse(readFileSync(join(root, 'implied-volatility', 'AAPL.json'), 'utf8')) as ImpliedVolatilityHistory;
 }
+
+describe('latestCompletedSession', () => {
+  it('is the session before today, so a Monday evening still reads as the Friday before', () => {
+    expect(latestCompletedSession('2024-02-05')?.date).toBe('2024-02-02');
+    expect(latestCompletedSession('2024-02-06')?.date).toBe('2024-02-05');
+  });
+
+  it('skips a weekend and a holiday', () => {
+    expect(latestCompletedSession('2024-02-03')?.date).toBe('2024-02-02');
+    // 2024-02-19 was Presidents' Day.
+    expect(latestCompletedSession('2024-02-20')?.date).toBe('2024-02-16');
+  });
+});
 
 describe('ImpliedVolatilityHistoryHelperImpl', () => {
   let root: string;
@@ -252,9 +290,9 @@ describe('ImpliedVolatilityHistoryHelperImpl', () => {
     root = mkdtempSync(join(tmpdir(), 'iv-history-'));
   });
 
-  it('sweeps every closed session from the start of the history, at every half hour', async () => {
+  it('sweeps every session from the start of the history through the latest completed trading day, at every half hour', async () => {
     const client = new FakeClient(['2024-02-02']);
-    await helper(root, client, afterClose('2024-02-05')).save('aapl');
+    await helper(root, client, morningOf('2024-02-06')).save('aapl');
 
     const history = readHistory(root);
     expect(history.sessions.map((session) => session.date)).toEqual(HISTORY_START);
@@ -270,29 +308,47 @@ describe('ImpliedVolatilityHistoryHelperImpl', () => {
   });
 
   it('carries on after the last session it holds rather than sweeping again from the start', async () => {
-    await helper(root, new FakeClient(), afterClose('2024-02-05')).save('AAPL');
+    await helper(root, new FakeClient(), morningOf('2024-02-06')).save('AAPL');
 
     const client = new FakeClient();
-    await helper(root, client, afterClose('2024-02-07')).save('AAPL');
+    await helper(root, client, morningOf('2024-02-08')).save('AAPL');
 
     expect(client.stockDates).toEqual(['2024-02-06', '2024-02-07']);
     expect(readHistory(root).sessions.map((session) => session.date)).toEqual([...HISTORY_START, '2024-02-06', '2024-02-07']);
   });
 
-  it('leaves a session still trading for the next save', async () => {
+  it("leaves today's session for the next save, even once it has closed", async () => {
     const client = new FakeClient();
-    await helper(root, client, easternClock.timestamp('2024-02-05', '15:00:00')).save('AAPL');
+    await helper(root, client, afterClose('2024-02-05')).save('AAPL');
     expect(client.stockDates).toEqual(['2024-02-01', '2024-02-02']);
   });
 
-  it('stops at the last session to close before the contract listing was refreshed', async () => {
+  it('refreshes the option availability first when it was last refreshed on the latest completed trading day, not after it', async () => {
+    const now = morningOf('2024-02-06');
+    const listed = new FakeAvailabilities(afterClose('2024-02-05'), now);
     const client = new FakeClient();
-    await helper(root, client, afterClose('2024-02-07'), afterClose('2024-02-02')).save('AAPL');
-    expect(client.stockDates).toEqual(['2024-02-01', '2024-02-02']);
+    await helper(root, client, now, listed).save('AAPL');
+
+    expect(listed.saves).toBe(1);
+    expect(client.stockDates).toEqual(HISTORY_START);
+  });
+
+  it('refreshes the option availability first when it has never been swept', async () => {
+    const now = morningOf('2024-02-06');
+    const listed = new FakeAvailabilities(undefined, now);
+    await helper(root, new FakeClient(), now, listed).save('AAPL');
+    expect(listed.saves).toBe(1);
+  });
+
+  it('leaves the option availability alone when it was refreshed on a later date than the latest completed trading day', async () => {
+    const now = morningOf('2024-02-06');
+    const listed = new FakeAvailabilities(easternClock.timestamp('2024-02-06', '00:30:00'), now);
+    await helper(root, new FakeClient(), now, listed).save('AAPL');
+    expect(listed.saves).toBe(0);
   });
 
   it('keeps every 50 sessions it swept when a later one fails, and the next save carries on from there', async () => {
-    const now = afterClose('2024-04-19');
+    const now = morningOf('2024-04-22');
     const failing = new FakeClient();
     failing.failOn = '2024-04-17';
     await expect(helper(root, failing, now).save('AAPL')).rejects.toThrow('429');
@@ -308,11 +364,11 @@ describe('ImpliedVolatilityHistoryHelperImpl', () => {
   });
 
   it('writes nothing when there is nothing new to sweep', async () => {
-    await helper(root, new FakeClient(), afterClose('2024-02-05')).save('AAPL');
+    await helper(root, new FakeClient(), morningOf('2024-02-06')).save('AAPL');
     const before = readFileSync(join(root, 'implied-volatility', 'AAPL.json'), 'utf8');
 
     const client = new FakeClient();
-    await helper(root, client, afterClose('2024-02-05') + MINUTE).save('AAPL');
+    await helper(root, client, afterClose('2024-02-06')).save('AAPL');
 
     expect(client.stockDates).toEqual([]);
     expect(readFileSync(join(root, 'implied-volatility', 'AAPL.json'), 'utf8')).toBe(before);
@@ -320,7 +376,7 @@ describe('ImpliedVolatilityHistoryHelperImpl', () => {
 
   it('sweeps on the first read when nothing has been swept, and answers later reads from memory', async () => {
     const client = new FakeClient();
-    const subject = helper(root, client, afterClose('2024-02-05'));
+    const subject = helper(root, client, morningOf('2024-02-06'));
 
     expect((await subject.sessions('AAPL')).map((session) => session.date)).toEqual(HISTORY_START);
     await subject.sessions('AAPL');

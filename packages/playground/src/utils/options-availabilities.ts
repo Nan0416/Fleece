@@ -34,6 +34,9 @@ const SWEEP_CONCURRENCY = 10;
 /** The folder under the cache root these files live in, so other caches can share the root. */
 const CACHE_FOLDER = 'options-availabilities';
 
+/** How far ahead of the sweep a contract listing reaches. */
+const LISTING_YEARS = 3;
+
 /** What an equity option stops trading at, on every day the market-hours table does not name. */
 const REGULAR_CLOSE = '16:00:00';
 
@@ -225,15 +228,20 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
    *
    * Adjusted roots — `1AMZN...` — are left out. They do not deliver 100 shares, Alpaca's
    * bars endpoint does not serve them, and the account prices every OCC symbol at 100.
+   *
+   * Out to three years, which is past the longest LEAP. Without an end, Alpaca stops at the
+   * next weekend: a sweep on a Sunday listed nothing past that Friday, so every contract
+   * more than a week out was missing until it expired.
    */
   private async listContracts(ticker: string): Promise<ReadonlyArray<OccSymbol>> {
     const bySymbol = new Map<string, OccSymbol>();
+    const expirationTo = easternClock.shiftYears(easternClock.date(this.now()), LISTING_YEARS);
     let adjusted = 0;
 
     for (const status of ['active', 'inactive'] satisfies ReadonlyArray<OptionContractStatus>) {
       let startAfter: string | undefined = undefined;
       do {
-        const response = await this.client.listOptionContracts({ underlying: ticker, status, startAfter });
+        const response = await this.client.listOptionContracts({ underlying: ticker, status, expirationTo, startAfter });
         for (const contract of response.contracts) {
           const occSymbol = parseOccSymbol(contract.S);
           if (occSymbol === undefined) {
