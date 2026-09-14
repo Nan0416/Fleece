@@ -18,13 +18,19 @@ import {
   type StockSplitsRequest,
   type StockSplitsResponse,
 } from '@fleece/marketdata';
-import { easternClock } from '@fleece/utilities';
+import { easternClock, LoggerFactory } from '@fleece/utilities';
 import { nanoid } from 'nanoid';
 
 import type { OptionsAvailabilitiesHelper } from '../utils/options-availabilities';
 import type { TimeSubscriber } from './time';
 
 const MS_PER_MINUTE = 60_000;
+/**
+ * How long after its minute ends Alpaca publishes a minute bar, as measured against the
+ * live feed. A backtest that saw the bar at the boundary would trade on a bar a live
+ * strategy could not have had yet.
+ */
+const MINUTE_BAR_CONSOLIDATION_DELAY = 4_000;
 
 /** The two shapes a backtest reads. Both have an end this can date, which is why. */
 type BarSpan = 'minute' | 'day';
@@ -55,6 +61,7 @@ export interface ListActiveOptionContractsResponse {
   readonly contracts: ReadonlyArray<OccSymbol>;
 }
 
+const logger = LoggerFactory.getLogger('BacktestMarketData');
 /**
  * Always regular hours, which is the client's default for minute bars. The flag is left off
  * rather than passed through because segments are cached by symbol alone: whichever request
@@ -89,12 +96,18 @@ export interface MarketData {
 
 export type BacktestMarketData = MarketData & TimeSubscriber;
 
-function endOfBar(bar: Bar, span: BarSpan): number {
+function endOfBar(bar: Bar, span: BarSpan, type: 'options' | 'stocks', symbol: string): number | undefined {
   if (span === 'minute') {
-    return bar.t + MS_PER_MINUTE;
+    return bar.t + MS_PER_MINUTE + MINUTE_BAR_CONSOLIDATION_DELAY;
   } else {
     const marketClosedAt = marketHour(bar.t)?.closeAt;
     if (typeof marketClosedAt !== 'number') {
+      if (type === 'options') {
+        // It happens, for reasons unknown: `AAPL250620C00215000` has a daily bar stamped
+        // 2024-06-01T04:00:00Z, and 2024-06-01 is a Saturday.
+        logger.warn(`Option ${symbol} has a daily bar on ${easternClock.datetime(bar.t)}, which has no market session. Leaving it out.`);
+        return undefined;
+      }
       throw new Error(`${easternClock.datetime(bar.t)} doesn't have market hour data.`);
     }
     return marketClosedAt;
@@ -192,7 +205,7 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
   }
 
   async minuteBars(request: BacktestMinuteBarsRequest): Promise<BarsResponse> {
-    const bars = await this.segmentedBars(`stock-minute|${request.symbol}`, '1Month', 'minute', request, (segment) =>
+    const bars = await this.segmentedBars(`stock-minute|${request.symbol}`, '1Month', 'minute', 'stocks', request, (segment) =>
       this.client.minuteBars({ symbol: request.symbol, from: segment.startTimestamp, to: segment.endTimestamp - 1, adjustForSplit: false }),
     );
     return { bars: request.adjustForSplit === true ? await this.adjusted(request.symbol, bars) : bars };
@@ -200,7 +213,7 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
 
   /** A year a segment: a year of daily bars is about 252 of them, which is one request. */
   async dailyBars(request: DailyBarsRequest): Promise<BarsResponse> {
-    const bars = await this.segmentedBars(`stock-day|${request.symbol}`, '1Year', 'day', request, (segment) =>
+    const bars = await this.segmentedBars(`stock-day|${request.symbol}`, '1Year', 'day', 'stocks', request, (segment) =>
       this.client.dailyBars({ symbol: request.symbol, from: segment.startTimestamp, to: segment.endTimestamp - 1, adjustForSplit: false }),
     );
     return { bars: request.adjustForSplit === true ? await this.adjusted(request.symbol, bars) : bars };
@@ -222,14 +235,14 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
    * so the prints under the old symbol stand as they printed.
    */
   async optionMinuteBars(request: OptionMinuteBarsRequest): Promise<OptionBarsResponse> {
-    const bars = await this.segmentedBars(`option-minute|${request.symbol}`, '1Month', 'minute', request, (segment) =>
+    const bars = await this.segmentedBars(`option-minute|${request.symbol}`, '1Month', 'minute', 'options', request, (segment) =>
       this.client.optionBars({ symbol: request.symbol, from: segment.startTimestamp, to: segment.endTimestamp - 1, multiplier: 1, timespan: 'minute' }),
     );
     return { bars };
   }
 
   async optionDailyBars(request: OptionDailyBarsRequest): Promise<OptionBarsResponse> {
-    const bars = await this.segmentedBars(`option-day|${request.symbol}`, '1Year', 'day', request, (segment) =>
+    const bars = await this.segmentedBars(`option-day|${request.symbol}`, '1Year', 'day', 'options', request, (segment) =>
       this.client.optionBars({ symbol: request.symbol, from: segment.startTimestamp, to: segment.endTimestamp - 1, multiplier: 1, timespan: 'day' }),
     );
     return { bars };
@@ -259,7 +272,8 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
     key: string,
     windowSize: '1Year' | '1Month',
     span: BarSpan,
-    request: { readonly from: DateOrTimestamp; readonly to?: DateOrTimestamp },
+    type: 'stocks' | 'options',
+    request: { readonly symbol: string; readonly from: DateOrTimestamp; readonly to?: DateOrTimestamp },
     fetch: (segment: TimeWindow) => Promise<{ readonly bars: ReadonlyArray<Bar> }>,
   ): Promise<Bar[]> {
     // Before the clock starts every bar is filtered out, which reads as a symbol with no data.
@@ -298,13 +312,14 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
 
     let visibleBars: Bar[] = [];
     for (const bars of loading) {
-      visibleBars = visibleBars.concat((await bars).filter((bar) => this.filterBar(bar, span, requestedTimeWindow)));
+      visibleBars = visibleBars.concat((await bars).filter((bar) => this.filterBar(bar, span, requestedTimeWindow, type, request.symbol)));
     }
     return visibleBars;
   }
 
-  private filterBar(bar: Bar, span: BarSpan, requestedTimeWindow: TimeWindow): boolean {
-    return bar.t >= requestedTimeWindow.startTimestamp && endOfBar(bar, span) < Math.min(requestedTimeWindow.endTimestamp, this.currentTimestamp);
+  private filterBar(bar: Bar, span: BarSpan, requestedTimeWindow: TimeWindow, type: 'options' | 'stocks', symbol: string): boolean {
+    const endTimestamp = endOfBar(bar, span, type, symbol);
+    return bar.t >= requestedTimeWindow.startTimestamp && typeof endTimestamp === 'number' && endTimestamp < Math.min(requestedTimeWindow.endTimestamp, this.currentTimestamp);
   }
 
   /**

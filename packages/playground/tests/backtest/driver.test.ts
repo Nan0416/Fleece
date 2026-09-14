@@ -1,8 +1,8 @@
 import { Decimal } from '@fleece/utilities';
 
-import type { BacktestAccount, BacktestPortfolio, Trade, Transaction } from '../../src/backtest/account';
-import { BacktestDriver, type Strategy } from '../../src/backtest/driver';
-import type { BacktestMarketData, MarketData } from '../../src/backtest/marketdata';
+import type { BacktestAccount, Trade, Transaction } from '../../src/backtest/account';
+import { BacktestDriver, BaseStrategy } from '../../src/backtest/driver';
+import type { BacktestMarketData } from '../../src/backtest/marketdata';
 import { Time } from '../../src/backtest/time';
 
 const T0 = 1_700_000_000_000;
@@ -64,24 +64,26 @@ function journal(): Journal {
 }
 
 /** Records the instant it was handed, and trades whatever `orders` says at that instant. */
-function strategy(
-  strategyId: string,
-  log: string[],
-  orders: (timestamp: number) => ReadonlyArray<Trade> | undefined = () => undefined,
-): Strategy & { readonly seen: ReadonlyArray<number> } {
-  const seen: number[] = [];
-  return {
-    strategyId,
-    seen,
-    // A strategy reads these itself; the driver only calls `evaluate`, so nothing here touches them.
-    data: {} as MarketData,
-    portfolio: {} as BacktestPortfolio,
-    evaluate: async (timestamp: number) => {
-      seen.push(timestamp);
-      log.push(`${strategyId}:evaluate@${timestamp}`);
-      return orders(timestamp);
-    },
-  };
+class RecordingStrategy extends BaseStrategy {
+  readonly seen: number[] = [];
+
+  constructor(
+    strategyId: string,
+    private readonly log: string[],
+    private readonly orders: (timestamp: number) => ReadonlyArray<Trade> | undefined,
+  ) {
+    super(strategyId);
+  }
+
+  async evaluate(timestamp: number): Promise<ReadonlyArray<Trade> | undefined> {
+    this.seen.push(timestamp);
+    this.log.push(`${this.strategyId}:evaluate@${timestamp}`);
+    return this.orders(timestamp);
+  }
+}
+
+function strategy(strategyId: string, log: string[], orders: (timestamp: number) => ReadonlyArray<Trade> | undefined = () => undefined): RecordingStrategy {
+  return new RecordingStrategy(strategyId, log, orders);
 }
 
 /** Two steps, so there is a first instant, a middle and an end to tell apart. */
@@ -92,20 +94,17 @@ function driver(entries: Journal, endingTimestamp: number = T0 + 2 * MINUTE): { 
 }
 
 describe('BacktestDriver', () => {
-  it('evaluates every strategy at the first instant, before the clock has moved off it', async () => {
+  it('first evaluates a strategy after the first step, not at the beginning instant', async () => {
     const entries = journal();
     const { subject } = driver(entries);
     subject.addStrategy(strategy('alpha', entries.log));
 
     await subject.run();
 
-    // The opening evaluation is the one a loop written as "step, then evaluate" loses, and
-    // losing it is invisible: the run still reports a number, just never having traded on
-    // the instant it was asked to start from.
-    expect(entries.log.slice(0, 3)).toEqual([`marketdata:init@${T0}`, `account:init@${T0}`, `alpha:evaluate@${T0}`]);
+    expect(entries.log.slice(0, 5)).toEqual([`marketdata:init@${T0}`, `account:init@${T0}`, `marketdata@${T0 + MINUTE}`, `account@${T0 + MINUTE}`, `alpha:evaluate@${T0 + MINUTE}`]);
   });
 
-  it('evaluates once per instant the clock visits, the first one included', async () => {
+  it('evaluates once per step the clock takes', async () => {
     const entries = journal();
     const { subject } = driver(entries);
     const alpha = strategy('alpha', entries.log);
@@ -113,7 +112,7 @@ describe('BacktestDriver', () => {
 
     await subject.run();
 
-    expect(alpha.seen).toEqual([T0, T0 + MINUTE, T0 + 2 * MINUTE]);
+    expect(alpha.seen).toEqual([T0 + MINUTE, T0 + 2 * MINUTE]);
   });
 
   it('steps market data before the account on every instant, not only the first', async () => {
@@ -149,11 +148,12 @@ describe('BacktestDriver', () => {
   it('records every trade a strategy hands back, in the order it handed them back', async () => {
     const entries = journal();
     const { subject, account } = driver(entries, T0 + MINUTE);
-    subject.addStrategy(strategy('alpha', entries.log, (timestamp) => (timestamp === T0 ? [trade('AMZN', T0), trade('SPY', T0)] : undefined)));
+    const T1 = T0 + MINUTE;
+    subject.addStrategy(strategy('alpha', entries.log, (timestamp) => (timestamp === T1 ? [trade('AMZN', T1), trade('SPY', T1)] : undefined)));
 
     await subject.run();
 
-    expect(account.recorded).toEqual([trade('AMZN', T0), trade('SPY', T0)]);
+    expect(account.recorded).toEqual([trade('AMZN', T1), trade('SPY', T1)]);
   });
 
   it('records nothing for a strategy that chose not to trade', async () => {
@@ -174,12 +174,7 @@ describe('BacktestDriver', () => {
 
     await subject.run();
 
-    expect(entries.log.filter((entry) => entry.includes('evaluate'))).toEqual([
-      `alpha:evaluate@${T0}`,
-      `beta:evaluate@${T0}`,
-      `alpha:evaluate@${T0 + MINUTE}`,
-      `beta:evaluate@${T0 + MINUTE}`,
-    ]);
+    expect(entries.log.filter((entry) => entry.includes('evaluate'))).toEqual([`alpha:evaluate@${T0 + MINUTE}`, `beta:evaluate@${T0 + MINUTE}`]);
   });
 
   it('replaces a strategy added again under the same id rather than running it twice', async () => {
@@ -192,7 +187,7 @@ describe('BacktestDriver', () => {
 
     // Doubling it would double every order it places, which is a position twice the size
     // the strategy thinks it holds.
-    expect(account.recorded.map((item) => item.symbol)).toEqual(['SPY', 'SPY']);
+    expect(account.recorded.map((item) => item.symbol)).toEqual(['SPY']);
   });
 
   it('stops evaluating a strategy that was removed', async () => {
@@ -204,7 +199,27 @@ describe('BacktestDriver', () => {
 
     await subject.run();
 
-    expect(entries.log.filter((entry) => entry.includes('evaluate'))).toEqual([`beta:evaluate@${T0}`, `beta:evaluate@${T0 + MINUTE}`]);
+    expect(entries.log.filter((entry) => entry.includes('evaluate'))).toEqual([`beta:evaluate@${T0 + MINUTE}`]);
+  });
+
+  it("hands a strategy the driver's market data and account when it is added", () => {
+    const entries = journal();
+    const marketData = entries.marketData();
+    const account = entries.account();
+    const subject = new BacktestDriver({ time: new Time(T0, T0 + MINUTE, MINUTE), marketData, account });
+    const alpha = strategy('alpha', entries.log);
+
+    subject.addStrategy(alpha);
+
+    expect(alpha.data).toBe(marketData);
+    expect(alpha.portfolio).toBe(account);
+  });
+
+  it('says a strategy was never added, rather than handing it nothing to read', () => {
+    const alpha = strategy('alpha', []);
+
+    expect(() => alpha.data).toThrow(/alpha has no market data yet.*addStrategy/);
+    expect(() => alpha.portfolio).toThrow(/alpha has no portfolio yet.*addStrategy/);
   });
 
   it('subscribes market data and the account itself, so a caller cannot forget to', async () => {

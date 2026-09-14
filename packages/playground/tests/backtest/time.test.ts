@@ -47,6 +47,11 @@ describe('Time', () => {
     expect(() => new Time(T0, END, 0.5)).toThrow(/positive whole number/);
   });
 
+  it('refuses an end still in the future, where there are no bars yet to replay', () => {
+    expect(() => new Time(T0, T0 + MINUTE, MINUTE, T0)).toThrow(/End the run at or before now/);
+    expect(() => new Time(T0, T0 + MINUTE, MINUTE, T0 + MINUTE)).not.toThrow();
+  });
+
   it('advances with nothing subscribed', async () => {
     const clock = new Time(T0, END, MINUTE);
 
