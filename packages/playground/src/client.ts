@@ -11,6 +11,7 @@ import { AlpacaMarketDataClient } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
 
 import { getCachePath, marketDataKeys } from './credentials';
+import { ImpliedVolatilityHistoryHelper, ImpliedVolatilityHistoryHelperImpl } from './utils/implied-volatility-history';
 import { OptionsAvailabilitiesHelper, OptionsAvailabilitiesHelperImpl } from './utils/options-availabilities';
 import { OptionsQuoteSpreadHelper, OptionsQuoteSpreadHelperImpl } from './utils/options-quote-spread';
 
@@ -30,6 +31,10 @@ export function marketDataClient(): AlpacaMarketDataClient {
 
 export function optionsAvailabilitiesHelper(alpacaMarketDataClient: AlpacaMarketDataClient): OptionsAvailabilitiesHelper {
   return new OptionsAvailabilitiesHelperImpl(getCachePath(), alpacaMarketDataClient);
+}
+
+export function impliedVolatilityHistoryHelper(alpacaMarketDataClient: AlpacaMarketDataClient, availabilities: OptionsAvailabilitiesHelper): ImpliedVolatilityHistoryHelper {
+  return new ImpliedVolatilityHistoryHelperImpl(getCachePath(), alpacaMarketDataClient, availabilities);
 }
 
 export function optionsQuoteSpreadHelper(alpacaMarketDataClient: AlpacaMarketDataClient): OptionsQuoteSpreadHelper {

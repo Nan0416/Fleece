@@ -1,17 +1,18 @@
-import { BacktestAccountImpl, Trade } from './account';
-import { BacktestDriver, BaseStrategy } from './driver';
+import { BacktestAccountImpl } from './account';
+import { BacktestDriver, BaseStrategy, type StrategyTrade } from './driver';
 import { BacktestMarketDataImpl } from './marketdata';
 import { dayOfWeek, easternClock, LoggerFactory } from '@fleece/utilities';
 import { marketState } from '@fleece/marketdata';
 import { marketDataClient, optionsAvailabilitiesHelper } from '../research';
 import { BacktestTime } from './time';
+import { TradeReport } from './trade-report';
 
 const MS_PER_DAY = 3600_000 * 24;
 const SYMBOL = 'AAPL';
 const logger = LoggerFactory.getLogger('SampleStrategy');
 
 export class SampleStrategy extends BaseStrategy {
-  async tick(): Promise<ReadonlyArray<Trade> | undefined> {
+  async tick(): Promise<ReadonlyArray<StrategyTrade> | undefined> {
     const timestamp = this.timestamp;
     if (marketState(timestamp) === 'open' && easternClock.time(timestamp) === '10:30:30') {
       const stockPrice = await this.printStockPrice(timestamp);
@@ -90,7 +91,7 @@ async function main(): Promise<void> {
   const client = marketDataClient();
   const optionsHelper = optionsAvailabilitiesHelper(client);
   const marketData = new BacktestMarketDataImpl(client, optionsHelper);
-  const account = new BacktestAccountImpl();
+  const account = new BacktestAccountImpl(new TradeReport());
 
   const driver = new BacktestDriver({
     time: time,

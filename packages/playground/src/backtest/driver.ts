@@ -1,7 +1,13 @@
 import { nanoid } from 'nanoid';
-import type { BacktestAccount, BacktestPortfolio, Trade } from './account';
+import type { BacktestAccount, BacktestPortfolio, Trade, TradeContext } from './account';
 import type { BacktestMarketData, MarketData } from './marketdata';
 import type { BacktestTime, Time } from './time';
+
+/** A trade and why it was made: what `tick` returns, and what the driver hands the account. */
+export interface StrategyTrade {
+  readonly trade: Trade;
+  readonly context: TradeContext;
+}
 
 export interface Strategy {
   readonly strategyId: string;
@@ -9,7 +15,13 @@ export interface Strategy {
   readonly data: MarketData;
   readonly portfolio: BacktestPortfolio;
 
-  tick(): Promise<ReadonlyArray<Trade> | undefined>;
+  /**
+   * Called once before the clock takes its first step, with the clock, market data and
+   * portfolio already on the beginning instant: the place for work a strategy would otherwise
+   * do on its first tick, such as loading the history it reads.
+   */
+  init(): Promise<void>;
+  tick(): Promise<ReadonlyArray<StrategyTrade> | undefined>;
 }
 
 export abstract class BaseStrategy implements Strategy {
@@ -56,7 +68,12 @@ export abstract class BaseStrategy implements Strategy {
     return this._time.timestamp;
   }
 
-  abstract tick(): Promise<ReadonlyArray<Trade> | undefined>;
+  /** Nothing to prepare unless a strategy says otherwise. */
+  async init(): Promise<void> {
+    // A strategy with nothing to load before the run starts.
+  }
+
+  abstract tick(): Promise<ReadonlyArray<StrategyTrade> | undefined>;
 }
 
 export interface BacktestDriverProps {
@@ -95,6 +112,11 @@ export class BacktestDriver {
 
   async run(): Promise<void> {
     await this.time.init();
+    // After the subscribers, so a strategy preparing itself reads market data that has a clock;
+    // in the order added, as every tick after is.
+    for (const strategy of this.strategies) {
+      await strategy.init();
+    }
 
     while (await this.time.forward()) {
       await this.runStrategies();
@@ -106,7 +128,7 @@ export class BacktestDriver {
       const strategy = this.strategies[i];
       const trades = (await strategy.tick()) ?? [];
       for (let j = 0; j < trades.length; j++) {
-        this.account.record(trades[j]);
+        this.account.record(trades[j].trade, trades[j].context);
       }
     }
   }

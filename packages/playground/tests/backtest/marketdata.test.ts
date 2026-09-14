@@ -89,7 +89,7 @@ class FakeClient {
 }
 
 function availabilities(chain: ReadonlyArray<OccSymbol> = CHAIN): OptionsAvailabilitiesHelper {
-  return { cachePath: '/nowhere', save: async () => {}, availableOptions: async () => chain };
+  return { cachePath: '/nowhere', save: async () => {}, availableOptions: async () => chain, refreshedAt: async () => undefined };
 }
 
 function build(client: FakeClient): BacktestMarketDataImpl {

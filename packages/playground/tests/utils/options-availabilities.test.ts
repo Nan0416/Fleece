@@ -40,6 +40,8 @@ interface Recorded {
 class FakeClient {
   readonly requests: Recorded[] = [];
   listings = 0;
+  /** The `expirationTo` of every listing request, in order. */
+  readonly listedThrough: Array<string | undefined> = [];
   inFlight = 0;
   maxInFlight = 0;
   /** Symbols or dates whose request should throw, so a failing batch can be aimed. */
@@ -50,8 +52,9 @@ class FakeClient {
     private readonly minutes: ReadonlyMap<string, number>,
   ) {}
 
-  async listOptionContracts(request: { status?: string; startAfter?: string }): Promise<unknown> {
+  async listOptionContracts(request: { status?: string; startAfter?: string; expirationTo?: string }): Promise<unknown> {
     this.listings += 1;
+    this.listedThrough.push(request.expirationTo);
     if (request.status === 'inactive') {
       return { contracts: [{ S: QUIET }, { S: NO_MINUTES }, { S: UNTABLED }] };
     }
@@ -164,6 +167,16 @@ describe('OptionsAvailabilitiesHelperImpl', () => {
 
       expect(readdirSync(cachePath)).toEqual(['options-availabilities']);
       expect(readdirSync(resolve(cachePath, 'options-availabilities'))).toEqual(['AMZN.json']);
+    });
+
+    it('lists every page out to three years ahead, since Alpaca stops at the next weekend without an end', async () => {
+      const client = fake();
+      const { helper: subject } = helper(client);
+
+      await subject.save('AMZN');
+
+      // Two pages of active contracts and one of inactive, all asked out to 2027-06-03.
+      expect(client.listedThrough).toEqual(['2027-06-03', '2027-06-03', '2027-06-03']);
     });
 
     it('asks for inactive contracts too, since anything already expired is inactive today', async () => {
