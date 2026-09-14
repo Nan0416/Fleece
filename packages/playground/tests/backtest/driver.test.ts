@@ -83,6 +83,10 @@ class RecordingStrategy extends BaseStrategy {
     super(strategyId);
   }
 
+  async init(): Promise<void> {
+    this.log.push(`${this.strategyId}:init@${this.timestamp}`);
+  }
+
   async tick(): Promise<ReadonlyArray<StrategyTrade> | undefined> {
     const timestamp = this.timestamp;
     this.seen.push(timestamp);
@@ -110,13 +114,39 @@ describe('BacktestDriver', () => {
 
     await subject.run();
 
-    expect(entries.log.slice(0, 5)).toEqual([
+    expect(entries.log.slice(0, 6)).toEqual([
       `marketdata:init@${T0}`,
       `account:init@${T0}`,
+      `alpha:init@${T0}`,
       `marketdata@${T0 + MINUTE}`,
       `account@${T0 + MINUTE}`,
       `alpha:evaluate@${T0 + MINUTE}`,
     ]);
+  });
+
+  it('initialises every strategy once, in the order added, after the subscribers and before the first step', async () => {
+    const entries = journal();
+    const { subject } = driver(entries);
+    subject.addStrategy(strategy('alpha', entries.log));
+    subject.addStrategy(strategy('beta', entries.log));
+
+    await subject.run();
+
+    expect(entries.log.filter((entry) => entry.includes(':init'))).toEqual([`marketdata:init@${T0}`, `account:init@${T0}`, `alpha:init@${T0}`, `beta:init@${T0}`]);
+    expect(entries.log.indexOf(`beta:init@${T0}`)).toBeLessThan(entries.log.indexOf(`marketdata@${T0 + MINUTE}`));
+  });
+
+  it('takes no step when a strategy fails to initialise', async () => {
+    const entries = journal();
+    const { subject } = driver(entries);
+    const alpha = strategy('alpha', entries.log);
+    alpha.init = async () => {
+      throw new Error('no volatility history');
+    };
+    subject.addStrategy(alpha);
+
+    await expect(subject.run()).rejects.toThrow('no volatility history');
+    expect(alpha.seen).toEqual([]);
   });
 
   it('evaluates once per step the clock takes', async () => {

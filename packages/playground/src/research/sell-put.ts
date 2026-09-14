@@ -113,6 +113,15 @@ export class SellPut extends BaseStrategy {
     this.volatilityHistory = props.volatilityHistory;
   }
 
+  /**
+   * Sweeps whatever sessions the volatility history does not hold yet and loads it, so the
+   * run starts from a current history and the first decision does not stall on reading it.
+   */
+  async init(): Promise<void> {
+    await this.volatilityHistory.save(this.symbol);
+    await this.volatilityHistory.sessions(this.symbol);
+  }
+
   async tick(): Promise<ReadonlyArray<StrategyTrade> | undefined> {
     const now = this.timestamp;
     if (marketState(now) !== 'open') {

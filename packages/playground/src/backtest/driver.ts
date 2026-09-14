@@ -15,6 +15,12 @@ export interface Strategy {
   readonly data: MarketData;
   readonly portfolio: BacktestPortfolio;
 
+  /**
+   * Called once before the clock takes its first step, with the clock, market data and
+   * portfolio already on the beginning instant: the place for work a strategy would otherwise
+   * do on its first tick, such as loading the history it reads.
+   */
+  init(): Promise<void>;
   tick(): Promise<ReadonlyArray<StrategyTrade> | undefined>;
 }
 
@@ -62,6 +68,11 @@ export abstract class BaseStrategy implements Strategy {
     return this._time.timestamp;
   }
 
+  /** Nothing to prepare unless a strategy says otherwise. */
+  async init(): Promise<void> {
+    // A strategy with nothing to load before the run starts.
+  }
+
   abstract tick(): Promise<ReadonlyArray<StrategyTrade> | undefined>;
 }
 
@@ -101,6 +112,11 @@ export class BacktestDriver {
 
   async run(): Promise<void> {
     await this.time.init();
+    // After the subscribers, so a strategy preparing itself reads market data that has a clock;
+    // in the order added, as every tick after is.
+    for (const strategy of this.strategies) {
+      await strategy.init();
+    }
 
     while (await this.time.forward()) {
       await this.runStrategies();
