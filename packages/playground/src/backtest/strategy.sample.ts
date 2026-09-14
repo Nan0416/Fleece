@@ -3,7 +3,7 @@ import { BacktestDriver, BaseStrategy } from './driver';
 import { BacktestMarketDataImpl } from './marketdata';
 import { dayOfWeek, easternClock, LoggerFactory } from '@fleece/utilities';
 import { marketState } from '@fleece/marketdata';
-import { impliedVolatilityHistoryHelper, marketDataClient, optionsAvailabilitiesHelper } from '../research';
+import { marketDataClient, optionsAvailabilitiesHelper } from '../research';
 import { BacktestTime } from './time';
 
 const MS_PER_DAY = 3600_000 * 24;
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   const time = new BacktestTime(easternClock.timestamp('2025-01-01'), easternClock.timestamp('2026-08-31', '23:59:59'), 30_000);
   const client = marketDataClient();
   const optionsHelper = optionsAvailabilitiesHelper(client);
-  const marketData = new BacktestMarketDataImpl(client, optionsHelper, impliedVolatilityHistoryHelper(client, optionsHelper));
+  const marketData = new BacktestMarketDataImpl(client, optionsHelper);
   const account = new BacktestAccountImpl();
 
   const driver = new BacktestDriver({

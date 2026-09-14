@@ -34,7 +34,7 @@ async function read(): Promise<void> {
   const sessions = await helper.sessions('AAPL');
 
   for (const session of sessions.slice(-10)) {
-    const sample = session.samples.find((candidate) => candidate.time === '11:00');
+    const sample = session.samples.find((candidate) => candidate.time === '11:00:00');
     if (sample?.status !== 'measured') {
       logger.info(`${session.date} 11:00 ${sample === undefined ? 'no sample' : sample.reason}`);
       continue;

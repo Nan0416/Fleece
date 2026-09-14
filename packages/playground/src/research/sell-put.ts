@@ -9,7 +9,7 @@ import { TradeReport } from '../backtest/trade-report';
 import { impliedVolatilityHistoryHelper, marketDataClient, optionsAvailabilitiesHelper } from '../client';
 import { findGreek } from './greeks';
 import type { OptionPrice } from './prices';
-import type { ImpliedVolatilityPoint } from '../utils/implied-volatility-history';
+import type { ImpliedVolatilityHistoryHelper, ImpliedVolatilityPoint } from '../utils/implied-volatility-history';
 import { daysToExpiration, expirationsByPreference } from '../utils/option-selection';
 import { choosePut, ENTRY_DELTA, ENTRY_DTE, EXIT_DTE, exitReason, ivPercentile, type PutCandidate } from './sell-put-rules';
 
@@ -44,7 +44,7 @@ const COMMISSION_PER_CONTRACT = Decimal.of('0.65');
 const IV_LOOKBACK_SAMPLES = 252;
 const MIN_ENTRY_IV_PERCENTILE = 30;
 /** The grid bar whose volatility is ranked. */
-const IV_SAMPLE_TIME = '11:00';
+const IV_SAMPLE_TIME = '11:00:00';
 
 /**
  * How old the last print may be. A delta is solved from the option's last trade against
@@ -88,6 +88,8 @@ export interface SellPutProps {
    * volatility than they are.
    */
   readonly dividendYield: number;
+  /** Where today's at-the-money volatility and the sessions it is ranked against come from. */
+  readonly volatilityHistory: ImpliedVolatilityHistoryHelper;
   readonly report: TradeReport;
 }
 
@@ -102,6 +104,7 @@ export interface SellPutProps {
 export class SellPut extends BaseStrategy {
   private readonly symbol: string;
   private readonly dividendYield: number;
+  private readonly volatilityHistory: ImpliedVolatilityHistoryHelper;
   private readonly report: TradeReport;
 
   constructor(props: SellPutProps) {
@@ -109,6 +112,7 @@ export class SellPut extends BaseStrategy {
     super(`sell-put-${symbol}`);
     this.symbol = symbol;
     this.dividendYield = props.dividendYield;
+    this.volatilityHistory = props.volatilityHistory;
     this.report = props.report;
   }
 
@@ -186,9 +190,10 @@ export class SellPut extends BaseStrategy {
       return undefined;
     }
 
-    const { points } = await this.data.impliedVolatilityHistory({
+    const { points } = await this.volatilityHistory.impliedVolatilityHistory({
       underlying: this.symbol,
       time: IV_SAMPLE_TIME,
+      timestamp: now,
       limit: IV_LOOKBACK_SAMPLES + 1,
       riskFreeRate: RISK_FREE_RATE,
       dividendYield: this.dividendYield,
@@ -336,12 +341,12 @@ async function main(): Promise<void> {
   const time = new BacktestTime(easternClock.timestamp(RUN_FROM), easternClock.timestamp(RUN_TO, '23:59:59'), MINUTE);
   const client = marketDataClient();
   const availabilities = optionsAvailabilitiesHelper(client);
-  const marketData = new BacktestMarketDataImpl(client, availabilities, impliedVolatilityHistoryHelper(client, availabilities));
+  const marketData = new BacktestMarketDataImpl(client, availabilities);
   const account = new BacktestAccountImpl();
   const report = new TradeReport();
 
   const driver = new BacktestDriver({ time, marketData, account });
-  driver.addStrategy(new SellPut({ symbol: SYMBOL, dividendYield: DIVIDEND_YIELD, report }));
+  driver.addStrategy(new SellPut({ symbol: SYMBOL, dividendYield: DIVIDEND_YIELD, volatilityHistory: impliedVolatilityHistoryHelper(client, availabilities), report }));
   await driver.run();
 
   for (const line of report.render()) {

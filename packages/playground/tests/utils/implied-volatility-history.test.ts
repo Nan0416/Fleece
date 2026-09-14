@@ -13,7 +13,9 @@ import {
   solvePoint,
   straddlePairs,
   type ImpliedVolatilityHistory,
+  type ImpliedVolatilityHistoryRequest,
   type MeasuredSample,
+  type SessionSamples,
   type StraddlePair,
 } from '../../src/utils/implied-volatility-history';
 import type { OptionsAvailabilitiesHelper } from '../../src/utils/options-availabilities';
@@ -45,12 +47,26 @@ function legs(...pairs: StraddlePair[]): OccSymbol[] {
 describe('sampleTimes', () => {
   it('takes the half-hour bars from the open to the last one that ends by the close', () => {
     const times = sampleTimes(marketHour(DAY) ?? { openAt: 0, closeAt: 0 });
-    expect(times).toEqual(['09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30']);
+    expect(times).toEqual([
+      '09:30:00',
+      '10:00:00',
+      '10:30:00',
+      '11:00:00',
+      '11:30:00',
+      '12:00:00',
+      '12:30:00',
+      '13:00:00',
+      '13:30:00',
+      '14:00:00',
+      '14:30:00',
+      '15:00:00',
+      '15:30:00',
+    ]);
   });
 
   it('stops at 12:30 on a 13:00 close', () => {
     const times = sampleTimes(marketHour('2024-11-29') ?? { openAt: 0, closeAt: 0 });
-    expect(times[times.length - 1]).toBe('12:30');
+    expect(times[times.length - 1]).toBe('12:30:00');
     expect(times).toHaveLength(7);
   });
 });
@@ -110,11 +126,11 @@ describe('measureSample', () => {
       [second.put.symbol, [bar(second.put.symbol, ELEVEN - MINUTE, 5.5)]],
       [second.call.symbol, [bar(second.call.symbol, ELEVEN - 2 * MINUTE, 2.25)]],
     ]);
-    const sample = measureSample({ date: DAY, time: '11:00', openAt: OPEN, spot, pairs: [first, second], optionBars });
+    const sample = measureSample({ date: DAY, time: '11:00:00', openAt: OPEN, spot, pairs: [first, second], optionBars });
 
     expect(sample).toEqual({
       status: 'measured',
-      time: '11:00',
+      time: '11:00:00',
       spot: 101,
       spotAt: ELEVEN,
       putSymbol: second.put.symbol,
@@ -127,10 +143,10 @@ describe('measureSample', () => {
   });
 
   it('says why there is no sample', () => {
-    const input = { date: DAY, time: '11:00', openAt: OPEN, optionBars: new Map<string, Bar[]>() };
-    expect(measureSample({ ...input, pairs: [first] })).toEqual({ status: 'unmeasured', time: '11:00', reason: 'no-spot' });
-    expect(measureSample({ ...input, spot, pairs: [] })).toEqual({ status: 'unmeasured', time: '11:00', reason: 'no-contracts' });
-    expect(measureSample({ ...input, spot, pairs: [first] })).toEqual({ status: 'unmeasured', time: '11:00', reason: 'no-priced-pair' });
+    const input = { date: DAY, time: '11:00:00', openAt: OPEN, optionBars: new Map<string, Bar[]>() };
+    expect(measureSample({ ...input, pairs: [first] })).toEqual({ status: 'unmeasured', time: '11:00:00', reason: 'no-spot' });
+    expect(measureSample({ ...input, spot, pairs: [] })).toEqual({ status: 'unmeasured', time: '11:00:00', reason: 'no-contracts' });
+    expect(measureSample({ ...input, spot, pairs: [first] })).toEqual({ status: 'unmeasured', time: '11:00:00', reason: 'no-priced-pair' });
   });
 });
 
@@ -142,7 +158,7 @@ describe('solvePoint', () => {
   const tYears = (easternClock.timestamp('2024-04-05', '16:00:00') - (ELEVEN + MINUTE)) / (365 * 24 * 60 * 60 * 1000);
 
   function sample(putPrice: number, callPrice: number): MeasuredSample {
-    return { status: 'measured', time: '11:00', spot: 101, spotAt: ELEVEN, putSymbol: put.symbol, putPrice, putAt: ELEVEN, callSymbol: call.symbol, callPrice, callAt: ELEVEN };
+    return { status: 'measured', time: '11:00:00', spot: 101, spotAt: ELEVEN, putSymbol: put.symbol, putPrice, putAt: ELEVEN, callSymbol: call.symbol, callPrice, callAt: ELEVEN };
   }
 
   it('recovers the volatility each leg was priced at, with the rate and yield given at read time', () => {
@@ -243,9 +259,9 @@ describe('ImpliedVolatilityHistoryHelperImpl', () => {
     const history = readHistory(root);
     expect(history.sessions.map((session) => session.date)).toEqual(HISTORY_START);
     expect(history.sessions[0].samples).toHaveLength(13);
-    expect(history.sessions[0].samples.find((sample) => sample.time === '11:00')).toEqual({ status: 'unmeasured', time: '11:00', reason: 'no-priced-pair' });
+    expect(history.sessions[0].samples.find((sample) => sample.time === '11:00:00')).toEqual({ status: 'unmeasured', time: '11:00:00', reason: 'no-priced-pair' });
     // 2024-03-01 is 29 days from 2024-02-02, the nearest to 30.
-    expect(history.sessions[1].samples.find((sample) => sample.time === '11:00')).toMatchObject({
+    expect(history.sessions[1].samples.find((sample) => sample.time === '11:00:00')).toMatchObject({
       status: 'measured',
       putSymbol: 'AAPL240301P00100000',
       putPrice: 3,
@@ -319,5 +335,76 @@ describe('ImpliedVolatilityHistoryHelperImpl', () => {
     );
 
     await expect(helper(root, new FakeClient(), afterClose('2024-02-05')).sessions('AAPL')).rejects.toThrow('Delete it to sweep AAPL again from scratch');
+  });
+
+  describe('impliedVolatilityHistory', () => {
+    const PUT = 'AAPL240405P00100000';
+    const CALL = 'AAPL240405C00100000';
+    const RATE = 0.043;
+    const NEXT = '2024-03-05';
+    const LATER = '2024-03-06';
+
+    /** A sample at `time` whose legs were priced at 30 vol, so each point solves to it. */
+    function priced(date: string, time: string): MeasuredSample {
+      const minute = easternClock.timestamp(date, time);
+      const tYears = (easternClock.timestamp('2024-04-05', '16:00:00') - (minute + MINUTE)) / (365 * 24 * 60 * 60 * 1000);
+      const input = { spot: 100, strike: 100, tYears, rate: RATE, vol: 0.3 };
+      return {
+        status: 'measured',
+        time,
+        spot: 100,
+        spotAt: minute,
+        putSymbol: PUT,
+        putPrice: blackScholesPrice({ ...input, type: 'put' }),
+        putAt: minute,
+        callSymbol: CALL,
+        callPrice: blackScholesPrice({ ...input, type: 'call' }),
+        callAt: minute,
+      };
+    }
+
+    const SESSIONS: ReadonlyArray<SessionSamples> = [
+      { date: DAY, samples: [priced(DAY, '10:30:00'), priced(DAY, '11:00:00')] },
+      { date: NEXT, samples: [{ status: 'unmeasured', time: '11:00:00', reason: 'no-priced-pair' }] },
+      { date: LATER, samples: [priced(LATER, '11:00:00')] },
+    ];
+
+    function subject(): ImpliedVolatilityHistoryHelperImpl {
+      mkdirSync(join(root, 'implied-volatility'), { recursive: true });
+      const history: ImpliedVolatilityHistory = { underlying: 'AAPL', refreshedAt: 0, sessions: SESSIONS };
+      writeFileSync(join(root, 'implied-volatility', 'AAPL.json'), JSON.stringify(history));
+      return helper(root, new FakeClient(), afterClose(LATER));
+    }
+
+    function request(timestamp: number, limit = 10): ImpliedVolatilityHistoryRequest {
+      return { underlying: 'aapl', time: '11:00:00', timestamp, limit, riskFreeRate: RATE, dividendYield: 0 };
+    }
+
+    it('shows a sample only once its bar would have been published, a minute and four seconds after it starts', async () => {
+      const history = subject();
+      const atPublish = await history.impliedVolatilityHistory(request(easternClock.timestamp(LATER, '11:01:04')));
+      const after = await history.impliedVolatilityHistory(request(easternClock.timestamp(LATER, '11:01:05')));
+
+      expect(atPublish.points.map((point) => point.date)).toEqual([DAY]);
+      expect(after.points.map((point) => point.date)).toEqual([DAY, LATER]);
+    });
+
+    it('solves each leg at the rate and yield asked for, and leaves out a session with nothing measured at that time', async () => {
+      const { points } = await subject().impliedVolatilityHistory(request(afterClose(LATER)));
+
+      expect(points).toHaveLength(2);
+      expect(points[1]).toMatchObject({ date: LATER, spot: 100, putSymbol: PUT, callSymbol: CALL });
+      expect(points[1].putIv).toBeCloseTo(0.3, 4);
+      expect(points[1].callIv).toBeCloseTo(0.3, 4);
+    });
+
+    it('keeps the most recent points up to the limit', async () => {
+      const { points } = await subject().impliedVolatilityHistory(request(afterClose(LATER), 1));
+      expect(points.map((point) => point.date)).toEqual([LATER]);
+    });
+
+    it('refuses a time off the half-hour grid rather than answering with no history', async () => {
+      await expect(subject().impliedVolatilityHistory({ ...request(afterClose(LATER)), time: '11:05:00' })).rejects.toThrow('not a sample time');
+    });
   });
 });

@@ -21,7 +21,6 @@ import {
 import { easternClock, LoggerFactory } from '@fleece/utilities';
 import { nanoid } from 'nanoid';
 
-import { isSampleTime, sampleMinute, solvePoint, type ImpliedVolatilityHistoryHelper, type ImpliedVolatilityPoint } from '../utils/implied-volatility-history';
 import type { OptionsAvailabilitiesHelper } from '../utils/options-availabilities';
 import type { TimeSubscriber } from './time';
 
@@ -86,27 +85,6 @@ export interface OptionDailyBarsRequest {
   readonly to?: DateOrTimestamp;
 }
 
-export interface ImpliedVolatilityHistoryRequest {
-  readonly underlying: string;
-  /** Eastern `HH:mm` of a sample bar on the half-hour grid, such as `11:00`: each session's sample at that bar only. */
-  readonly time: string;
-  /** At most this many points, the most recent. */
-  readonly limit: number;
-  readonly riskFreeRate: number;
-  readonly dividendYield: number;
-}
-
-export interface ImpliedVolatilityHistoryResponse {
-  /** Ascending by date. A session whose sample was not measured, or does not solve, is absent. */
-  readonly points: ReadonlyArray<ImpliedVolatilityPoint>;
-}
-
-/** A solved point, and the instant a backtest may first see it. */
-interface VisiblePoint {
-  readonly visibleAt: number;
-  readonly point: ImpliedVolatilityPoint;
-}
-
 export interface MarketData {
   minuteBars(request: BacktestMinuteBarsRequest): Promise<BarsResponse>;
   dailyBars(request: DailyBarsRequest): Promise<BarsResponse>;
@@ -114,7 +92,6 @@ export interface MarketData {
   optionMinuteBars(request: OptionMinuteBarsRequest): Promise<OptionBarsResponse>;
   optionDailyBars(request: OptionDailyBarsRequest): Promise<OptionBarsResponse>;
   listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse>;
-  impliedVolatilityHistory(request: ImpliedVolatilityHistoryRequest): Promise<ImpliedVolatilityHistoryResponse>;
 }
 
 export type BacktestMarketData = MarketData & TimeSubscriber;
@@ -207,12 +184,10 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
   private currentTimestamp: number;
   private readonly barsByKey = new Map<string, BarSegment[]>();
   private readonly splitsBySymbol = new Map<string, Promise<ReadonlyArray<StockSplit>>>();
-  private readonly volatilityByKey = new Map<string, Promise<ReadonlyArray<VisiblePoint>>>();
 
   constructor(
     private readonly client: AlpacaMarketDataClient,
     private readonly optionsHelper: OptionsAvailabilitiesHelper,
-    private readonly volatilityHelper: ImpliedVolatilityHistoryHelper,
   ) {
     this.timeSubscriberId = 'marketdata' + nanoid();
     this.currentTimestamp = 0;
@@ -282,52 +257,6 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
       .filter((symbol) => request.strikeFrom === undefined || request.strikeFrom <= symbol.strike)
       .filter((symbol) => request.strikeTo === undefined || request.strikeTo >= symbol.strike);
     return { contracts };
-  }
-
-  /**
-   * A sample is visible once its bar is, a minute and the consolidation delay after the bar
-   * starts: the `11:00` sample from 11:01:04. Before that it holds a close no live strategy
-   * could have had.
-   */
-  async impliedVolatilityHistory(request: ImpliedVolatilityHistoryRequest): Promise<ImpliedVolatilityHistoryResponse> {
-    const now = this.requireStarted();
-    // Off the grid, every session reads as unmeasured, which is a strategy that never trades
-    // rather than an error.
-    if (!isSampleTime(request.time)) {
-      throw new Error(`${request.time} is not a sample time. Samples are taken on the half-hour bars, so ask for one such as 11:00 or 11:30.`);
-    }
-
-    const points = await this.solvedPoints(request);
-    let visible = points.length;
-    while (visible > 0 && points[visible - 1].visibleAt >= now) {
-      visible -= 1;
-    }
-    return { points: points.slice(Math.max(0, visible - request.limit), visible).map((entry) => entry.point) };
-  }
-
-  /** Solved once per underlying, time, rate and yield, since a strategy asks the same question every session. */
-  private solvedPoints(request: ImpliedVolatilityHistoryRequest): Promise<ReadonlyArray<VisiblePoint>> {
-    const ticker = request.underlying.trim().toUpperCase();
-    const key = `${ticker}|${request.time}|${request.riskFreeRate}|${request.dividendYield}`;
-    const already = this.volatilityByKey.get(key);
-    if (already !== undefined) {
-      return already;
-    }
-    const solving = this.volatilityHelper
-      .sessions(ticker)
-      .then((sessions) =>
-        sessions.flatMap((session): VisiblePoint[] => {
-          const sample = session.samples.find((candidate) => candidate.time === request.time);
-          const point = sample?.status === 'measured' ? solvePoint(session.date, sample, request.riskFreeRate, request.dividendYield) : undefined;
-          return point === undefined ? [] : [{ visibleAt: sampleMinute(session.date, request.time) + MS_PER_MINUTE + MINUTE_BAR_CONSOLIDATION_DELAY, point }];
-        }),
-      )
-      .catch((error: unknown) => {
-        this.volatilityByKey.delete(key);
-        throw error;
-      });
-    this.volatilityByKey.set(key, solving);
-    return solving;
   }
 
   /**

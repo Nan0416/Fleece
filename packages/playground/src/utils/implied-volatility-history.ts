@@ -46,7 +46,13 @@ const SESSIONS_PER_WRITE = 50;
 /** Same as the availability sweep, which is the figure known to stay under Alpaca's rate limit. */
 const SWEEP_CONCURRENCY = 10;
 
-const GRID_TIME = /^\d{2}:(00|30)$/;
+/**
+ * How long after its minute ends Alpaca publishes a minute bar, the same figure the backtest's
+ * market data holds a bar back by. A sample is no more visible than the bar it was taken at.
+ */
+const BAR_PUBLISH_DELAY = 4_000;
+
+const GRID_TIME = /^\d{2}:(00|30):00$/;
 
 /** `<cache>/implied-volatility/<TICKER>.json` */
 export interface ImpliedVolatilityHistory {
@@ -60,7 +66,7 @@ export interface ImpliedVolatilityHistory {
 export interface SessionSamples {
   /** Eastern `YYYY-MM-DD`. */
   readonly date: string;
-  /** Ascending by `time`: 09:30 to 15:30 on a full day, 09:30 to 12:30 on a 13:00 close. */
+  /** Ascending by `time`: 09:30:00 to 15:30:00 on a full day, 09:30:00 to 12:30:00 on a 13:00 close. */
   readonly samples: ReadonlyArray<VolatilitySample>;
 }
 
@@ -73,7 +79,7 @@ export type VolatilitySample = MeasuredSample | UnmeasuredSample;
  */
 export interface MeasuredSample {
   readonly status: 'measured';
-  /** Eastern `HH:mm` of the grid bar. The sample uses bars up to and including it. */
+  /** Eastern `HH:mm:ss` of the grid bar. The sample uses bars up to and including it. */
   readonly time: string;
   readonly spot: number;
   readonly spotAt: number;
@@ -111,6 +117,23 @@ export interface ImpliedVolatilityPoint {
   readonly callSymbol: string;
 }
 
+export interface ImpliedVolatilityHistoryRequest {
+  readonly underlying: string;
+  /** Eastern `HH:mm:ss` of a bar on the half-hour grid, such as `11:00:00`: each session's sample at that bar only. */
+  readonly time: string;
+  /** The instant to read as of, such as a backtest's clock: only samples whose bar had been published by then. */
+  readonly timestamp: number;
+  /** At most this many points, the most recent. */
+  readonly limit: number;
+  readonly riskFreeRate: number;
+  readonly dividendYield: number;
+}
+
+export interface ImpliedVolatilityHistoryResponse {
+  /** Ascending by date. A session whose sample was not measured, or does not solve, is absent. */
+  readonly points: ReadonlyArray<ImpliedVolatilityPoint>;
+}
+
 /** A minute bar's close, and the start of that minute. */
 export interface Print {
   readonly price: number;
@@ -139,6 +162,8 @@ export interface ImpliedVolatilityHistoryHelper {
   save(underlying: string): Promise<void>;
   /** Every session swept, sweeping first if nothing has been. */
   sessions(underlying: string): Promise<ReadonlyArray<SessionSamples>>;
+  /** One sample time's volatility across sessions, as far as it could be known at `timestamp`. */
+  impliedVolatilityHistory(request: ImpliedVolatilityHistoryRequest): Promise<ImpliedVolatilityHistoryResponse>;
 }
 
 /** Typed against the interface, so the two cannot drift apart. */
@@ -177,21 +202,16 @@ function isMissingFile(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
 
-/** Whether `time` is an `HH:mm` on the half-hour grid samples are taken on. */
+/** Whether `time` is an `HH:mm:ss` on the half-hour grid samples are taken on. */
 export function isSampleTime(time: string): boolean {
   return GRID_TIME.test(time);
-}
-
-/** The start of the grid bar `time` names on `date`. */
-export function sampleMinute(date: string, time: string): number {
-  return easternClock.timestamp(date, `${time}:00`);
 }
 
 /** The grid bars of a session: every half hour from the open, while a bar that starts then still ends by the close. */
 export function sampleTimes(session: Pick<MarketHour, 'openAt' | 'closeAt'>): ReadonlyArray<string> {
   const times: string[] = [];
   for (let minute = session.openAt; minute + MINUTE <= session.closeAt; minute += SAMPLE_INTERVAL) {
-    times.push(easternClock.time(minute).slice(0, 5));
+    times.push(easternClock.time(minute));
   }
   return times;
 }
@@ -248,7 +268,7 @@ export function measureSample(input: SampleInput): VolatilitySample {
     return { status: 'unmeasured', time, reason: 'no-contracts' };
   }
 
-  const minute = sampleMinute(date, time);
+  const minute = easternClock.timestamp(date, time);
   for (const { put, call } of pairs) {
     const putPrint = lastPrint(optionBars.get(put.symbol) ?? [], minute, openAt);
     const callPrint = lastPrint(optionBars.get(call.symbol) ?? [], minute, openAt);
@@ -278,7 +298,7 @@ export function measureSample(input: SampleInput): VolatilitySample {
 export function solvePoint(date: string, sample: MeasuredSample, riskFreeRate: number, dividendYield: number): ImpliedVolatilityPoint | undefined {
   const put = requireOccSymbol(sample.putSymbol, 'read a cached volatility sample');
   const call = requireOccSymbol(sample.callSymbol, 'read a cached volatility sample');
-  const tYears = (easternClock.timestamp(put.expiration, EXPIRY_TIME) - (sampleMinute(date, sample.time) + MINUTE)) / MS_PER_YEAR;
+  const tYears = (easternClock.timestamp(put.expiration, EXPIRY_TIME) - (easternClock.timestamp(date, sample.time) + MINUTE)) / MS_PER_YEAR;
   if (tYears <= 0 || sample.spot <= 0 || sample.putPrice <= 0 || sample.callPrice <= 0) {
     return undefined;
   }
@@ -299,9 +319,10 @@ export function solvePoint(date: string, sample: MeasuredSample, riskFreeRate: n
  *     const helper = new ImpliedVolatilityHistoryHelperImpl(cachePath, marketDataClient(), availabilities);
  *     await helper.save('AAPL');     // sweeps what is new since the last save, writes implied-volatility/AAPL.json
  *     await helper.sessions('AAPL'); // every session swept
+ *     await helper.impliedVolatilityHistory({ underlying: 'AAPL', time: '11:00:00', timestamp: now, limit: 253, riskFreeRate: 0.043, dividendYield: 0.004 });
  *
  * Prices are stored rather than volatilities, so the rate and dividend yield are the reader's
- * to choose. What a backtest may see of it at an instant is the reader's to decide too.
+ * to choose.
  */
 export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHistoryHelper {
   /** The promise rather than its value, so callers arriving during a first sweep join it. */
@@ -393,6 +414,37 @@ export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHist
     return loading;
   }
 
+  /**
+   * A sample is visible once its bar is, a minute and the publishing delay after the bar
+   * starts: the `11:00:00` sample from 11:01:04. Before that it holds a close no live strategy
+   * could have had.
+   */
+  async impliedVolatilityHistory(request: ImpliedVolatilityHistoryRequest): Promise<ImpliedVolatilityHistoryResponse> {
+    // Off the grid, every session reads as unmeasured, which is a strategy that never trades
+    // rather than an error.
+    if (!isSampleTime(request.time)) {
+      throw new Error(`${request.time} is not a sample time. Samples are taken on the half-hour bars, so ask for one such as 11:00:00 or 11:30:00.`);
+    }
+
+    // Walked back from the newest session, solving only the points returned: a strategy asks
+    // every session, and solving the whole history each time is most of a backtest's run.
+    const today = easternClock.date(request.timestamp);
+    const sessions = await this.sessions(request.underlying);
+    const points: ImpliedVolatilityPoint[] = [];
+    for (let index = sessions.length - 1; index >= 0 && points.length < request.limit; index -= 1) {
+      const session = sessions[index];
+      if (session.date > today || (session.date === today && easternClock.timestamp(session.date, request.time) + MINUTE + BAR_PUBLISH_DELAY >= request.timestamp)) {
+        continue;
+      }
+      const sample = session.samples.find((candidate) => candidate.time === request.time);
+      const point = sample?.status === 'measured' ? solvePoint(session.date, sample, request.riskFreeRate, request.dividendYield) : undefined;
+      if (point !== undefined) {
+        points.push(point);
+      }
+    }
+    return { points: points.reverse() };
+  }
+
   private async load(ticker: string): Promise<ReadonlyArray<SessionSamples>> {
     let cached = this.readCache(ticker);
     if (cached === undefined) {
@@ -417,7 +469,7 @@ export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHist
 
     const planned: Array<Omit<SampleInput, 'optionBars'>> = [];
     for (const time of sampleTimes(session)) {
-      const minute = sampleMinute(session.date, time);
+      const minute = easternClock.timestamp(session.date, time);
       const spot = lastPrint(stockBars, minute, session.openAt);
       const pairs = spot === undefined ? [] : straddlePairs(await this.availabilities.availableOptions(ticker, minute), session.date, spot.price);
       planned.push({ date: session.date, time, openAt: session.openAt, spot, pairs });
