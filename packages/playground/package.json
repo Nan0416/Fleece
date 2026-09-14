@@ -10,7 +10,8 @@
     "cancel-order": "npm run build && node dist/cancel-order.js",
     "option-chain": "npm run build && node dist/option-chain.js",
     "option-research": "npm run build && node dist/option-research.js",
-    "option-availability": "npm run build && node dist/option-availability.js"
+    "option-availability": "npm run build && node dist/option-availability.js",
+    "watchlist": "npm run build && node dist/watchlist.js"
   },
   "dependencies": {
     "@fleece/broker": "1.0.0",

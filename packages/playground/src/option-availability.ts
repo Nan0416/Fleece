@@ -12,18 +12,17 @@ import { LoggerFactory } from '@fleece/utilities';
 import { getCachePath } from './credentials';
 import { marketDataClient } from './research';
 import { OptionsAvailabilitiesHelperImpl } from './utils/options-availabilities';
+import { WATCHLIST } from '@fleece/marketdata';
 
 const logger = LoggerFactory.getLogger('OptionAvailability');
-
-const UNDERLYINGS = ['AMZN'];
 
 async function main(): Promise<void> {
   const helper = new OptionsAvailabilitiesHelperImpl(getCachePath(), marketDataClient());
 
-  for (const underlying of UNDERLYINGS) {
+  for (const stock of WATCHLIST) {
     const started = Date.now();
-    await helper.save(underlying);
-    logger.info(`${underlying} took ${((Date.now() - started) / 1000).toFixed(1)}s.`);
+    await helper.save(stock.symbol);
+    logger.info(`${stock.symbol} took ${((Date.now() - started) / 1000).toFixed(1)}s.`);
   }
 }
 
