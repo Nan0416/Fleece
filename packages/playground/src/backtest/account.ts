@@ -114,7 +114,7 @@ export class BacktestAccountImpl implements BacktestAccount {
 
   private currentTimestamp: number;
 
-  constructor(initialCashPosition: DecimalInput) {
+  constructor(initialCashPosition: DecimalInput = 0) {
     this.initialCashPosition = Decimal.of(initialCashPosition);
     this.cashPosition = this.initialCashPosition;
     this.currentTimestamp = 0;

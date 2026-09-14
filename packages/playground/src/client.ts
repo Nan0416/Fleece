@@ -10,10 +10,11 @@ import { dirname, resolve } from 'node:path';
 import { AlpacaMarketDataClient } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
 
-import { marketDataKeys } from '../credentials';
+import { getCachePath, marketDataKeys } from './credentials';
+import { OptionsAvailabilitiesHelper, OptionsAvailabilitiesHelperImpl } from './utils/options-availabilities';
 
-/** `dist/research/` at runtime, so four levels up is the repo root. */
-const ROOT = resolve(__dirname, '../../../..');
+/** `packages/playground/dist/` at runtime, so three levels up is the repo root. */
+const ROOT = resolve(__dirname, '../../..');
 const CACHE = resolve(ROOT, 'packages/playground/data/research');
 
 let client: AlpacaMarketDataClient | undefined;
@@ -24,6 +25,10 @@ export function marketDataClient(): AlpacaMarketDataClient {
     client = new AlpacaMarketDataClient(marketDataKeys());
   }
   return client;
+}
+
+export function optionsAvailabilitiesHelper(alpacaMarketDataClient: AlpacaMarketDataClient): OptionsAvailabilitiesHelper {
+  return new OptionsAvailabilitiesHelperImpl(getCachePath(), alpacaMarketDataClient);
 }
 
 /** Whether a date is far enough back that nothing about it can still change. */

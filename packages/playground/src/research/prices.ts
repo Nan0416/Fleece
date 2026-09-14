@@ -3,7 +3,7 @@
  */
 import { regularHoursOnly, type Bar, type OccSymbol } from '@fleece/marketdata';
 
-import { cached, marketDataClient, settled } from './client';
+import { cached, marketDataClient, settled } from '../client';
 
 export interface OptionPrice {
   readonly occSymbol: OccSymbol;

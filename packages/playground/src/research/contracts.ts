@@ -4,7 +4,7 @@
 import { requireOccSymbol, type OccSymbol, type OptionContract, type OptionType } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
 
-import { marketDataClient } from './client';
+import { marketDataClient } from '../client';
 
 const CHAIN_PAGE = 10_000;
 

@@ -1,4 +1,4 @@
-import { Clock, easternClock, isIsoDate, utcClock } from '../src/clock';
+import { Clock, dayOfWeek, easternClock, isIsoDate, utcClock } from '../src/clock';
 
 // These run on a host in Pacific time, so every Eastern assertion is also a statement
 // that the clock ignores where the process runs. US transitions: forward at 07:00 UTC on
@@ -306,5 +306,34 @@ describe('isIsoDate', () => {
 
   it('reads a year under 100 as itself, not as the twentieth century', () => {
     expect(isIsoDate('0050-01-01')).toBe(true);
+  });
+});
+
+describe('dayOfWeek', () => {
+  it('names the weekday a date falls on', () => {
+    expect(dayOfWeek('2025-01-09')).toBe('Thursday');
+    expect(dayOfWeek('2026-09-13')).toBe('Sunday');
+    expect(dayOfWeek('2024-02-29')).toBe('Thursday');
+  });
+
+  it('gives the same weekday whatever zone the process runs in, not the evening before', () => {
+    const zone = process.env.TZ;
+    try {
+      for (const tz of ['America/Los_Angeles', 'UTC', 'Asia/Tokyo']) {
+        process.env.TZ = tz;
+        expect(dayOfWeek('2025-01-09')).toBe('Thursday');
+      }
+    } finally {
+      if (zone === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = zone;
+      }
+    }
+  });
+
+  it('refuses a date that does not exist rather than rolling it into the next month', () => {
+    expect(() => dayOfWeek('2024-02-30')).toThrow('2024-02-30');
+    expect(() => dayOfWeek('2025-1-9')).toThrow('2025-1-9');
   });
 });

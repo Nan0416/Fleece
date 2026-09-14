@@ -175,15 +175,20 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
 
     const availabilities = [...settled];
     for (const contract of pending) {
-      // Outside the market-hours table there is no session to read a close from — a LEAP
-      // past the table's last year, or an expiry on a date it does not hold. Dropping the
-      // contract left nothing recorded, so every later run swept it again and dropped it
-      // again. The regular close is what it expires at on all but a half day, and being
-      // three hours generous on one of those beats never settling at all.
+      // Outside the market-hours table there is no session to read a close from. That is a
+      // LEAP expiring past the table's last year, or an expiry on a day the market closed
+      // after the contract was listed: 2025-01-09 was declared a national day of mourning
+      // for President Carter, so contracts expiring that day last traded on 2025-01-08, and
+      // that day's close set their final value.
+      //
+      // Dropping the contract left nothing recorded, so every later run swept it again and
+      // dropped it again. The regular close on the expiration date stands in instead. On a
+      // half day that is three hours generous, and for a closure like 2025-01-09 it is a day
+      // late with no session in between; either beats never settling at all.
       const session = marketHour(contract.expiration);
       const expirationTimestamp = session?.closeAt ?? easternClock.timestamp(contract.expiration, REGULAR_CLOSE);
       if (session === undefined) {
-        logger.warn(`${contract.symbol} expires ${contract.expiration}, which the market-hours table does not cover. Taking the regular ${REGULAR_CLOSE} close.`);
+        logger.warn(`${contract.symbol} expires ${contract.expiration}, a date with no session in the market-hours table. Taking the regular ${REGULAR_CLOSE} close on that date.`);
       }
       availabilities.push({ symbol: contract.symbol, firstTradingMinuteTimestamp: firstMinutes.get(contract.symbol), expirationTimestamp });
     }

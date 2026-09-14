@@ -1,3 +1,4 @@
+import { nanoid } from 'nanoid';
 import type { BacktestAccount, BacktestPortfolio, Trade } from './account';
 import type { BacktestMarketData, MarketData } from './marketdata';
 import type { Time } from './time';
@@ -7,6 +8,41 @@ export interface Strategy {
   readonly data: MarketData;
   readonly portfolio: BacktestPortfolio;
   evaluate(timestamp: number): Promise<ReadonlyArray<Trade> | undefined>;
+}
+
+export abstract class BaseStrategy implements Strategy {
+  readonly strategyId: string;
+  private _data?: MarketData;
+  private _portfolio?: BacktestPortfolio;
+
+  /** Generated unless given; `addStrategy` replaces a strategy added again under the same id. */
+  constructor(strategyId: string = 'strategy' + nanoid()) {
+    this.strategyId = strategyId;
+  }
+
+  bindMarketData(data: MarketData): void {
+    this._data = data;
+  }
+
+  bindPortfolio(portfolio: BacktestPortfolio): void {
+    this._portfolio = portfolio;
+  }
+
+  get data(): MarketData {
+    if (this._data === undefined) {
+      throw new Error(`Strategy ${this.strategyId} has no market data yet. Add it to a BacktestDriver with addStrategy before it evaluates.`);
+    }
+    return this._data;
+  }
+
+  get portfolio(): BacktestPortfolio {
+    if (this._portfolio === undefined) {
+      throw new Error(`Strategy ${this.strategyId} has no portfolio yet. Add it to a BacktestDriver with addStrategy before it evaluates.`);
+    }
+    return this._portfolio;
+  }
+
+  abstract evaluate(timestamp: number): Promise<ReadonlyArray<Trade> | undefined>;
 }
 
 export interface BacktestDriverProps {
@@ -31,9 +67,11 @@ export class BacktestDriver {
     this.time.subscribe(this.account);
   }
 
-  addStrategy(strategy: Strategy): void {
+  addStrategy(strategy: BaseStrategy): void {
     this.removeStrategy(strategy.strategyId);
     this.strategies.push(strategy);
+    strategy.bindMarketData(this.marketData);
+    strategy.bindPortfolio(this.account);
   }
 
   removeStrategy(strategyId: string): void {
@@ -42,7 +80,6 @@ export class BacktestDriver {
 
   async run(): Promise<void> {
     await this.time.init();
-    await this.runStrategies();
 
     while (await this.time.forward()) {
       await this.runStrategies();

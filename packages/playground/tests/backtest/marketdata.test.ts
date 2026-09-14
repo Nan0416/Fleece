@@ -296,11 +296,14 @@ describe('BacktestMarketDataImpl', () => {
       expect(seen.map((bar) => bar.c)).toEqual([10]);
     });
 
-    it('admits a bar once the clock is past its close, and not while the clock is on it', async () => {
-      const exactly = await marketData(new FakeClient(bars), at(DAY, '09:31:00'));
-      const justAfter = await marketData(new FakeClient(bars), at(DAY, '09:31:00') + 1);
+    it('admits a bar only once Alpaca would have published it, four seconds past its close', async () => {
+      const closed = await marketData(new FakeClient(bars), at(DAY, '09:31:00') + 1);
+      const published = await marketData(new FakeClient(bars), at(DAY, '09:31:04'));
+      const justAfter = await marketData(new FakeClient(bars), at(DAY, '09:31:04') + 1);
 
-      expect((await exactly.minuteBars({ symbol: 'AMZN', from: DAY })).bars).toEqual([]);
+      // Closed but not yet published: a live strategy at this instant would not have the bar.
+      expect((await closed.minuteBars({ symbol: 'AMZN', from: DAY })).bars).toEqual([]);
+      expect((await published.minuteBars({ symbol: 'AMZN', from: DAY })).bars).toEqual([]);
       expect((await justAfter.minuteBars({ symbol: 'AMZN', from: DAY })).bars.map((bar) => bar.c)).toEqual([10]);
     });
 

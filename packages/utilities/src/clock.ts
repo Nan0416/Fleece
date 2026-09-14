@@ -30,6 +30,28 @@ export function isIsoDate(value: string): boolean {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
+const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+
+export type DayOfWeek = (typeof DAYS_OF_WEEK)[number];
+
+/**
+ * The day of the week a `YYYY-MM-DD` date falls on.
+ *
+ * A calendar date is the same weekday in every zone, which is why this is not a `Clock`
+ * method. It reads the date in UTC on purpose: `new Date('2025-01-09').getDay()` parses
+ * the string as UTC midnight and then answers in the process's own zone, which anywhere
+ * west of Greenwich is the evening before — a Thursday dated as a Wednesday.
+ */
+export function dayOfWeek(date: string): DayOfWeek {
+  if (!isIsoDate(date)) {
+    throw new Error(`Expected an existing ISO YYYY-MM-DD date, got "${date}"`);
+  }
+  const [year, month, day] = date.split('-').map(Number);
+  const utc = new Date(0);
+  utc.setUTCFullYear(year, month - 1, day);
+  return DAYS_OF_WEEK[utc.getUTCDay()];
+}
+
 export class Clock {
   constructor(readonly timezone: string) {
     // moment writes a line to the console for a zone it has no data for and then carries

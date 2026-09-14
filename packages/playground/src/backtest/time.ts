@@ -1,9 +1,12 @@
+import { LoggerFactory } from '@fleece/utilities';
+
 export interface TimeSubscriber {
   readonly timeSubscriberId: string;
   init(timestamp: number): Promise<void>;
   forward(timestamp: number): Promise<void>;
 }
 
+const logger = LoggerFactory.getLogger('Time');
 /**
  * The backtest clock. `forward` steps it one `timeFidelity` on and then tells each
  * subscriber, in subscription order and one at a time, so a run replays identically
@@ -25,6 +28,7 @@ export class Time {
     readonly beginningTimestamp: number,
     readonly endingTimestamp: number,
     readonly timeFidelity: number,
+    now: number = Date.now(),
   ) {
     // A fidelity that does not advance the clock makes `forward` a no-op, so a driver
     // looping until an end time never reaches it. A fractional one accumulates float
@@ -38,6 +42,13 @@ export class Time {
     if (endingTimestamp <= beginningTimestamp) {
       throw new Error(`endingTimestamp ${endingTimestamp} is not after beginningTimestamp ${beginningTimestamp}, so the run would take no steps.`);
     }
+    // An end past now asks for bars that do not exist yet, so the stretch still to come
+    // would replay as a market in which nothing printed.
+    if (endingTimestamp > now) {
+      throw new Error(
+        `endingTimestamp ${new Date(endingTimestamp).toISOString()} is after now, ${new Date(now).toISOString()}, and there are no bars yet for the rest of the run. End the run at or before now.`,
+      );
+    }
     this._timestamp = beginningTimestamp;
     this.subscribers = [];
   }
@@ -48,6 +59,7 @@ export class Time {
 
   async init(): Promise<void> {
     for (const subscriber of this.subscribers) {
+      logger.debug(`Initialize subscriber ${subscriber.timeSubscriberId} with time ${new Date(this._timestamp).toISOString()}`);
       await subscriber.init(this._timestamp);
     }
   }
@@ -59,7 +71,7 @@ export class Time {
       return false;
     }
     this._timestamp = next;
-
+    logger.debug(`Time forward to ${new Date(this._timestamp).toISOString()}`);
     for (const subscriber of this.subscribers) {
       await subscriber.forward(this._timestamp);
     }
