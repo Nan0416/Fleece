@@ -37,9 +37,9 @@ class ConsoleLogger implements Logger {
     }
     const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${this.name}] ${message}${formatMeta(meta)}`;
     if (level === 'error') {
-      console.error(line);
+      console.log(line);
     } else if (level === 'warn') {
-      console.warn(line);
+      console.log(line);
     } else {
       console.log(line);
     }
