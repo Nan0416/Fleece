@@ -101,7 +101,13 @@ describe('BacktestDriver', () => {
 
     await subject.run();
 
-    expect(entries.log.slice(0, 5)).toEqual([`marketdata:init@${T0}`, `account:init@${T0}`, `marketdata@${T0 + MINUTE}`, `account@${T0 + MINUTE}`, `alpha:evaluate@${T0 + MINUTE}`]);
+    expect(entries.log.slice(0, 5)).toEqual([
+      `marketdata:init@${T0}`,
+      `account:init@${T0}`,
+      `marketdata@${T0 + MINUTE}`,
+      `account@${T0 + MINUTE}`,
+      `alpha:evaluate@${T0 + MINUTE}`,
+    ]);
   });
 
   it('evaluates once per step the clock takes', async () => {
