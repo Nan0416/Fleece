@@ -17,5 +17,6 @@ export * from './env';
 export * from './errors';
 export * from './http';
 export * from './logger';
+export * from './map-with-concurrency';
 export * from './position-reconciliation';
 export * from './sleep';
