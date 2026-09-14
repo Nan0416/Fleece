@@ -1,4 +1,4 @@
-import { blackScholesGreeks, blackScholesPrice, impliedVolatility } from '../../src/research/black-scholes';
+import { blackScholesGreeks, blackScholesPrice, impliedVolatility } from '../../src/utilities/black-scholes';
 
 const base = { spot: 100, strike: 100, tYears: 0.25, rate: 0.05, type: 'call' as const };
 

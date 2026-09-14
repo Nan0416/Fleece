@@ -1,10 +1,13 @@
 # Research helpers
 
-Four functions for asking what an option chain was doing on a day that has already
-happened, and one Black-Scholes engine for asking what that implies.
+Three functions for asking what an option chain was doing on a day that has already
+happened. What that implies — implied volatility and greeks, from the Black-Scholes engine
+— is `findGreek`, which lives in `@fleece/marketdata` alongside `MarketMinute`.
 
 ```ts
-import { findGreek, findPrice, loadContracts, loadTradingMinuteBars } from './research';
+import { findGreek } from '@fleece/marketdata';
+
+import { findPrice, loadContracts, loadTradingMinuteBars } from './research';
 
 const contracts = await loadContracts('2025-03-03', 'SPY', 'call', 40, 16);
 const minutes = await loadTradingMinuteBars('2025-03-03', 'SPY', contracts);
@@ -21,7 +24,7 @@ const risk = findGreek(minute, 0.043, 0.012);
 | `loadContracts(date, underlying, type, days, windowDays)` | The contracts of that type that **traded on `date`**, at the earliest expiration from `days` out through `days + windowDays` that traded at all |
 | `loadTradingMinuteBars(date, underlying, contracts)` | One `MarketMinute` per minute of the regular session: the underlying's close and every contract's last close as of that minute |
 | `findPrice(timestamp, minutes)` | The last minute at or before that instant |
-| `findGreek(minute, riskFreeRate, dividendYield?)` | Implied volatility and greeks for every contract in that minute a volatility can be solved for |
+| `findGreek(minute, riskFreeRate, dividendYield?)` | From `@fleece/marketdata`: implied volatility and greeks for every contract in that minute a volatility can be solved for |
 
 ## Three things that will surprise you
 

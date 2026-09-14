@@ -8,9 +8,10 @@
  * Keys come from the repo-root `.env`. The first run fetches; every run after it reads
  * the cache under `packages/playground/data/research/`.
  */
+import { findGreek } from '@fleece/marketdata';
 import { LoggerFactory, easternClock } from '@fleece/utilities';
 
-import { findGreek, findPrice, loadContracts, loadTradingMinuteBars } from './research';
+import { findPrice, loadContracts, loadTradingMinuteBars } from './research';
 
 const logger = LoggerFactory.getLogger('OptionResearch');
 
