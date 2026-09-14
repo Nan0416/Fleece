@@ -6,26 +6,27 @@ import { BacktestDriver, BaseStrategy } from '../backtest/driver';
 import { BacktestMarketDataImpl } from '../backtest/marketdata';
 import { BacktestTime } from '../backtest/time';
 import { TradeReport } from '../backtest/trade-report';
-import { marketDataClient, optionsAvailabilitiesHelper } from '../client';
+import { impliedVolatilityHistoryHelper, marketDataClient, optionsAvailabilitiesHelper } from '../client';
 import { findGreek } from './greeks';
 import type { OptionPrice } from './prices';
-import { choosePut, daysToExpiration, ENTRY_DELTA, ENTRY_DTE, EXIT_DTE, exitReason, expirationsByPreference, ivPercentile, type PutCandidate } from './sell-put-rules';
+import type { ImpliedVolatilityPoint } from '../utils/implied-volatility-history';
+import { daysToExpiration, expirationsByPreference } from '../utils/option-selection';
+import { choosePut, ENTRY_DELTA, ENTRY_DTE, EXIT_DTE, exitReason, ivPercentile, type PutCandidate } from './sell-put-rules';
 
 const logger = LoggerFactory.getLogger('SellPut');
 
 const SYMBOL = 'AAPL';
 
 /**
- * A year before the first trade can happen. The strategy measures the volatility its
- * percentile is taken against as the clock passes, rather than loading it from outside the
- * run, so no day can be ranked against a value measured after it — and that first year is
- * spent measuring. Alpaca's option history starts in February 2024.
+ * The volatility history comes from the cache, which starts in February 2024, so the first
+ * session with 252 earlier ones to rank against is in February 2025.
  */
-const RUN_FROM = '2024-02-01';
+const RUN_FROM = '2025-01-01';
 const RUN_TO = '2026-08-31';
 
 const MINUTE = 60_000;
-const DECISION_TIME = '11:00:00';
+/** A minute after the 11:00 sample's bar is published, which is 11:01:04. */
+const DECISION_TIME = '11:02:00';
 const CONTRACTS = 1;
 
 const RISK_FREE_RATE = 0.043;
@@ -42,10 +43,8 @@ const COMMISSION_PER_CONTRACT = Decimal.of('0.65');
 
 const IV_LOOKBACK_SAMPLES = 252;
 const MIN_ENTRY_IV_PERCENTILE = 30;
-/** The volatility ranked is a month's: the at-the-money pair at the expiration nearest 30 days out. */
-const IV_DTE = { target: 30, min: 20, max: 40 } as const;
-/** Strikes tried, nearest the spot first, before moving to the next expiration. */
-const IV_STRIKES_TRIED = 3;
+/** The grid bar whose volatility is ranked. */
+const IV_SAMPLE_TIME = '11:00';
 
 /**
  * How old the last print may be. A delta is solved from the option's last trade against
@@ -61,25 +60,19 @@ const ENTRY_STRIKE_FLOOR = 0.7;
 /** Same as the availability sweep, which is the figure known to stay under Alpaca's rate limit. */
 const FETCH_CONCURRENCY = 10;
 
-interface VolatilitySample {
-  readonly date: string;
-  readonly iv: number;
-}
-
 interface PricedPut extends PutCandidate {
   /** The print the delta was solved from, per share. */
   readonly price: number;
   readonly iv: number;
 }
 
-interface StraddlePair {
-  readonly strikeMils: number;
-  readonly put: OccSymbol;
-  readonly call: OccSymbol;
-}
-
 function minute(timestamp: number): string {
   return `${easternClock.date(timestamp)} ${easternClock.time(timestamp).slice(0, 5)}`;
+}
+
+/** The at-the-money volatility a point stands for: its put's and call's, averaged, since a trade print can sit anywhere in the spread and the two sides' errors lean opposite ways. */
+function meanVolatility(point: ImpliedVolatilityPoint): number {
+  return (point.putIv + point.callIv) / 2;
 }
 
 function volPoints(iv: number): string {
@@ -101,8 +94,8 @@ export interface SellPutProps {
 /**
  * Sells a 45-day, 0.20-delta put on one stock when its implied volatility is high for it.
  *
- * At 11:00 each session: measure the month's at-the-money volatility, rank it against the
- * last 252 measured, and sell if the percentile is at least 30 and no short put is held.
+ * At 11:02 each session: rank the month's at-the-money volatility at the 11:00 bar against
+ * the 252 sessions before, and sell if the percentile is at least 30 and no short put is held.
  * Every minute, for each short put held: buy it back at half the credit, at a loss of twice
  * the credit, or with 21 days left. The rules themselves are in `sell-put-rules.ts`.
  */
@@ -110,7 +103,6 @@ export class SellPut extends BaseStrategy {
   private readonly symbol: string;
   private readonly dividendYield: number;
   private readonly report: TradeReport;
-  private readonly volatility: VolatilitySample[] = [];
 
   constructor(props: SellPutProps) {
     const symbol = props.symbol.trim().toUpperCase();
@@ -185,36 +177,36 @@ export class SellPut extends BaseStrategy {
     return trade;
   }
 
-  /** The 11:00 decision: record today's volatility, then sell a put if it and the book allow. */
+  /** The 11:02 decision: rank today's 11:00 volatility, then sell a put if it and the book allow. */
   private async decide(now: number, flat: boolean): Promise<Trade | undefined> {
     const today = easternClock.date(now);
     const spot = await this.spot(now);
     if (spot === undefined) {
-      logger.warn(`${today}: ${this.symbol} has no print in the ${ENTRY_PRINT_MAX_AGE / MINUTE} minutes before ${DECISION_TIME}. No volatility sample and no entry today.`);
+      logger.warn(`${today}: ${this.symbol} has no print in the ${ENTRY_PRINT_MAX_AGE / MINUTE} minutes before ${DECISION_TIME}. No entry today.`);
       return undefined;
     }
 
-    const iv = await this.atTheMoneyVolatility(now, spot);
-    if (iv === undefined) {
-      logger.warn(
-        `${today}: no at-the-money put and call ${IV_DTE.min}-${IV_DTE.max} days out both printed in the last ${ENTRY_PRINT_MAX_AGE / MINUTE} minutes. No volatility sample and no entry today.`,
-      );
+    const { points } = await this.data.impliedVolatilityHistory({
+      underlying: this.symbol,
+      time: IV_SAMPLE_TIME,
+      limit: IV_LOOKBACK_SAMPLES + 1,
+      riskFreeRate: RISK_FREE_RATE,
+      dividendYield: this.dividendYield,
+    });
+    const latest = points[points.length - 1];
+    if (latest === undefined || latest.date !== today) {
+      logger.warn(`${today}: no at-the-money volatility at ${IV_SAMPLE_TIME}. No entry today.`);
       return undefined;
     }
 
-    // Ranked against the samples before today, then recorded: today counted in its own
-    // history would never read below 1/253.
-    const history = this.volatility.slice(-IV_LOOKBACK_SAMPLES).map((sample) => sample.iv);
-    this.volatility.push({ date: today, iv });
+    // Ranked against the sessions before today: today counted in its own history would never
+    // read below 1/253.
+    const iv = meanVolatility(latest);
+    const history = points.slice(0, -1).map(meanVolatility);
     const percentile = history.length < IV_LOOKBACK_SAMPLES ? undefined : ivPercentile(history, iv);
     if (percentile === undefined) {
-      logger.debug(
-        `${today}: at-the-money IV ${volPoints(iv)}, spot ${spot.toFixed(2)}. Sample ${this.volatility.length} of the ${IV_LOOKBACK_SAMPLES} needed before the first entry.`,
-      );
+      logger.debug(`${today}: at-the-money IV ${volPoints(iv)}, but only ${history.length} of the ${IV_LOOKBACK_SAMPLES} earlier sessions to rank it against. No entry.`);
       return undefined;
-    }
-    if (this.volatility.length === IV_LOOKBACK_SAMPLES + 1) {
-      logger.info(`${today}: ${IV_LOOKBACK_SAMPLES} sessions of volatility recorded since ${this.volatility[0].date}. Entries can start.`);
     }
 
     const context = `${today}: at-the-money IV ${volPoints(iv)}, percentile ${percentile.toFixed(0)}, spot ${spot.toFixed(2)}`;
@@ -269,38 +261,6 @@ export class SellPut extends BaseStrategy {
     const { bars } = await this.data.minuteBars({ symbol: this.symbol, from: easternClock.date(now) });
     const last = bars[bars.length - 1];
     return last === undefined || now - last.t > ENTRY_PRINT_MAX_AGE ? undefined : last.c;
-  }
-
-  /**
-   * The mean of the put's and the call's implied volatility at the strike nearest the spot,
-   * at the expiration nearest 30 days out. Both rather than one, because a trade print can
-   * sit anywhere in the spread and the two sides' errors lean opposite ways.
-   */
-  private async atTheMoneyVolatility(now: number, spot: number): Promise<number | undefined> {
-    const today = easternClock.date(now);
-    const { contracts } = await this.data.listActiveOptionContracts({
-      underlying: this.symbol,
-      expirationFrom: easternClock.shiftDate(today, IV_DTE.min),
-      expirationTo: easternClock.shiftDate(today, IV_DTE.max),
-      strikeFrom: spot * 0.9,
-      strikeTo: spot * 1.1,
-    });
-
-    for (const expiration of expirationsByPreference(
-      contracts.map((contract) => contract.expiration),
-      today,
-      IV_DTE,
-    )) {
-      for (const pair of straddlePairs(contracts, expiration, spot).slice(0, IV_STRIKES_TRIED)) {
-        const risks = findGreek({ timestamp: now, stockSpotPrice: spot, optionPrices: await this.prices([pair.put, pair.call], now) }, RISK_FREE_RATE, this.dividendYield);
-        const put = risks.get(pair.put.symbol);
-        const call = risks.get(pair.call.symbol);
-        if (put !== undefined && call !== undefined) {
-          return (put.impliedVolatility + call.impliedVolatility) / 2;
-        }
-      }
-    }
-    return undefined;
   }
 
   /** The put to sell: the nearest qualifying expiration that has a put in the delta band. */
@@ -372,25 +332,11 @@ export class SellPut extends BaseStrategy {
   }
 }
 
-/** Strikes that have both a put and a call at `expiration`, nearest the spot first. */
-function straddlePairs(contracts: ReadonlyArray<OccSymbol>, expiration: string, spot: number): ReadonlyArray<StraddlePair> {
-  const byStrike = new Map<number, { put?: OccSymbol; call?: OccSymbol }>();
-  for (const contract of contracts) {
-    if (contract.expiration !== expiration) {
-      continue;
-    }
-    const sides = byStrike.get(contract.strikeMils) ?? {};
-    byStrike.set(contract.strikeMils, contract.type === 'put' ? { ...sides, put: contract } : { ...sides, call: contract });
-  }
-  return [...byStrike]
-    .flatMap(([strikeMils, { put, call }]) => (put === undefined || call === undefined ? [] : [{ strikeMils, put, call }]))
-    .sort((left, right) => Math.abs(left.put.strike - spot) - Math.abs(right.put.strike - spot));
-}
-
 async function main(): Promise<void> {
   const time = new BacktestTime(easternClock.timestamp(RUN_FROM), easternClock.timestamp(RUN_TO, '23:59:59'), MINUTE);
   const client = marketDataClient();
-  const marketData = new BacktestMarketDataImpl(client, optionsAvailabilitiesHelper(client));
+  const availabilities = optionsAvailabilitiesHelper(client);
+  const marketData = new BacktestMarketDataImpl(client, availabilities, impliedVolatilityHistoryHelper(client, availabilities));
   const account = new BacktestAccountImpl();
   const report = new TradeReport();
 

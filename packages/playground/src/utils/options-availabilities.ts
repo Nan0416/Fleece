@@ -62,6 +62,8 @@ export interface OptionsAvailabilitiesHelper {
   readonly cachePath: string;
   save(underlying: string): Promise<void>;
   availableOptions(underlying: string, timestamp: number): Promise<ReadonlyArray<OccSymbol>>;
+  /** When the underlying was last swept, which is how current its listing is. `undefined` before the first sweep. */
+  refreshedAt(underlying: string): Promise<number | undefined>;
 }
 
 /** One contract that has a price, pre-parsed so a per-minute lookup does no work twice. */
@@ -209,6 +211,11 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
   async availableOptions(underlying: string, timestamp: number): Promise<ReadonlyArray<OccSymbol>> {
     const tradable = await this.tradable(underlying.trim().toUpperCase());
     return tradable.filter((entry) => entry.firstTradingMinuteTimestamp <= timestamp && timestamp <= entry.expirationTimestamp).map((entry) => entry.occSymbol);
+  }
+
+  /** Read from the file rather than the parsed contracts, which do not keep it. */
+  async refreshedAt(underlying: string): Promise<number | undefined> {
+    return this.readCache(underlying.trim().toUpperCase())?.refreshedAt;
   }
 
   /**

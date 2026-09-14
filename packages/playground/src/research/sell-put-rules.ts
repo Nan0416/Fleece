@@ -3,12 +3,12 @@
  * them, so each rule can be checked against numbers written by hand.
  */
 import type { OccSymbol } from '@fleece/marketdata';
-import { Decimal, utcClock } from '@fleece/utilities';
+import { Decimal } from '@fleece/utilities';
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+import type { DaysToExpirationWindow } from '../utils/option-selection';
 
 /** The expiration sold into: the one nearest 45 days out, and nothing outside 40 to 50. */
-export const ENTRY_DTE = { target: 45, min: 40, max: 50 } as const;
+export const ENTRY_DTE: DaysToExpirationWindow = { target: 45, min: 40, max: 50 };
 
 /**
  * The put sold: nearest 0.20 delta, and nothing outside 0.15 to 0.25. The band is what
@@ -47,15 +47,6 @@ export interface ExitCheck {
 }
 
 /**
- * Calendar days from `date` to `expiration`, both ISO dates. Measured between their UTC
- * midnights, which are always exactly a day apart: Eastern midnights are 23 or 25 hours
- * apart across a daylight-saving change, so dividing those spans by a day is a fraction.
- */
-export function daysToExpiration(date: string, expiration: string): number {
-  return (utcClock.timestamp(expiration) - utcClock.timestamp(date)) / MS_PER_DAY;
-}
-
-/**
  * The share of `history` strictly below `current`, in percent: 0 is the lowest volatility
  * of the lookback, and 100 is higher than every day in it.
  *
@@ -70,22 +61,6 @@ export function ivPercentile(history: ReadonlyArray<number>, current: number): n
     return undefined;
   }
   return (100 * history.filter((value) => value < current).length) / history.length;
-}
-
-/**
- * The expirations from `min` to `max` days out, nearest `target` first. Of two equally
- * near, the earlier comes first: less time is less exposure for the same distance.
- */
-export function expirationsByPreference(
-  expirations: Iterable<string>,
-  date: string,
-  window: { readonly target: number; readonly min: number; readonly max: number },
-): ReadonlyArray<string> {
-  return [...new Set(expirations)]
-    .map((expiration) => ({ expiration, days: daysToExpiration(date, expiration) }))
-    .filter(({ days }) => days >= window.min && days <= window.max)
-    .sort((left, right) => Math.abs(left.days - window.target) - Math.abs(right.days - window.target) || left.days - right.days)
-    .map(({ expiration }) => expiration);
 }
 
 /**

@@ -1,8 +1,9 @@
-import { marketHour, requireOccSymbol, type AlpacaMarketDataClient, type Bar, type OccSymbol, type StockSplit } from '@fleece/marketdata';
+import { blackScholesPrice, marketHour, requireOccSymbol, type AlpacaMarketDataClient, type Bar, type OccSymbol, type StockSplit } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
 
 import { BacktestMarketDataImpl, findOverlaps, generatePlaceholderBarSegments, type MarketData } from '../../src/backtest/marketdata';
 import type { TimeSubscriber } from '../../src/backtest/time';
+import type { ImpliedVolatilityHistoryHelper, MeasuredSample, SessionSamples } from '../../src/utils/implied-volatility-history';
 import type { OptionsAvailabilitiesHelper } from '../../src/utils/options-availabilities';
 
 const JAN_CALL_200 = requireOccSymbol('AMZN260116C00200000', 'build a fixture');
@@ -89,12 +90,16 @@ class FakeClient {
 }
 
 function availabilities(chain: ReadonlyArray<OccSymbol> = CHAIN): OptionsAvailabilitiesHelper {
-  return { cachePath: '/nowhere', save: async () => {}, availableOptions: async () => chain };
+  return { cachePath: '/nowhere', save: async () => {}, availableOptions: async () => chain, refreshedAt: async () => undefined };
 }
 
-function build(client: FakeClient): BacktestMarketDataImpl {
+function volatility(sessions: ReadonlyArray<SessionSamples> = []): ImpliedVolatilityHistoryHelper {
+  return { cachePath: '/nowhere', save: async () => {}, sessions: async () => sessions };
+}
+
+function build(client: FakeClient, sessions: ReadonlyArray<SessionSamples> = []): BacktestMarketDataImpl {
   // The fake implements the slice of the client this class touches, which the compiler cannot know.
-  return new BacktestMarketDataImpl(client as unknown as AlpacaMarketDataClient, availabilities());
+  return new BacktestMarketDataImpl(client as unknown as AlpacaMarketDataClient, availabilities(), volatility(sessions));
 }
 
 async function marketData(client: FakeClient, now: number): Promise<BacktestMarketDataImpl> {
@@ -681,5 +686,72 @@ describe('BacktestMarketDataImpl', () => {
 
       await expect(subject.forward(at(DAY, '12:00:00'))).rejects.toThrow(/only ever stepped forward/);
     });
+  });
+});
+
+describe('BacktestMarketDataImpl.impliedVolatilityHistory', () => {
+  const PUT = 'AMZN240405P00100000';
+  const CALL = 'AMZN240405C00100000';
+  const RATE = 0.043;
+
+  /** A sample at `time` whose legs were priced at 30 vol, so each point solves to it. */
+  function measured(date: string, time: string): MeasuredSample {
+    const tYears = (at('2024-04-05', '16:00:00') - (at(date, `${time}:00`) + 60_000)) / (365 * 24 * 60 * 60 * 1000);
+    const input = { spot: 100, strike: 100, tYears, rate: RATE, vol: 0.3 };
+    return {
+      status: 'measured',
+      time,
+      spot: 100,
+      spotAt: at(date, `${time}:00`),
+      putSymbol: PUT,
+      putPrice: blackScholesPrice({ ...input, type: 'put' }),
+      putAt: at(date, `${time}:00`),
+      callSymbol: CALL,
+      callPrice: blackScholesPrice({ ...input, type: 'call' }),
+      callAt: at(date, `${time}:00`),
+    };
+  }
+
+  const SESSIONS: ReadonlyArray<SessionSamples> = [
+    { date: DAY, samples: [measured(DAY, '10:30'), measured(DAY, '11:00')] },
+    { date: NEXT, samples: [{ status: 'unmeasured', time: '11:00', reason: 'no-priced-pair' }] },
+    { date: SPLIT_DAY, samples: [measured(SPLIT_DAY, '11:00')] },
+  ];
+
+  async function subject(now: number): Promise<BacktestMarketDataImpl> {
+    const built = build(new FakeClient(), SESSIONS);
+    await built.init(now);
+    return built;
+  }
+
+  function request(limit = 10) {
+    return { underlying: 'amzn', time: '11:00', limit, riskFreeRate: RATE, dividendYield: 0 };
+  }
+
+  it('shows a sample only once its bar would have been published, a minute and four seconds after it starts', async () => {
+    const atPublish = await subject(at(SPLIT_DAY, '11:01:04'));
+    expect((await atPublish.impliedVolatilityHistory(request())).points.map((point) => point.date)).toEqual([DAY]);
+
+    const after = await subject(at(SPLIT_DAY, '11:01:05'));
+    expect((await after.impliedVolatilityHistory(request())).points.map((point) => point.date)).toEqual([DAY, SPLIT_DAY]);
+  });
+
+  it('solves each leg at the rate and yield asked for, and leaves out a session with nothing measured at that time', async () => {
+    const { points } = await (await subject(at(AFTER_SPLIT, '12:00:00'))).impliedVolatilityHistory(request());
+
+    expect(points).toHaveLength(2);
+    expect(points[1]).toMatchObject({ date: SPLIT_DAY, spot: 100, putSymbol: PUT, callSymbol: CALL });
+    expect(points[1].putIv).toBeCloseTo(0.3, 4);
+    expect(points[1].callIv).toBeCloseTo(0.3, 4);
+  });
+
+  it('keeps the most recent points up to the limit', async () => {
+    const { points } = await (await subject(at(AFTER_SPLIT, '12:00:00'))).impliedVolatilityHistory(request(1));
+    expect(points.map((point) => point.date)).toEqual([SPLIT_DAY]);
+  });
+
+  it('refuses a time off the half-hour grid rather than answering with no history', async () => {
+    const built = await subject(at(AFTER_SPLIT, '12:00:00'));
+    await expect(built.impliedVolatilityHistory({ ...request(), time: '11:05' })).rejects.toThrow('not a sample time');
   });
 });
