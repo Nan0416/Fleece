@@ -90,7 +90,10 @@ export const ALPACA_TRADING_LIVE_URL = 'https://api.alpaca.markets';
 
 const DEFAULT_TIMEOUT_MS = 40_000;
 
-/** Alpaca's page maximum for bars, trades and quotes. */
+/**
+ * Alpaca's page maximum for bars, trades and quotes. Asked for explicitly: left out, a page
+ * is 1,000, which is ten requests where one would do. One more is refused with a 400.
+ */
 const MAX_PAGE = 10_000;
 
 /** A stop, so a broken page token cannot spin forever against a paid API. */
@@ -200,6 +203,7 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
       adjustment: request.adjustForSplit === true ? 'split' : 'raw',
       start: new Date(from).toISOString(),
       end: new Date(to).toISOString(),
+      limit: MAX_PAGE,
     });
 
     const bars = raw.map((bar) => normalizeBar(request.symbol, bar));
@@ -402,6 +406,7 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
         timeframe,
         start: new Date(from).toISOString(),
         end: new Date(to).toISOString(),
+        limit: MAX_PAGE,
       });
       for (const [symbol, entries] of raw) {
         bars.set(

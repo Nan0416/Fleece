@@ -78,6 +78,29 @@ describe('bars', () => {
     expect(http.lastRequest.query['timeframe']).toBe('1Day');
   });
 
+  it("asks for Alpaca's largest page, since a page left unsized is a tenth of it", async () => {
+    const http = new FakeHttpClient().reply(bars('AAPL'));
+    const alpaca = client(http);
+
+    await alpaca.minuteBars({ symbol: 'AAPL', from: SESSION, to: SESSION });
+    expect(http.lastRequest.query['limit']).toBe('10000');
+
+    await alpaca.dailyBars({ symbol: 'AAPL', from: SESSION, to: SESSION });
+    expect(http.lastRequest.query['limit']).toBe('10000');
+  });
+
+  it('follows the page token to the end of the window', async () => {
+    const http = new FakeHttpClient().reply(
+      withPageToken(bars('AAPL', { t: utc('2024-12-19T14:30:00Z'), c: 1 }), 'next'),
+      withPageToken(bars('AAPL', { t: utc('2024-12-19T14:31:00Z'), c: 2 }), null),
+    );
+    const { bars: result } = await client(http).minuteBars({ symbol: 'AAPL', from: SESSION, to: SESSION });
+
+    expect(result.map((bar) => bar.c)).toStrictEqual([1, 2]);
+    expect(http.requests).toHaveLength(2);
+    expect(http.requests[1].query['page_token']).toBe('next');
+  });
+
   it('refuses a timeframe Alpaca does not aggregate, naming what it takes', async () => {
     const alpaca = client(new FakeHttpClient().reply(bars('AAPL')));
 
@@ -766,6 +789,13 @@ describe('option bars for many contracts', () => {
 
     expect(http.requests).toHaveLength(1);
     expect(http.lastRequest.query['symbols']).toBe(`${CONTRACT},${PUT}`);
+  });
+
+  it("asks for Alpaca's largest page, since a page left unsized is a tenth of it", async () => {
+    const http = new FakeHttpClient().reply(optionBarsBySymbol({ [CONTRACT]: [{ t: utc('2024-12-19T14:30:00Z') }] }));
+    await client(http).optionBarsBySymbol({ ...range, symbols: [CONTRACT, PUT] });
+
+    expect(http.lastRequest.query['limit']).toBe('10000');
   });
 
   it('keys the answer by contract, with the symbol on every bar', async () => {
