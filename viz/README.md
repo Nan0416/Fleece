@@ -25,13 +25,19 @@ months, and the system Python here is ahead of them.
 | Script | Reads | Draws |
 | --- | --- | --- |
 | `option_chain.py` | `data/option-chain.json` | An option chain in eight contour panels — delta, implied volatility, theta and mid price, across the calls and across the puts |
+| `option_term_structure.py` | `data/option-chain.json` | The same eight panels as lines against days to expiry, one line per strike |
 
-Two commands — write the data, then draw it:
+Write the data once, then draw either:
 
 ```bash
 npm run option-chain -w @fleece/playground
 uv run --project viz viz/option_chain.py
+uv run --project viz viz/option_term_structure.py
 ```
+
+The two read the same file and are worth having side by side: the contour chart shows the
+whole surface at once, and the term structure takes cross-sections along it, which is the
+view that answers how one contract behaves as expiry approaches.
 
 The figure is two rows and four columns. The top row is the call chain and the bottom row
 the put chain; every panel plots strike across and expiration up, on axes all eight share,
@@ -81,6 +87,29 @@ way. See `SEAM_TOLERANCE` in `packages/playground/src/option-chain.ts`.
 
 The script saves a PNG next to its data and then opens a window. `MPLBACKEND=Agg` in front
 of the command skips the window.
+
+## Term structure
+
+Days to expiry along x, counting down so the axis runs the way the contracts do. One line
+per strike, coloured by strike and labelled with it at the expiry end. The strike nearest
+spot is drawn in orange over the top, since one hue out of a sequential ramp cannot be
+picked out and it is the line a reader looks for first.
+
+Labels are placed in two passes — spread upwards where lines converge, then pulled back
+down from the ceiling — because a column whose lines all run together near the top, which
+is delta at expiry and theta everywhere, would otherwise stack its labels out over the
+title. They are nudged rather than dropped: the strikes that collide are exactly the ones a
+reader cannot tell apart by position.
+
+Only strikes quoted at `MIN_EXPIRATIONS` or more are drawn. A chain lists fine strikes near
+the front month that exist nowhere else — on one AMZN chain, 13 of 29 strikes appeared at
+one or two expirations — and a two-point line reads as a trend it has no standing to claim.
+`MAX_LINES` caps the rest, spread by rank rather than by price so a chain that lists
+half-strikes near the money does not spend most of its lines on the middle.
+
+A column shares one y range between its call row and its put row, which is what makes the
+two comparable — except delta, where the two occupy opposite halves of -1 to 1 and sharing
+would leave each row using half its panel. That is the `share_rows` field on `Panel`.
 
 ## The data format
 
