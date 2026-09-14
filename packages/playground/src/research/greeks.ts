@@ -1,11 +1,10 @@
 /**
  * What each printed contract implies about volatility, and what that implies about risk.
  */
+import { blackScholesGreeks, impliedVolatility, type Greeks } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
 
-import type { MarketMinute } from '../data-models';
-
-import { blackScholesGreeks, impliedVolatility, type Greeks } from './black-scholes';
+import type { MarketMinute } from './prices';
 
 /** Equity options stop trading at the close on their expiration date. */
 const EXPIRY_TIME = '16:00:00';

@@ -284,37 +284,6 @@ export interface OptionSnapshot {
   readonly iv?: number;
 }
 
-export interface OptionPrice {
-  readonly occSymbol: OccSymbol;
-  /** The minute bar's close, per share. A contract cost this times its multiplier. */
-  readonly price: number;
-  /**
-   * The minute that close printed in, which is at or before the enclosing
-   * `MarketMinute.timestamp` — the only way to tell a fresh price from a stale one.
-   */
-  readonly at: number;
-}
-
-/**
- * The market at one minute: what the underlying closed that minute at, and what each
- * contract did.
- *
- * `stockSpotPrice` is absent for a minute the underlying itself did not print in, which
- * happens even in liquid names.
- *
- * `optionPrices` holds every contract that has printed *by* this minute, at its last
- * close, because an option chain is mostly silent minute to minute and a strategy needs
- * its legs quoted at the same instant. A price is therefore not necessarily one anyone
- * traded at this minute — `at` says which minute it came from. A contract absent from the
- * map has not printed at all yet today.
- */
-export interface MarketMinute {
-  readonly timestamp: number;
-  readonly stockSpotPrice?: number;
-  /** Keyed by OCC contract symbol. */
-  readonly optionPrices: ReadonlyMap<string, OptionPrice>;
-}
-
 export type OptionStyle = 'american' | 'european';
 
 /** A contract expiring today is still `active`; `inactive` covers expired and delisted alike. */
