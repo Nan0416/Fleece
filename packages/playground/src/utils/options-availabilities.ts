@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { marketHour, parseOccSymbol, type AlpacaMarketDataClient, type Bar, type OccSymbol, type OptionContractStatus } from '@fleece/marketdata';
-import { assertArray, assertNonEmptyString, assertNumber, assertOptionalInteger, assertRecord, easternClock, LoggerFactory } from '@fleece/utilities';
+import { assertArray, assertNonEmptyString, assertNumber, assertOptionalInteger, assertRecord, easternClock, LoggerFactory, mapWithConcurrency } from '@fleece/utilities';
 
 const logger = LoggerFactory.getLogger('OptionsAvailabilities');
 
@@ -25,10 +25,13 @@ const SWEEP_BATCH = 200;
 
 /**
  * Sweep requests in flight at once. Alpaca answers 429 over its cap and neither this
- * client nor the HTTP seam retries one, so raising this trades wall-clock for batches
- * that come back empty-handed and have to be asked again next run.
+ * client nor the HTTP seam retries one, so raising this trades wall-clock for a 429,
+ * which fails the whole `save`.
  */
 const SWEEP_CONCURRENCY = 10;
+
+/** The folder under the cache root these files live in, so other caches can share the root. */
+const CACHE_FOLDER = 'options-availabilities';
 
 /** What an equity option stops trading at, on every day the market-hours table does not name. */
 const REGULAR_CLOSE = '16:00:00';
@@ -46,16 +49,6 @@ export interface OptionContractAvailability {
   readonly firstTradingMinuteTimestamp?: number;
   /** The regular close on expiration day, which is when the contract stops trading. */
   readonly expirationTimestamp: number;
-  /**
-   * When a sweep last got an *answer* about this contract, and absent when every request
-   * that would have answered it failed.
-   *
-   * This is what tells "swept, and it never printed" apart from "never successfully
-   * asked". Both look like a missing `firstTradingMinuteTimestamp`, and only the first is
-   * safe to settle on once the contract has expired: settling on the second would drop the
-   * contract from every later run because one request met a rate limit.
-   */
-  readonly sweptAt?: number;
 }
 
 export interface OptionContractAvailabilities {
@@ -77,37 +70,6 @@ interface TradableContract {
   readonly expirationTimestamp: number;
 }
 
-/**
- * Runs `work` over `items`, at most `concurrency` at a time.
- *
- * A pool rather than `Promise.all` over fixed groups: a chain sweep's requests differ by
- * an order of magnitude in size, so a group spends most of its time waiting on its
- * slowest member while the other nine slots sit idle.
- */
-async function mapWithConcurrency<T>(items: ReadonlyArray<T>, concurrency: number, work: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
-      const item = items[next];
-      next += 1;
-      await work(item);
-    }
-  });
-  await Promise.all(workers);
-}
-
-/**
- * A sweep tolerates a request that fails, because an unresolved contract is simply asked
- * about again next run. Every request failing is a different thing — bad credentials, or
- * a rate limit that never let up — and writing a cache from it would record an underlying
- * whose contracts all look as though they never traded.
- */
-function requireSomethingSucceeded(failed: number, total: number, pass: string): void {
-  if (total > 0 && failed === total) {
-    throw new Error(`All ${total} ${pass} sweep requests failed, so nothing was learned. Check the credentials and whether the rate limit was hit, then rerun.`);
-  }
-}
-
 /** A cache that has never been written, as opposed to one that cannot be read. */
 function isMissingFile(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
@@ -124,7 +86,6 @@ function toAvailability(value: unknown, field: string): OptionContractAvailabili
     symbol: assertNonEmptyString(record.symbol, `${field}.symbol`),
     firstTradingMinuteTimestamp: assertOptionalInteger(record.firstTradingMinuteTimestamp, `${field}.firstTradingMinuteTimestamp`),
     expirationTimestamp: assertNumber(record.expirationTimestamp, `${field}.expirationTimestamp`),
-    sweptAt: assertOptionalInteger(record.sweptAt, `${field}.sweptAt`),
   };
 }
 
@@ -133,7 +94,7 @@ function toAvailability(value: unknown, field: string): OptionContractAvailabili
  * instant, answered from a file swept once per underlying.
  *
  *     const helper = new OptionsAvailabilitiesHelperImpl(cachePath, marketDataClient());
- *     await helper.save('AMZN');                       // sweeps the chain, writes AMZN.json
+ *     await helper.save('AMZN');                       // sweeps the chain, writes options-availabilities/AMZN.json
  *     await helper.availableOptions('AMZN', atNoon);   // the contracts live at that minute
  *
  * `save` is the slow half and is meant to be run ahead of a backtest, not during one.
@@ -148,6 +109,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
   private readonly loaded = new Map<string, Promise<ReadonlyArray<TradableContract>>>();
 
   constructor(
+    /** The cache root. The files go in its `options-availabilities` folder. */
     readonly cachePath: string,
     private readonly client: AlpacaMarketDataClient,
     /** Injectable so "has this expired" is a fixed question in a test rather than today's. */
@@ -155,6 +117,11 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     private readonly concurrency: number = SWEEP_CONCURRENCY,
   ) {}
 
+  /**
+   * Any request that fails fails the whole sweep, and nothing is written: the previous file
+   * stays as it was, and a rerun asks again. So every entry in a file is an answer a sweep
+   * actually got, which is what lets the next run trust a missing first print.
+   */
   async save(underlying: string): Promise<void> {
     const ticker = underlying.trim().toUpperCase();
     const refreshedAt = this.now();
@@ -177,7 +144,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     // An empty listing is not an empty chain: Alpaca serving an empty page, or an upstream
     // fault normalised into one, would otherwise write a file with nothing in it over a
     // sweep that cost hundreds of requests, and every option strategy would then silently
-    // trade nothing. The same reasoning as `requireSomethingSucceeded`, one pass earlier.
+    // trade nothing.
     if (listed.length === 0 && previous !== undefined && previous.availabilities.length > 0) {
       throw new Error(
         `${ticker} listed no contracts, but ${this.file(ticker)} holds ${previous.availabilities.length}. Refusing to overwrite a swept chain with an empty one. Delete the file if ${ticker} really has no options.`,
@@ -189,13 +156,12 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     const pending: OccSymbol[] = [];
     for (const contract of listed) {
       const known = cached.get(contract.symbol);
-      // A first print cannot change, so it settles on its own. Expiry only settles an
-      // answer a sweep actually got: `sweptAt` absent means nothing was ever learned about
-      // this contract, and treating that as "never printed" is how one 429 deletes a
-      // strike from every later run. A cache written before `sweptAt` existed has none, so
-      // its unprinted contracts are asked about once more rather than trusted.
+      // A first print cannot change, so it settles on its own. No print is final only if the
+      // contract had already expired when the previous file was written: an entry in it is
+      // either an answer that sweep got or one kept because it was already final, so an
+      // unprinted contract that expired after that sweep may have printed since.
       const settledByPrint = known?.firstTradingMinuteTimestamp !== undefined;
-      const settledByExpiry = known?.sweptAt !== undefined && known.expirationTimestamp < refreshedAt;
+      const settledByExpiry = known !== undefined && previous !== undefined && known.expirationTimestamp < previous.refreshedAt;
       if (known !== undefined && (settledByPrint || settledByExpiry)) {
         settled.push(known);
       } else {
@@ -204,7 +170,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     }
     logger.info(`${ticker}: ${settled.length} already settled, ${pending.length} to sweep.`);
 
-    const { firstDates, answered } = await this.sweepFirstTradingDates(pending);
+    const firstDates = await this.sweepFirstTradingDates(pending);
     const firstMinutes = await this.sweepFirstTradingMinutes(firstDates);
 
     const availabilities = [...settled];
@@ -219,18 +185,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
       if (session === undefined) {
         logger.warn(`${contract.symbol} expires ${contract.expiration}, which the market-hours table does not cover. Taking the regular ${REGULAR_CLOSE} close.`);
       }
-      // Answered means a sweep reached a conclusion about this contract: the daily pass
-      // came back, and either it found no day at all — so the contract never printed — or
-      // the minute pass dated the day it did find. Anything else is a request that failed,
-      // and goes back in the file unmarked so the next run asks again.
-      const firstMinute = firstMinutes.get(contract.symbol);
-      const resolved = answered.has(contract.symbol) && (!firstDates.has(contract.symbol) || firstMinute !== undefined);
-      availabilities.push({
-        symbol: contract.symbol,
-        firstTradingMinuteTimestamp: firstMinute,
-        expirationTimestamp,
-        sweptAt: resolved ? refreshedAt : undefined,
-      });
+      availabilities.push({ symbol: contract.symbol, firstTradingMinuteTimestamp: firstMinutes.get(contract.symbol), expirationTimestamp });
     }
 
     availabilities.sort((first, second) => first.symbol.localeCompare(second.symbol));
@@ -283,57 +238,39 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
   }
 
   /**
-   * The day each contract first printed on, from one daily sweep of the whole chain, along
-   * with which contracts the sweep actually got an answer about — a batch that failed
-   * leaves its contracts out of both, and an unanswered contract is never settled.
+   * The day each contract first printed on, from one daily sweep of the whole chain. A
+   * contract missing from the map was asked about and never traded on any day.
    */
-  private async sweepFirstTradingDates(contracts: ReadonlyArray<OccSymbol>): Promise<{ firstDates: ReadonlyMap<string, string>; answered: ReadonlySet<string> }> {
+  private async sweepFirstTradingDates(contracts: ReadonlyArray<OccSymbol>): Promise<ReadonlyMap<string, string>> {
     const today = easternClock.date(this.now());
     const firstDates = new Map<string, string>();
-    const answered = new Set<string>();
 
     const batches: Array<ReadonlyArray<OccSymbol>> = [];
     for (let first = 0; first < contracts.length; first += SWEEP_BATCH) {
       batches.push(contracts.slice(first, first + SWEEP_BATCH));
     }
 
-    let failed = 0;
     let swept = 0;
     await mapWithConcurrency(batches, this.concurrency, async (batch) => {
-      try {
-        const { bars } = await this.client.optionBarsBySymbol({
-          symbols: batch.map((contract) => contract.symbol),
-          from: BEFORE_ANY_OPTION_HISTORY,
-          to: today,
-          multiplier: 1,
-          timespan: 'day',
-        });
-        // Collapsed to a date here, so the bars go out of scope with the batch.
-        for (const [symbol, entries] of bars) {
-          const at = earliest(entries);
-          if (at !== undefined) {
-            firstDates.set(symbol, easternClock.date(at));
-          }
+      const { bars } = await this.client.optionBarsBySymbol({
+        symbols: batch.map((contract) => contract.symbol),
+        from: BEFORE_ANY_OPTION_HISTORY,
+        to: today,
+        multiplier: 1,
+        timespan: 'day',
+      });
+      // Collapsed to a date here, so the bars go out of scope with the batch.
+      for (const [symbol, entries] of bars) {
+        const at = earliest(entries);
+        if (at !== undefined) {
+          firstDates.set(symbol, easternClock.date(at));
         }
-        // The whole batch, not just the contracts that printed: a contract the response
-        // has no bars for was asked about and has its answer, which is that it never
-        // traded on any day.
-        for (const contract of batch) {
-          answered.add(contract.symbol);
-        }
-      } catch (error: unknown) {
-        // Left unresolved rather than fatal. An unresolved contract is never settled, so
-        // the next run asks about it again — where losing the whole sweep to one bad
-        // batch throws away every other batch that did succeed.
-        failed += 1;
-        logger.warn(`A batch of ${batch.length} contracts failed its daily sweep and will be asked again next run: ${String(error)}`);
       }
       swept += 1;
       logger.info(`Swept ${swept} of ${batches.length} batches for a first trading day.`);
     });
 
-    requireSomethingSucceeded(failed, batches.length, 'daily');
-    return { firstDates, answered };
+    return firstDates;
   }
 
   /**
@@ -351,38 +288,36 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     const firstMinutes = new Map<string, number>();
     const dates = [...byDate.keys()].sort();
 
-    let failed = 0;
     let swept = 0;
     await mapWithConcurrency(dates, this.concurrency, async (date) => {
       const symbols = byDate.get(date) ?? [];
-      try {
-        // A date string widens to the whole Eastern day, so this is that session's minutes.
-        const { bars } = await this.client.optionBarsBySymbol({ symbols, from: date, to: date, multiplier: 1, timespan: 'minute' });
+      // A date string widens to the whole Eastern day, so this is that session's minutes.
+      const { bars } = await this.client.optionBarsBySymbol({ symbols, from: date, to: date, multiplier: 1, timespan: 'minute' });
 
-        for (const symbol of symbols) {
-          const at = earliest(bars.get(symbol) ?? []);
-          if (at !== undefined) {
-            firstMinutes.set(symbol, at);
-            continue;
-          }
-          // A daily bar with no minute bars behind it — AMZN240119C00081000 is one. The
-          // day is evidence it traded, so the session close is used rather than dropping
-          // the contract: late is conservative, where early invents a tradable minute.
-          const session = marketHour(date);
-          if (session !== undefined) {
-            logger.warn(`${symbol} printed on ${date} with no minute bars. Dated from that session's close.`);
-            firstMinutes.set(symbol, session.closeAt);
-          }
+      for (const symbol of symbols) {
+        const at = earliest(bars.get(symbol) ?? []);
+        if (at !== undefined) {
+          firstMinutes.set(symbol, at);
+          continue;
         }
-      } catch (error: unknown) {
-        failed += 1;
-        logger.warn(`${date} failed its minute sweep, leaving ${symbols.length} contracts to be asked again next run: ${String(error)}`);
+        // A daily bar with no minute bars behind it — AMZN240119C00081000 is one. The
+        // day is evidence it traded, so the session close is used rather than dropping
+        // the contract: late is conservative, where early invents a tradable minute.
+        const session = marketHour(date);
+        if (session === undefined) {
+          // No session to take a close from: a daily bar on a day the market was shut,
+          // which Alpaca has served (AMZN250620P00150000 on Saturday 2024-06-01).
+          const message = `${symbol} printed on ${date}, which has no market session and no minute bars, so there is no minute to date its first print from.`;
+          logger.error(message);
+          throw new Error(message);
+        }
+        logger.warn(`${symbol} printed on ${date} with no minute bars. Dated from that session's close.`);
+        firstMinutes.set(symbol, session.closeAt);
       }
       swept += 1;
       logger.info(`Swept ${swept} of ${dates.length} days for a first trading minute.`);
     });
 
-    requireSomethingSucceeded(failed, dates.length, 'minute');
     return firstMinutes;
   }
 
@@ -425,8 +360,12 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
     return tradable;
   }
 
+  private folder(): string {
+    return resolve(this.cachePath, CACHE_FOLDER);
+  }
+
   private file(ticker: string): string {
-    return resolve(this.cachePath, `${ticker}.json`);
+    return resolve(this.folder(), `${ticker}.json`);
   }
 
   /**
@@ -463,7 +402,7 @@ export class OptionsAvailabilitiesHelperImpl implements OptionsAvailabilitiesHel
    * requests and a half-written file parses as a valid, shorter chain rather than failing.
    */
   private writeCache(availabilities: OptionContractAvailabilities): void {
-    mkdirSync(this.cachePath, { recursive: true });
+    mkdirSync(this.folder(), { recursive: true });
     const target = this.file(availabilities.underlying);
     const pending = `${target}.pending`;
     writeFileSync(pending, JSON.stringify(availabilities));
