@@ -5,3 +5,4 @@ export * from './occ-symbol';
 export * from './polygon';
 export * from './request-window';
 export * from './split-adjustment';
+export * from './utilities';

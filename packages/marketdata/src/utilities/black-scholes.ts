@@ -9,7 +9,7 @@
  * Floats throughout, deliberately: these are estimates about the future, not ledger
  * entries. Rates, vols and yields are decimals — `0.05` is 5%.
  */
-import type { OptionType } from '@fleece/marketdata';
+import type { OptionType } from '../data-models';
 
 /** Abramowitz & Stegun 7.1.26, |error| < 1.5e-7. */
 function erf(x: number): number {

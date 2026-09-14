@@ -1,6 +1,6 @@
-import { requireOccSymbol } from '@fleece/marketdata';
+import { requireOccSymbol, type MarketMinute } from '@fleece/marketdata';
 
-import { findPrice, type MarketMinute } from '../../src/research/prices';
+import { findPrice } from '../../src/research/prices';
 
 const CONTRACT = requireOccSymbol('SPY250411C00592000', 'build a fixture');
 
