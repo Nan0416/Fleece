@@ -1,15 +1,15 @@
 import { Decimal } from '@fleece/utilities';
 
-import type { BacktestAccount, Trade, Transaction } from '../../src/backtest/account';
-import { BacktestDriver, BaseStrategy } from '../../src/backtest/driver';
+import type { BacktestAccount, Trade, TradeContext, Transaction } from '../../src/backtest/account';
+import { BacktestDriver, BaseStrategy, type StrategyTrade } from '../../src/backtest/driver';
 import type { BacktestMarketData } from '../../src/backtest/marketdata';
 import { BacktestTime } from '../../src/backtest/time';
 
 const T0 = 1_700_000_000_000;
 const MINUTE = 60_000;
 
-function trade(symbol: string, timestamp: number): Trade {
-  return { symbol, size: 1, timestamp, price: 10 };
+function trade(symbol: string, timestamp: number): StrategyTrade {
+  return { trade: { symbol, size: 1, timestamp, price: 10 }, context: { kind: 'open', commission: 0, capital: 10 } };
 }
 
 /**
@@ -23,7 +23,7 @@ interface Journal {
 }
 
 interface FakeAccount extends BacktestAccount {
-  readonly recorded: ReadonlyArray<Trade>;
+  readonly recorded: ReadonlyArray<StrategyTrade>;
 }
 
 function journal(): Journal {
@@ -43,7 +43,7 @@ function journal(): Journal {
         },
       }) as unknown as BacktestMarketData,
     account: () => {
-      const recorded: Trade[] = [];
+      const recorded: StrategyTrade[] = [];
       return {
         recorded,
         timeSubscriberId: 'account',
@@ -53,10 +53,18 @@ function journal(): Journal {
         forward: async (timestamp: number) => {
           log.push(`account@${timestamp}`);
         },
-        record: (item: Trade): Transaction => {
-          recorded.push(item);
+        record: (item: Trade, context: TradeContext): Transaction => {
+          recorded.push({ trade: item, context });
           log.push(`record:${item.symbol}@${item.timestamp}`);
-          return { size: Decimal.of(item.size), price: Decimal.of(item.price), totalCost: Decimal.of(0), time: item.timestamp };
+          return {
+            symbol: item.symbol,
+            size: Decimal.of(item.size),
+            price: Decimal.of(item.price),
+            commission: Decimal.ZERO,
+            totalCost: Decimal.ZERO,
+            time: item.timestamp,
+            context,
+          };
         },
       } as unknown as FakeAccount;
     },
@@ -70,12 +78,12 @@ class RecordingStrategy extends BaseStrategy {
   constructor(
     strategyId: string,
     private readonly log: string[],
-    private readonly orders: (timestamp: number) => ReadonlyArray<Trade> | undefined,
+    private readonly orders: (timestamp: number) => ReadonlyArray<StrategyTrade> | undefined,
   ) {
     super(strategyId);
   }
 
-  async tick(): Promise<ReadonlyArray<Trade> | undefined> {
+  async tick(): Promise<ReadonlyArray<StrategyTrade> | undefined> {
     const timestamp = this.timestamp;
     this.seen.push(timestamp);
     this.log.push(`${this.strategyId}:evaluate@${timestamp}`);
@@ -83,7 +91,7 @@ class RecordingStrategy extends BaseStrategy {
   }
 }
 
-function strategy(strategyId: string, log: string[], orders: (timestamp: number) => ReadonlyArray<Trade> | undefined = () => undefined): RecordingStrategy {
+function strategy(strategyId: string, log: string[], orders: (timestamp: number) => ReadonlyArray<StrategyTrade> | undefined = () => undefined): RecordingStrategy {
   return new RecordingStrategy(strategyId, log, orders);
 }
 
@@ -194,7 +202,7 @@ describe('BacktestDriver', () => {
 
     // Doubling it would double every order it places, which is a position twice the size
     // the strategy thinks it holds.
-    expect(account.recorded.map((item) => item.symbol)).toEqual(['SPY']);
+    expect(account.recorded.map((item) => item.trade.symbol)).toEqual(['SPY']);
   });
 
   it('stops evaluating a strategy that was removed', async () => {

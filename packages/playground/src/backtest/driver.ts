@@ -1,7 +1,13 @@
 import { nanoid } from 'nanoid';
-import type { BacktestAccount, BacktestPortfolio, Trade } from './account';
+import type { BacktestAccount, BacktestPortfolio, Trade, TradeContext } from './account';
 import type { BacktestMarketData, MarketData } from './marketdata';
 import type { BacktestTime, Time } from './time';
+
+/** A trade and why it was made: what `tick` returns, and what the driver hands the account. */
+export interface StrategyTrade {
+  readonly trade: Trade;
+  readonly context: TradeContext;
+}
 
 export interface Strategy {
   readonly strategyId: string;
@@ -9,7 +15,7 @@ export interface Strategy {
   readonly data: MarketData;
   readonly portfolio: BacktestPortfolio;
 
-  tick(): Promise<ReadonlyArray<Trade> | undefined>;
+  tick(): Promise<ReadonlyArray<StrategyTrade> | undefined>;
 }
 
 export abstract class BaseStrategy implements Strategy {
@@ -56,7 +62,7 @@ export abstract class BaseStrategy implements Strategy {
     return this._time.timestamp;
   }
 
-  abstract tick(): Promise<ReadonlyArray<Trade> | undefined>;
+  abstract tick(): Promise<ReadonlyArray<StrategyTrade> | undefined>;
 }
 
 export interface BacktestDriverProps {
@@ -106,7 +112,7 @@ export class BacktestDriver {
       const strategy = this.strategies[i];
       const trades = (await strategy.tick()) ?? [];
       for (let j = 0; j < trades.length; j++) {
-        this.account.record(trades[j]);
+        this.account.record(trades[j].trade, trades[j].context);
       }
     }
   }

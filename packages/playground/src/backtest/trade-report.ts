@@ -1,45 +1,46 @@
-import { Decimal, easternClock, LEDGER_SCALE, sumDecimals, type DecimalInput } from '@fleece/utilities';
+import { Decimal, easternClock, LEDGER_SCALE, sumDecimals } from '@fleece/utilities';
 
-import { contractMultiplier, type Trade } from './account';
+import type { Transaction, TransactionRecorder } from './account';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const PERCENT = Decimal.of(100);
 
-export interface OpeningFill {
-  readonly trade: Trade;
-  /** Dollars paid for the fill, on top of what its price moved. */
-  readonly commission: DecimalInput;
-  /** Dollars the position ties up, which its return is measured against: strike × 100 for a cash-secured put. */
-  readonly capital: DecimalInput;
-  /** Whatever the strategy wants printed on the trade's line, in the order given. */
-  readonly notes?: Readonly<Record<string, string>>;
-}
-
-export interface ClosingFill {
-  readonly trade: Trade;
-  readonly commission: DecimalInput;
-  /** Why the strategy closed, as it should read in the report. */
-  readonly reason: string;
-}
-
 export interface OpenTrade {
   readonly symbol: string;
+  /** What is held now, signed: negative for a short. */
   readonly size: Decimal;
+  /** Per share, the opening fills' prices averaged by size, before commission. */
   readonly entryPrice: Decimal;
+  /** When the first opening fill booked. */
   readonly entryTime: number;
-  readonly entryCommission: Decimal;
+  /** The opening fills' capital, added up. */
   readonly capital: Decimal;
+  /** The first opening fill's. */
   readonly notes: Readonly<Record<string, string>>;
 }
 
-export interface RoundTrip extends OpenTrade {
+/** A position from the fill that opened it to the fill that left it flat. */
+export interface RoundTrip {
+  readonly symbol: string;
+  /** Everything opened over the trip, signed like the opening fills. */
+  readonly size: Decimal;
+  /** Per share, the opening fills' prices averaged by size, before commission. */
+  readonly entryPrice: Decimal;
+  readonly entryTime: number;
+  /** Per share, the closing fills' prices averaged by size, before commission. */
   readonly exitPrice: Decimal;
+  /** When the fill that left the position flat booked. */
   readonly exitTime: number;
-  readonly exitCommission: Decimal;
+  /** The fill that left the position flat's. */
   readonly reason: string;
-  /** What the two fills moved before commission, which is what the account books as realized. */
-  readonly grossPL: Decimal;
+  readonly capital: Decimal;
+  readonly notes: Readonly<Record<string, string>>;
+  /** Every fill's commission over the trip. */
+  readonly commission: Decimal;
+  /** What the account realized over the trip, which is already net of every commission. */
   readonly netPL: Decimal;
+  /** `netPL` with the commissions added back. */
+  readonly grossPL: Decimal;
 }
 
 export interface TradeReportSummary {
@@ -59,6 +60,22 @@ export interface TradeReportSummary {
   readonly byReason: ReadonlyMap<string, number>;
 }
 
+/** A position still open, as its fills so far add up. */
+interface Accumulating {
+  readonly symbol: string;
+  readonly entryTime: number;
+  readonly notes: Readonly<Record<string, string>>;
+  readonly held: Decimal;
+  readonly opened: Decimal;
+  /** Size times price over the opening fills, so dividing by `opened` is their average price. */
+  readonly openedNotional: Decimal;
+  readonly closed: Decimal;
+  readonly closedNotional: Decimal;
+  readonly capital: Decimal;
+  readonly commission: Decimal;
+  readonly realized: Decimal;
+}
+
 function average(values: ReadonlyArray<Decimal>): Decimal | undefined {
   return values.length === 0 ? undefined : sumDecimals(values).div(Decimal.of(values.length), LEDGER_SCALE);
 }
@@ -72,75 +89,87 @@ function signed(value: Decimal, scale: number): string {
 }
 
 /**
- * The round trips a strategy made, told to it fill by fill, and what they add up to.
+ * The round trips an account's transactions make, and what they add up to. It is the account's
+ * recorder, so it hears of every fill as the account books it:
  *
  *     const report = new TradeReport();
- *     report.opened({ trade: { symbol: 'AAPL250417P00210000', size: -1, price: '2.95', timestamp: t0 }, commission: '0.65', capital: 21_000 });
- *     report.closed({ trade: { symbol: 'AAPL250417P00210000', size: 1, price: '1.40', timestamp: t1 }, commission: '0.65', reason: 'take-profit' });
+ *     const account = new BacktestAccountImpl(report, 10_000);
+ *     account.record({ symbol: 'AAPL250417P00210000', size: -1, price: '2.95', timestamp: t0 }, { kind: 'open', commission: '0.65', capital: 21_000 });
+ *     account.record({ symbol: 'AAPL250417P00210000', size: 1, price: '1.40', timestamp: t1 }, { kind: 'close', commission: '0.65', reason: 'take-profit' });
  *     report.summary().netPL.toString(); // '153.7' — 295 in, 140 out, 1.30 to the broker
  *
- * Kept apart from the account on purpose. The account knows fills and nothing about why
- * they happened; a report wants the reason a trade closed and what the strategy saw when
- * it opened, and those belong to the strategy.
- *
- * One round trip per symbol at a time, opened by one fill and closed in full by one fill.
- * Anything else throws rather than being paired up some plausible way, because a report
- * that guesses which entry an exit belongs to prints a P&L no account ever booked.
+ * A round trip runs from flat to flat, however many fills add to it or take it down on the
+ * way. Its P&L is what the account realized rather than anything priced here, so the two
+ * cannot disagree; what the report adds is the reason a trip ended and what the strategy
+ * noted when it began.
  */
-export class TradeReport {
-  private readonly open = new Map<string, OpenTrade>();
+export class TradeReport implements TransactionRecorder {
+  private readonly open = new Map<string, Accumulating>();
   private readonly closedTrips: RoundTrip[] = [];
 
-  opened(fill: OpeningFill): void {
-    const { trade } = fill;
-    const size = Decimal.of(trade.size);
-    if (size.isZero()) {
-      throw new Error(`An opening fill for ${trade.symbol} has no size. Report a trade that moved something.`);
-    }
-    if (this.open.has(trade.symbol)) {
-      throw new Error(`${trade.symbol} is already open in this report. Close it before opening it again; adding to a position is not something it pairs.`);
-    }
-    this.open.set(trade.symbol, {
-      symbol: trade.symbol,
-      size,
-      entryPrice: Decimal.of(trade.price),
-      entryTime: trade.timestamp,
-      entryCommission: Decimal.of(fill.commission),
-      capital: Decimal.of(fill.capital),
-      notes: fill.notes ?? {},
-    });
-  }
+  record(transaction: Transaction): void {
+    const { symbol, size, price, commission, context } = transaction;
+    const trip = this.open.get(symbol);
 
-  closed(fill: ClosingFill): RoundTrip {
-    const { trade } = fill;
-    const entry = this.open.get(trade.symbol);
-    if (entry === undefined) {
-      throw new Error(`${trade.symbol} was closed but never opened in this report. Report the opening fill first.`);
-    }
-    const size = Decimal.of(trade.size);
-    if (!size.add(entry.size).isZero()) {
-      throw new Error(`${trade.symbol} is open ${entry.size.toString()} and was closed ${size.toString()}. This report only pairs a close that flattens the whole position.`);
+    if (context.kind === 'open') {
+      const base: Accumulating = trip ?? {
+        symbol,
+        entryTime: transaction.time,
+        notes: context.notes ?? {},
+        held: Decimal.ZERO,
+        opened: Decimal.ZERO,
+        openedNotional: Decimal.ZERO,
+        closed: Decimal.ZERO,
+        closedNotional: Decimal.ZERO,
+        capital: Decimal.ZERO,
+        commission: Decimal.ZERO,
+        realized: Decimal.ZERO,
+      };
+      this.open.set(symbol, {
+        ...base,
+        held: base.held.add(size),
+        opened: base.opened.add(size),
+        openedNotional: base.openedNotional.add(size.mul(price)),
+        capital: base.capital.add(Decimal.of(context.capital)),
+        commission: base.commission.add(commission),
+      });
+      return;
     }
 
-    const multiplier = contractMultiplier(trade.symbol);
-    const exitPrice = Decimal.of(trade.price);
-    const exitCommission = Decimal.of(fill.commission);
-    // The dollars each fill moved, negated so money in is positive: the same expression the
-    // account uses, so the two agree to the cent rather than approximately.
-    const grossPL = entry.size.mul(entry.entryPrice).mul(multiplier).add(size.mul(exitPrice).mul(multiplier)).neg();
-    const roundTrip: RoundTrip = {
-      ...entry,
-      exitPrice,
-      exitTime: trade.timestamp,
-      exitCommission,
-      reason: fill.reason,
-      grossPL,
-      netPL: grossPL.sub(entry.entryCommission).sub(exitCommission),
+    if (trip === undefined) {
+      throw new Error(`${symbol} was closed but never opened in this report. Give the report every transaction the account books, from its first.`);
+    }
+    if (transaction.realizedPL === undefined) {
+      throw new Error(`A close of ${symbol} at ${minute(transaction.time)} realized nothing, which the account never books. The report cannot add up its P&L.`);
+    }
+    const next: Accumulating = {
+      ...trip,
+      held: trip.held.add(size),
+      closed: trip.closed.add(size),
+      closedNotional: trip.closedNotional.add(size.mul(price)),
+      commission: trip.commission.add(commission),
+      realized: trip.realized.add(transaction.realizedPL),
     };
+    if (!next.held.isZero()) {
+      this.open.set(symbol, next);
+      return;
+    }
 
-    this.open.delete(trade.symbol);
-    this.closedTrips.push(roundTrip);
-    return roundTrip;
+    this.open.delete(symbol);
+    this.closedTrips.push({
+      symbol,
+      size: next.opened,
+      entryPrice: next.openedNotional.div(next.opened, LEDGER_SCALE),
+      entryTime: next.entryTime,
+      exitPrice: next.closedNotional.div(next.closed, LEDGER_SCALE),
+      exitTime: transaction.time,
+      reason: context.reason,
+      capital: next.capital,
+      notes: next.notes,
+      commission: next.commission,
+      netPL: next.realized,
+      grossPL: next.realized.add(next.commission),
+    });
   }
 
   roundTrips(): ReadonlyArray<RoundTrip> {
@@ -148,7 +177,14 @@ export class TradeReport {
   }
 
   openTrades(): ReadonlyArray<OpenTrade> {
-    return [...this.open.values()];
+    return [...this.open.values()].map((trip) => ({
+      symbol: trip.symbol,
+      size: trip.held,
+      entryPrice: trip.openedNotional.div(trip.opened, LEDGER_SCALE),
+      entryTime: trip.entryTime,
+      capital: trip.capital,
+      notes: trip.notes,
+    }));
   }
 
   summary(): TradeReportSummary {
@@ -168,7 +204,7 @@ export class TradeReport {
       wins: winning.length,
       losses: losing.length,
       grossPL: sumDecimals(trips.map((trip) => trip.grossPL)),
-      commissions: sumDecimals(trips.map((trip) => trip.entryCommission.add(trip.exitCommission))),
+      commissions: sumDecimals(trips.map((trip) => trip.commission)),
       netPL,
       averageWin: average(winning.map((trip) => trip.netPL)),
       averageLoss: average(losing.map((trip) => trip.netPL)),
@@ -199,9 +235,10 @@ export class TradeReport {
       lines.push(`  ${columns.join('  ')}`);
     }
 
-    if (this.open.size > 0) {
-      lines.push(`Still open at the end of the run (${this.open.size}), left out of the totals:`);
-      for (const trade of this.open.values()) {
+    const open = this.openTrades();
+    if (open.length > 0) {
+      lines.push(`Still open at the end of the run (${open.length}), left out of the totals:`);
+      for (const trade of open) {
         const notes = Object.entries(trade.notes).map(([key, value]) => `${key} ${value}`);
         lines.push(`  ${[minute(trade.entryTime), trade.symbol, `${trade.size.toString()} @ ${trade.entryPrice.toFixed(2)}`, ...notes].join('  ')}`);
       }

@@ -1,8 +1,8 @@
 import { marketHour, marketState, parseOccSymbol, requireOccSymbol, type OccSymbol } from '@fleece/marketdata';
-import { Decimal, easternClock, LEDGER_SCALE, LoggerFactory, mapWithConcurrency, sumDecimals } from '@fleece/utilities';
+import { Decimal, easternClock, LEDGER_SCALE, LoggerFactory, mapWithConcurrency } from '@fleece/utilities';
 
 import { BacktestAccountImpl, contractMultiplier, type Position, type Trade } from '../backtest/account';
-import { BacktestDriver, BaseStrategy } from '../backtest/driver';
+import { BacktestDriver, BaseStrategy, type StrategyTrade } from '../backtest/driver';
 import { BacktestMarketDataImpl } from '../backtest/marketdata';
 import { BacktestTime } from '../backtest/time';
 import { TradeReport } from '../backtest/trade-report';
@@ -90,7 +90,6 @@ export interface SellPutProps {
   readonly dividendYield: number;
   /** Where today's at-the-money volatility and the sessions it is ranked against come from. */
   readonly volatilityHistory: ImpliedVolatilityHistoryHelper;
-  readonly report: TradeReport;
 }
 
 /**
@@ -105,7 +104,6 @@ export class SellPut extends BaseStrategy {
   private readonly symbol: string;
   private readonly dividendYield: number;
   private readonly volatilityHistory: ImpliedVolatilityHistoryHelper;
-  private readonly report: TradeReport;
 
   constructor(props: SellPutProps) {
     const symbol = props.symbol.trim().toUpperCase();
@@ -113,17 +111,16 @@ export class SellPut extends BaseStrategy {
     this.symbol = symbol;
     this.dividendYield = props.dividendYield;
     this.volatilityHistory = props.volatilityHistory;
-    this.report = props.report;
   }
 
-  async tick(): Promise<ReadonlyArray<Trade> | undefined> {
+  async tick(): Promise<ReadonlyArray<StrategyTrade> | undefined> {
     const now = this.timestamp;
     if (marketState(now) !== 'open') {
       return undefined;
     }
 
     const held = this.heldPuts();
-    const trades: Trade[] = [];
+    const trades: StrategyTrade[] = [];
     for (const position of held) {
       const exit = await this.exit(position, now);
       if (exit !== undefined) {
@@ -150,7 +147,7 @@ export class SellPut extends BaseStrategy {
     });
   }
 
-  private async exit(held: Position, now: number): Promise<Trade | undefined> {
+  private async exit(held: Position, now: number): Promise<StrategyTrade | undefined> {
     const occSymbol = requireOccSymbol(held.symbol, 'read the put this strategy holds');
     const today = easternClock.date(now);
     const daysLeft = daysToExpiration(today, occSymbol.expiration);
@@ -165,6 +162,7 @@ export class SellPut extends BaseStrategy {
       return undefined;
     }
 
+    // Net of the opening commission, which the account keeps in the position's basis.
     const credit = Decimal.of(held.averagePrice);
     const debit = Decimal.of(print.price).add(SLIPPAGE_PER_SHARE);
     const reason = exitReason({ credit, debit, daysToExpiration: daysLeft });
@@ -174,15 +172,14 @@ export class SellPut extends BaseStrategy {
 
     const contracts = Decimal.of(held.size).abs();
     const trade: Trade = { symbol: held.symbol, size: contracts.toString(), price: debit.toString(), timestamp: now };
-    this.report.closed({ trade, commission: COMMISSION_PER_CONTRACT.mul(contracts).toString(), reason });
     logger.info(
-      `${minute(now)} ${reason}: bought back ${contracts.toString()} ${held.symbol} at ${debit.toFixed(2)} (print ${print.price.toFixed(2)}, printed ${minute(print.at)}), sold at ${credit.toFixed(2)}, ${daysLeft} days left.`,
+      `${minute(now)} ${reason}: bought back ${contracts.toString()} ${held.symbol} at ${debit.toFixed(2)} (print ${print.price.toFixed(2)}, printed ${minute(print.at)}), sold at ${credit.toFixed(4)} after commission, ${daysLeft} days left.`,
     );
-    return trade;
+    return { trade, context: { kind: 'close', commission: COMMISSION_PER_CONTRACT.mul(contracts).toString(), reason } };
   }
 
   /** The 11:02 decision: rank today's 11:00 volatility, then sell a put if it and the book allow. */
-  private async decide(now: number, flat: boolean): Promise<Trade | undefined> {
+  private async decide(now: number, flat: boolean): Promise<StrategyTrade | undefined> {
     const today = easternClock.date(now);
     const spot = await this.spot(now);
     if (spot === undefined) {
@@ -244,21 +241,23 @@ export class SellPut extends BaseStrategy {
     const trade: Trade = { symbol, size: contracts.neg().toString(), price: credit.toString(), timestamp: now };
     // Strike × 100 per contract, from the exact thousandths OCC states rather than the float strike.
     const capital = Decimal.of(put.occSymbol.strikeMils).mul(contractMultiplier(symbol)).mul(contracts).div(Decimal.of(1000), LEDGER_SCALE);
-    this.report.opened({
-      trade,
-      commission: COMMISSION_PER_CONTRACT.mul(contracts).toString(),
-      capital: capital.toString(),
-      notes: {
-        dte: String(daysLeft),
-        delta: put.delta.toFixed(3),
-        iv: volPoints(put.iv),
-        atmIv: volPoints(iv),
-        ivPct: percentile.toFixed(0),
-        spot: spot.toFixed(2),
-      },
-    });
     logger.info(`${context}. Sold ${CONTRACTS} ${symbol} at ${credit.toFixed(2)} (print ${put.price.toFixed(2)}), delta ${put.delta.toFixed(3)}, ${daysLeft} days out.`);
-    return trade;
+    return {
+      trade,
+      context: {
+        kind: 'open',
+        commission: COMMISSION_PER_CONTRACT.mul(contracts).toString(),
+        capital: capital.toString(),
+        notes: {
+          dte: String(daysLeft),
+          delta: put.delta.toFixed(3),
+          iv: volPoints(put.iv),
+          atmIv: volPoints(iv),
+          ivPct: percentile.toFixed(0),
+          spot: spot.toFixed(2),
+        },
+      },
+    };
   }
 
   /** The stock's last minute close, if it is recent enough to solve a volatility against. */
@@ -342,26 +341,15 @@ async function main(): Promise<void> {
   const client = marketDataClient();
   const availabilities = optionsAvailabilitiesHelper(client);
   const marketData = new BacktestMarketDataImpl(client, availabilities);
-  const account = new BacktestAccountImpl();
   const report = new TradeReport();
+  const account = new BacktestAccountImpl(report);
 
   const driver = new BacktestDriver({ time, marketData, account });
-  driver.addStrategy(new SellPut({ symbol: SYMBOL, dividendYield: DIVIDEND_YIELD, volatilityHistory: impliedVolatilityHistoryHelper(client, availabilities), report }));
+  driver.addStrategy(new SellPut({ symbol: SYMBOL, dividendYield: DIVIDEND_YIELD, volatilityHistory: impliedVolatilityHistoryHelper(client, availabilities) }));
   await driver.run();
 
   for (const line of report.render()) {
     logger.info(line);
-  }
-
-  // The report prices its round trips itself and the account booked the same fills, so the
-  // two must agree. If they do not, one of them paired or priced a fill wrongly and the
-  // totals above are not to be trusted.
-  const booked = sumDecimals(account.realizedPLs().map((entry) => Decimal.of(entry.realizedPL)));
-  const reported = report.summary().grossPL;
-  if (!booked.round(2).eq(reported.round(2))) {
-    throw new Error(
-      `The account booked ${booked.toFixed(2)} realized, but the report's round trips add up to ${reported.toFixed(2)} gross. Find the fill they disagree on before reading the report.`,
-    );
   }
 }
 
