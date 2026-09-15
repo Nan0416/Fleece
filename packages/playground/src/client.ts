@@ -1,23 +1,15 @@
 /**
- * The market-data client these helpers share, and the disk cache behind it.
+ * The market-data client the playground's scripts share, and the caches built on it.
  *
  * Keys come from `credentials.ts`, which is the one file in this package that reads the
  * environment.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-
 import { AlpacaMarketDataClient } from '@fleece/marketdata';
-import { easternClock } from '@fleece/utilities';
 
 import { getCachePath, marketDataKeys } from './credentials';
 import { ImpliedVolatilityHistoryHelper, ImpliedVolatilityHistoryHelperImpl } from './utils/implied-volatility-history';
 import { OptionsAvailabilitiesHelper, OptionsAvailabilitiesHelperImpl } from './utils/options-availabilities';
 import { OptionsQuoteSpreadHelper, OptionsQuoteSpreadHelperImpl } from './utils/options-quote-spread';
-
-/** `packages/playground/dist/` at runtime, so three levels up is the repo root. */
-const ROOT = resolve(__dirname, '../../..');
-const CACHE = resolve(ROOT, 'packages/playground/data/research');
 
 let client: AlpacaMarketDataClient | undefined;
 
@@ -39,36 +31,4 @@ export function impliedVolatilityHistoryHelper(alpacaMarketDataClient: AlpacaMar
 
 export function optionsQuoteSpreadHelper(alpacaMarketDataClient: AlpacaMarketDataClient): OptionsQuoteSpreadHelper {
   return new OptionsQuoteSpreadHelperImpl(getCachePath(), alpacaMarketDataClient);
-}
-
-/** Whether a date is far enough back that nothing about it can still change. */
-export function settled(date: string): boolean {
-  return date < easternClock.date();
-}
-
-/**
- * Reads `key` from disk, or loads it and writes it there.
- *
- * Only when `keep`, which callers set from `settled`: a day that has not finished is a
- * day whose bars are still arriving, and caching one would pin a partial session as if
- * it were the whole thing. Cached values cross as JSON, so `load` must return something
- * JSON survives — arrays and plain objects, not a `Map`.
- */
-export async function cached<T>(key: string, keep: boolean, load: () => Promise<T>): Promise<T> {
-  const file = resolve(CACHE, `${key.replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
-  if (keep) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- our own file, written by the branch below.
-      return JSON.parse(readFileSync(file, 'utf8')) as T;
-    } catch {
-      // Absent or unreadable: fetch it and write a good copy over whatever was there.
-    }
-  }
-
-  const loaded = await load();
-  if (keep) {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify(loaded));
-  }
-  return loaded;
 }
