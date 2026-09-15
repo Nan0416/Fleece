@@ -87,9 +87,13 @@ export class BacktestTime implements Time {
     return true;
   }
 
-  /** Subscribing again under the same id replaces the earlier registration rather than doubling it. */
-  subscribe(subscriber: TimeSubscriber): void {
+  /**
+   * Subscribing again under the same id replaces the earlier registration rather than doubling it.
+   * Returns the clock, so subscribers can be chained in the order they are to be told.
+   */
+  subscribe(subscriber: TimeSubscriber): BacktestTime {
     this.subscribers = this.subscribers.filter((sub) => sub.timeSubscriberId !== subscriber.timeSubscriberId);
     this.subscribers.push(subscriber);
+    return this;
   }
 }

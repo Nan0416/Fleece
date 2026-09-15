@@ -1,11 +1,14 @@
 import { impliedVolatility, marketHour, type Bar, type OccSymbol } from '@fleece/marketdata';
 import { easternClock, LoggerFactory, mapWithConcurrency } from '@fleece/utilities';
+import { nanoid } from 'nanoid';
 
-import { BaseStrategy, type StrategyTrade } from '../backtest/driver';
+import type { BacktestMarketData } from '../backtest/marketdata';
+import { BacktestTime, type TimeSubscriber } from '../backtest/time';
+import { latestCompletedSession, refreshStaleAvailabilities } from './implied-volatility-history';
 import { daysToExpiration, type DaysToExpirationWindow } from './option-selection';
 import type { OptionsAvailabilitiesHelper } from './options-availabilities';
 
-const logger = LoggerFactory.getLogger('ImpliedVolatilityHistoryV2');
+const logger = LoggerFactory.getLogger('ConstantMaturityVolatilitySampler');
 
 const EXPIRY_TIME = '16:00:00';
 const RISK_FREE_RATE = 0.043;
@@ -17,6 +20,18 @@ const MS_PER_YEAR = 365 * MS_PER_DAY;
 const FETCH_CONCURRENCY = 10;
 
 const GRID_TIME = /^\d{2}:(00|30):00$/;
+
+/** The length of a chunk, which is also how often one is taken. */
+const CHUNK_LENGTH = 30 * MINUTE;
+
+/**
+ * How long after its minute ends Alpaca publishes a minute bar, the same figure the backtest's
+ * market data holds a bar back by. A chunk is no more visible than its last bar.
+ */
+const BAR_PUBLISH_DELAY = 4_000;
+
+/** How often the precomputing clock steps, which is what lets it land 90 seconds after each chunk ends. */
+const PRECOMPUTE_STEP = 30_000;
 
 /** Within 10% of the stock on the far side of the money: above it for a call, below it for a put. */
 function outOfTheMoney(occSymbol: OccSymbol, spotPrice: number): boolean {
@@ -32,7 +47,7 @@ function expirationClose(expiration: string): number {
 }
 
 /** One contract's earliest out-of-the-money trade in a chunk, against the stock's bar at the same minute. */
-export interface SpotPriceWithOptionPrice {
+export interface OptionTradeVolatility {
   readonly time: number;
   readonly spotPrice: number;
   readonly optionPrice: number;
@@ -46,8 +61,8 @@ export interface ExpirationVolatility {
   /** Years from the end of the chunk to the expiration's close. */
   readonly tYears: number;
   readonly iv: number;
-  readonly put: SpotPriceWithOptionPrice;
-  readonly call: SpotPriceWithOptionPrice;
+  readonly put: OptionTradeVolatility;
+  readonly call: OptionTradeVolatility;
 }
 
 /** The volatility at the target maturity, and the expirations it was read from. */
@@ -59,9 +74,10 @@ export interface ConstantMaturityVolatility {
   readonly next?: ExpirationVolatility;
 }
 
-export interface ImpliedVolatilityHistoryV2Props {
+export interface ConstantMaturityVolatilitySamplerProps {
   readonly symbol: string;
   readonly dividendYield: number;
+  readonly data: BacktestMarketData;
   readonly availabilities: OptionsAvailabilitiesHelper;
   /**
    * Which expirations are measured, in calendar days, and the maturity the volatility is
@@ -70,15 +86,15 @@ export interface ImpliedVolatilityHistoryV2Props {
   readonly daysToExpiration: DaysToExpirationWindow;
 }
 
-export interface ImpliedVolatilityPoint {
+export interface ConstantMaturityVolatilityPoint {
   readonly date: string;
   readonly time: string;
+  readonly timestamp: number;
   /** At the target maturity. Absent when no expiration in the window had both a put and a call that traded. */
   readonly iv?: number;
   readonly near?: ExpirationVolatility;
   readonly next?: ExpirationVolatility;
 }
-
 /**
  * The volatility at the money for one expiration's trades: interpolated in log-moneyness
  * between the out-of-the-money put and call nearest the stock, each against the stock at the
@@ -87,9 +103,9 @@ export interface ImpliedVolatilityPoint {
  *
  * `undefined` without at least one put and one call.
  */
-export function atTheMoneyVolatility(trades: ReadonlyArray<SpotPriceWithOptionPrice>): Pick<ExpirationVolatility, 'iv' | 'put' | 'call'> | undefined {
-  let put: { readonly trade: SpotPriceWithOptionPrice; readonly moneyness: number } | undefined;
-  let call: { readonly trade: SpotPriceWithOptionPrice; readonly moneyness: number } | undefined;
+export function atTheMoneyVolatility(trades: ReadonlyArray<OptionTradeVolatility>): Pick<ExpirationVolatility, 'iv' | 'put' | 'call'> | undefined {
+  let put: { readonly trade: OptionTradeVolatility; readonly moneyness: number } | undefined;
+  let call: { readonly trade: OptionTradeVolatility; readonly moneyness: number } | undefined;
   for (const trade of trades) {
     const moneyness = Math.log(trade.occSymbol.strike / trade.spotPrice);
     if (trade.occSymbol.type === 'put' && moneyness < 0 && (put === undefined || moneyness > put.moneyness)) {
@@ -139,16 +155,18 @@ export function constantMaturityVolatility(expirations: ReadonlyArray<Expiration
  * each contract's earliest out-of-the-money trade in the chunk: at the money per expiration
  * from the nearest put and call, then interpolated to the target maturity across expirations.
  */
-export class ImpliedVolatilityHistoryV2 extends BaseStrategy {
+export class ConstantMaturityVolatilitySampler implements TimeSubscriber {
   private readonly symbol: string;
   private readonly dividendYield: number;
   private readonly availabilities: OptionsAvailabilitiesHelper;
   private readonly window: DaysToExpirationWindow;
-  private readonly points: ImpliedVolatilityPoint[];
+  private readonly data: BacktestMarketData;
+  private readonly points: ConstantMaturityVolatilityPoint[];
 
-  constructor(props: ImpliedVolatilityHistoryV2Props) {
+  readonly timeSubscriberId: string;
+
+  constructor(props: ConstantMaturityVolatilitySamplerProps) {
     const symbol = props.symbol.trim().toUpperCase();
-    super(`implied-volatility-history-${symbol}`);
     const { min, target, max } = props.daysToExpiration;
     // Out of order, the target falls outside what is measured and every chunk reads from one
     // side only, which looks like a measurement rather than a mistake.
@@ -159,17 +177,29 @@ export class ImpliedVolatilityHistoryV2 extends BaseStrategy {
     this.dividendYield = props.dividendYield;
     this.availabilities = props.availabilities;
     this.window = props.daysToExpiration;
+    this.data = props.data;
     this.points = [];
+    this.timeSubscriberId = 'volatility-sampler' + nanoid();
   }
 
+  /**
+   * Refreshes the option availability when it was not refreshed after the latest completed
+   * trading day, since that is where the contracts come from. Otherwise it is left alone, rather
+   * than costing a full listing every run.
+   */
   async init(): Promise<void> {
-    // await this.availabilities.save(this.symbol);
+    const today = easternClock.date(Date.now());
+    const through = latestCompletedSession(today);
+    if (through === undefined) {
+      throw new Error(`The market-hours table has no session in the fortnight before ${today}. Refresh the table before sampling.`);
+    }
+    await refreshStaleAvailabilities(this.availabilities, this.symbol, through.date);
   }
 
-  async tick(): Promise<ReadonlyArray<StrategyTrade> | undefined> {
+  async forward(timestamp: number): Promise<void> {
     // The end of the chunk. The clock steps every 30 s, so the chunk ending 10:00 is taken at
     // 10:01:30, once its 09:59 bar has been published.
-    const referenceTime = this.timestamp - 90_000; // 90 seconds
+    const referenceTime = timestamp - 90_000; // 90 seconds
     const time = easternClock.time(referenceTime);
     if (!GRID_TIME.test(time)) {
       return undefined;
@@ -177,7 +207,7 @@ export class ImpliedVolatilityHistoryV2 extends BaseStrategy {
 
     // By the session's hours rather than the market state at the chunk's end, which reads the
     // close itself as closed and so skipped the last half hour of every session.
-    const segmentStartTime = referenceTime - 30 * MINUTE;
+    const segmentStartTime = referenceTime - CHUNK_LENGTH;
     const session = marketHour(segmentStartTime);
     if (session === undefined || segmentStartTime < session.openAt || referenceTime > session.closeAt) {
       return undefined;
@@ -209,7 +239,7 @@ export class ImpliedVolatilityHistoryV2 extends BaseStrategy {
       );
     });
 
-    const referenceOptions: SpotPriceWithOptionPrice[] = [];
+    const referenceOptions: OptionTradeVolatility[] = [];
     await mapWithConcurrency(optionOccSymbols, FETCH_CONCURRENCY, async (occSymbol) => {
       const { bars } = await this.data.optionMinuteBars({ symbol: occSymbol.symbol, from: segmentStartTime });
       // The earliest trade in the chunk that has a stock bar at its minute and is out of the
@@ -243,7 +273,7 @@ export class ImpliedVolatilityHistoryV2 extends BaseStrategy {
       }
     });
 
-    const byExpiration = new Map<string, SpotPriceWithOptionPrice[]>();
+    const byExpiration = new Map<string, OptionTradeVolatility[]>();
     for (const reference of referenceOptions) {
       const trades = byExpiration.get(reference.occSymbol.expiration) ?? [];
       trades.push(reference);
@@ -255,15 +285,119 @@ export class ImpliedVolatilityHistoryV2 extends BaseStrategy {
       return atTheMoney === undefined ? [] : [{ expiration, tYears: (expirationClose(expiration) - referenceTime) / MS_PER_YEAR, ...atTheMoney }];
     });
     const measured = constantMaturityVolatility(expirations, (this.window.target * MS_PER_DAY) / MS_PER_YEAR);
-    this.points.push({ date, time: easternClock.time(segmentStartTime), iv: measured?.iv, near: measured?.near, next: measured?.next });
-
-    const point = this.points.at(-1);
-    const describe = (expiration?: ExpirationVolatility) =>
-      expiration === undefined ? '-' : `${expiration.expiration} ${(expiration.tYears * 365).toFixed(1)}d ${(expiration.iv * 100).toFixed(1)}%`;
-    console.log(
-      `${point?.date} ${point?.time}, iv ${point?.iv === undefined ? '-' : `${(point.iv * 100).toFixed(1)}%`} (near ${describe(point?.near)}, next ${describe(point?.next)}; ${referenceOptions.length} trades, ${expirations.length} expirations with a put and a call)`,
-    );
+    this.points.push({ timestamp: segmentStartTime, date, time: easternClock.time(segmentStartTime), iv: measured?.iv, near: measured?.near, next: measured?.next });
 
     return undefined;
+  }
+
+  /** Every point taken so far, in the order taken. A copy, so a caller cannot edit what was measured. */
+  getIvs(): ReadonlyArray<ConstantMaturityVolatilityPoint> {
+    return [...this.points];
+  }
+}
+
+export interface HistoricalConstantMaturityVolatilityProps extends ConstantMaturityVolatilitySamplerProps {
+  /** The first date sampled, Eastern `YYYY-MM-DD`. A backtest reading the history must start on or after it. */
+  readonly fromDate: string;
+  /** The last date sampled, Eastern `YYYY-MM-DD`, through its close. */
+  readonly toDate: string;
+}
+
+/**
+ * A constant-maturity volatility history for a backtest to read as its clock passes: sampled
+ * over the whole range when the backtest initialises, then handed out only as far as each
+ * chunk could have been known at the backtest's instant.
+ */
+export class HistoricalConstantMaturityVolatility implements TimeSubscriber {
+  readonly timeSubscriberId: string;
+  readonly symbol: string;
+  readonly dividendYield: number;
+  private readonly fromDate: string;
+  private readonly toDate: string;
+  private readonly data: BacktestMarketData;
+  private readonly availabilities: OptionsAvailabilitiesHelper;
+  private readonly daysToExpiration: DaysToExpirationWindow;
+
+  private currentTimestamp: number | undefined;
+  private precomputedIvs: ReadonlyArray<ConstantMaturityVolatilityPoint> | undefined;
+
+  constructor(props: HistoricalConstantMaturityVolatilityProps) {
+    this.timeSubscriberId = 'historical-volatility' + nanoid();
+    this.fromDate = props.fromDate;
+    this.toDate = props.toDate;
+    this.symbol = props.symbol;
+    this.dividendYield = props.dividendYield;
+    this.data = props.data;
+    this.availabilities = props.availabilities;
+    this.daysToExpiration = props.daysToExpiration;
+    this.precomputedIvs = undefined;
+    this.currentTimestamp = undefined;
+  }
+
+  /**
+   * Samples the whole range on a clock of its own. The market data may be the backtest's, so it
+   * is reset afterwards and put back on the instant the backtest is initialising: left on the
+   * range's last instant, the backtest's first step would be refused as a step backwards.
+   */
+  async init(timestamp: number): Promise<void> {
+    const start = easternClock.timestamp(this.fromDate);
+    const end = easternClock.timestamp(this.toDate, '23:59:59');
+    if (timestamp < start || timestamp >= end) {
+      throw new Error(
+        `The backtest starts at ${easternClock.datetime(timestamp)}, outside the ${this.fromDate} to ${this.toDate} ${this.symbol}'s volatility history is sampled over, so it would have no points to read. Set fromDate and toDate to cover the whole run.`,
+      );
+    }
+
+    const time = new BacktestTime(start, end, PRECOMPUTE_STEP);
+    const sampler = new ConstantMaturityVolatilitySampler({
+      symbol: this.symbol,
+      dividendYield: this.dividendYield,
+      data: this.data,
+      availabilities: this.availabilities,
+      daysToExpiration: this.daysToExpiration,
+    });
+    time.subscribe(this.data).subscribe(sampler);
+
+    try {
+      await time.init();
+      while (await time.forward()) {
+        // Each step is the sampler measuring; its points are read once the range is done.
+      }
+    } finally {
+      this.data.resetTimestamp();
+      await this.data.init(timestamp);
+    }
+
+    this.precomputedIvs = sampler.getIvs();
+    this.currentTimestamp = undefined;
+  }
+
+  async forward(timestamp: number): Promise<void> {
+    this.currentTimestamp = timestamp;
+  }
+
+  /**
+   * The points whose chunk had ended, and its last bar been published, by the clock: the chunk
+   * starting 09:30 from 10:00:04 on. Nothing before the clock's first step.
+   */
+  getIvs(): ReadonlyArray<ConstantMaturityVolatilityPoint> {
+    const current = this.currentTimestamp;
+    const points = this.precomputedIvs ?? [];
+    if (current === undefined) {
+      return [];
+    }
+    // Points are in the order sampled, so the visible ones are a prefix, found by bisection
+    // rather than a scan since a strategy may ask on every step.
+    let low = 0;
+    let high = points.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (points[mid].timestamp + CHUNK_LENGTH + BAR_PUBLISH_DELAY < current) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return points.slice(0, low);
   }
 }

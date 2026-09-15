@@ -94,7 +94,10 @@ export interface MarketData {
   listActiveOptionContracts(request: ListActiveOptionContractsRequest): Promise<ListActiveOptionContractsResponse>;
 }
 
-export type BacktestMarketData = MarketData & TimeSubscriber;
+export interface BacktestMarketData extends MarketData, TimeSubscriber {
+  /** Takes the clock off, as before `init`, so another run can start it again from an earlier instant. */
+  resetTimestamp(): void;
+}
 
 function endOfBar(bar: Bar, span: BarSpan, type: 'options' | 'stocks', symbol: string): number | undefined {
   if (span === 'minute') {
@@ -202,6 +205,15 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
       throw new Error(`The clock moved to ${timestamp}, which is not past the ${this.currentTimestamp} the marketdata is already on. A subscriber is only ever stepped forward.`);
     }
     this.currentTimestamp = timestamp;
+  }
+
+  /**
+   * A run that steps market data forward leaves it on that run's last instant, where `forward`
+   * refuses anything earlier. Resetting is what lets one instance, and the bars it has already
+   * fetched, serve a second run; until that run starts it, reads say the clock has not started.
+   */
+  resetTimestamp(): void {
+    this.currentTimestamp = 0;
   }
 
   async minuteBars(request: BacktestMinuteBarsRequest): Promise<BarsResponse> {

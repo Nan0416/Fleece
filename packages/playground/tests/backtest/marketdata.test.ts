@@ -682,4 +682,22 @@ describe('BacktestMarketDataImpl', () => {
       await expect(subject.forward(at(DAY, '12:00:00'))).rejects.toThrow(/only ever stepped forward/);
     });
   });
+
+  describe('resetTimestamp', () => {
+    it('lets a run that went further start again from an earlier instant, keeping the bars it fetched', async () => {
+      const client = new FakeClient([minuteBar(DAY, '09:30:00', 10), minuteBar(NEXT, '09:30:00', 11)]);
+      const subject = await marketData(client, at(NEXT, '12:00:00'));
+      await subject.minuteBars({ symbol: 'AMZN', from: DAY });
+      await expect(subject.forward(at(DAY, '12:00:00'))).rejects.toThrow(/only ever stepped forward/);
+
+      subject.resetTimestamp();
+
+      // Taken off the clock, as before it was first started.
+      await expect(subject.minuteBars({ symbol: 'AMZN', from: DAY })).rejects.toThrow(/clock has not started/);
+      await subject.forward(at(DAY, '12:00:00'));
+      const { bars } = await subject.minuteBars({ symbol: 'AMZN', from: DAY });
+      expect(bars.map((bar) => bar.c)).toEqual([10]); // the later session's bar is not there yet
+      expect(requestsOf(client, 'minute')).toHaveLength(1);
+    });
+  });
 });

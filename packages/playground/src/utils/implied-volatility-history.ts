@@ -360,7 +360,7 @@ export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHist
     if (through === undefined) {
       throw new Error(`The market-hours table has no session in the fortnight before ${easternClock.date(refreshedAt)}. Refresh the table before sweeping.`);
     }
-    await this.refreshAvailabilities(ticker, through.date);
+    await refreshStaleAvailabilities(this.availabilities, ticker, through.date);
 
     const pending = sessionsAfter(sessions[sessions.length - 1]?.date, through);
     if (pending.length === 0) {
@@ -389,25 +389,6 @@ export class ImpliedVolatilityHistoryHelperImpl implements ImpliedVolatilityHist
       }
     } finally {
       this.loaded.delete(ticker);
-    }
-  }
-
-  /** Sweeps the availability cache unless it was last refreshed on a date after `through`. */
-  private async refreshAvailabilities(ticker: string, through: string): Promise<void> {
-    const listedAt = await this.availabilities.refreshedAt(ticker);
-    if (listedAt !== undefined && easternClock.date(listedAt) > through) {
-      return;
-    }
-    logger.info(
-      `${ticker}: option availability was ${listedAt === undefined ? 'never swept' : `last refreshed ${easternClock.datetime(listedAt)}`}, not after ${through}. Refreshing it first.`,
-    );
-    await this.availabilities.save(ticker);
-
-    const refreshed = await this.availabilities.refreshedAt(ticker);
-    if (refreshed === undefined || easternClock.date(refreshed) <= through) {
-      throw new Error(
-        `Refreshed ${ticker}'s option availability but it still reads as not refreshed after ${through}, so its listing may be missing contracts that session could trade.`,
-      );
     }
   }
 
@@ -554,6 +535,29 @@ function nextSession(date: string): MarketHour | undefined {
     throw new Error(`The implied volatility history ends on ${date}, which is not a session in the market-hours table. Delete the file to sweep again from scratch.`);
   }
   return marketHourByIndex(session.index + 1);
+}
+
+/**
+ * Sweeps an underlying's availability cache unless it was last refreshed on a date after
+ * `through`, the latest completed trading day. Contracts come from that cache, so anything
+ * measuring a session against an older listing would be missing the strikes added since.
+ */
+export async function refreshStaleAvailabilities(availabilities: OptionsAvailabilitiesHelper, ticker: string, through: string): Promise<void> {
+  const listedAt = await availabilities.refreshedAt(ticker);
+  if (listedAt !== undefined && easternClock.date(listedAt) > through) {
+    return;
+  }
+  logger.info(
+    `${ticker}: option availability was ${listedAt === undefined ? 'never swept' : `last refreshed ${easternClock.datetime(listedAt)}`}, not after ${through}. Refreshing it first.`,
+  );
+  await availabilities.save(ticker);
+
+  const refreshed = await availabilities.refreshedAt(ticker);
+  if (refreshed === undefined || easternClock.date(refreshed) <= through) {
+    throw new Error(
+      `Refreshed ${ticker}'s option availability but it still reads as not refreshed after ${through}, so its listing may be missing contracts that session could trade.`,
+    );
+  }
 }
 
 /**
