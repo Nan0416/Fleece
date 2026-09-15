@@ -307,7 +307,11 @@ export interface HistoricalRealizedVolatilityLoaderProps {
   readonly toDate: string;
   /** Sessions in a trailing estimate. 21 is about a month, to sit beside a 30-day implied volatility. */
   readonly window: number;
-  /** The interval `intradayPlusOvernight` samples at, one of `SAMPLING_MINUTES`. Choose it from the intervals' comparison per symbol. */
+  /**
+   * The interval `intradayPlusOvernight` samples at, one of `SAMPLING_MINUTES`: the finest whose
+   * mean variance over a symbol's sessions has not climbed above the coarser intervals', which is
+   * the bid-ask bounce showing. 1 for SOFI and AAPL; 5 or 10 for a thinly traded name.
+   */
   readonly intradayMinutes: number;
 }
 
