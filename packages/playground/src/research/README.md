@@ -1,56 +1,30 @@
-# Research helpers
+# Research
 
-Four functions for asking what an option chain was doing on a day that has already
-happened, and what that implies. The Black-Scholes engine `findGreek` solves with lives in
-`@fleece/marketdata`.
+Strategies researched against the backtest framework in `../backtest/`, and the one helper
+they share for reading a chain at a minute. The Black-Scholes engine `findGreek` solves with
+lives in `@fleece/marketdata`.
+
+| File | What it is |
+| --- | --- |
+| `greeks.ts` | `findGreek(minute, riskFreeRate, dividendYield?)`: implied volatility and greeks for every contract in a `MarketMinute` a volatility can be solved for |
+| `sell-put.ts`, `sell-put-rules.ts` | The sell-put strategy and its rules; `npm run sell-put -w @fleece/playground` |
+
+A strategy builds the `MarketMinute` from its own market data at the instant its clock is
+on — the stock's last minute close, and each contract's last close from
+`optionMinuteBars` — with the contracts from `listActiveOptionContracts`:
 
 ```ts
-import { findGreek, findPrice, loadContracts, loadTradingMinuteBars } from './research';
-
-const contracts = await loadContracts('2025-03-03', 'SPY', 'call', 40, 16);
-const minutes = await loadTradingMinuteBars('2025-03-03', 'SPY', contracts);
-const minute = findPrice(easternClock.timestamp('2025-03-03', '10:00:00'), minutes);
-const risk = findGreek(minute, 0.043, 0.012);
+const risks = findGreek({ timestamp: now, stockSpotPrice: spot, optionPrices }, 0.043, 0.004);
 ```
 
-`npm run option-research -w @fleece/playground` runs exactly that and prints what it found.
+## Two things that will surprise you
 
-## What each one does
-
-| Function | Answers |
-| --- | --- |
-| `loadContracts(date, underlying, type, days, windowDays)` | The contracts of that type that **traded on `date`**, at the earliest expiration from `days` out through `days + windowDays` that traded at all |
-| `loadTradingMinuteBars(date, underlying, contracts)` | One `MarketMinute` per minute of the regular session: the underlying's close and every contract's last close as of that minute |
-| `findPrice(timestamp, minutes)` | The last minute at or before that instant |
-| `findGreek(minute, riskFreeRate, dividendYield?)` | Implied volatility and greeks for every contract in that minute a volatility can be solved for |
-
-## Three things that will surprise you
-
-**A contract listing is not a listing date.** Alpaca publishes no date on which a contract
-became tradable, so "expires 40 days out" and "could be traded on the day you are standing
-on" are different questions. SPY's April 14th 2025 calls were in the contract listing as
-far back as you like; their first print was March 31st. `loadContracts` therefore searches
-forward from the target, checks each candidate expiration against that session's tape, and
-takes the first that traded — for March 3rd, April 17th, since neither the 14th nor the
-16th had printed yet.
-
-**A chain is mostly silent, so only the traded part comes back.** SPY's April 17th
-expiration holds 383 calls; 135 of them printed on March 3rd, and around 90 have a price
-in any given minute. `loadContracts` returns the 135, not the 383 — a strike nobody traded
-is not a strike you could have traded. Within the session, `optionPrices` carries each
-contract's last close forward so a strategy can quote all its legs at one instant — read
-`at` to see which minute a price actually came from, because a contract in the wings can
-go an hour between prints.
+**A chain is mostly silent.** Most contracts do not trade in any given minute, so a price
+is a contract's last close, not one anyone traded at this minute. Read `at` to see which
+minute it came from: a contract in the wings can go an hour between prints, and its
+volatility is then solved against a spot it never saw.
 
 **These are trade prints, not quotes.** Adjacent strikes solve to volatilities several
 points apart because their last trades happened at different moments against a moving
-spot. For a smooth surface you want quote midpoints, which is a different endpoint and a
-different helper.
-
-## Cache
-
-Minute bars are written under `packages/playground/data/research/`, gitignored, and only
-for dates that have finished — a session still running is one whose bars are still
-arriving. Delete the directory to refetch.
-
-`loadContracts` is **not** cached: every call asks Alpaca again.
+spot, and a print can be one leg's share of a multi-leg trade rather than a price for the
+contract, which is why `findGreek` leaves out a contract whose price has no volatility.

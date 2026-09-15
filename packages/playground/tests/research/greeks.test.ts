@@ -1,8 +1,7 @@
 import { blackScholesPrice, requireOccSymbol } from '@fleece/marketdata';
 import { easternClock } from '@fleece/utilities';
 
-import { findGreek } from '../../src/research/greeks';
-import type { MarketMinute } from '../../src/research/prices';
+import { findGreek, type MarketMinute } from '../../src/research/greeks';
 
 const CALL = requireOccSymbol('SPY250411C00592000', 'build a fixture');
 const AT = easternClock.timestamp('2025-03-03', '10:00:00');
