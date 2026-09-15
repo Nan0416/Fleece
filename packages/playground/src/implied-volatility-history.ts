@@ -12,28 +12,27 @@ import { easternClock, LoggerFactory } from '@fleece/utilities';
 
 import { impliedVolatilityHistoryHelper, marketDataClient, optionsAvailabilitiesHelper } from './client';
 import { solvePoint } from './utils/implied-volatility-history';
+import { WATCHLIST } from '@fleece/marketdata';
 
 const logger = LoggerFactory.getLogger('ImpliedVolatilityHistoryRunner');
-
-const SYMBOLS = ['AAPL'];
 
 async function load(): Promise<void> {
   const client = marketDataClient();
   const helper = impliedVolatilityHistoryHelper(client, optionsAvailabilitiesHelper(client));
 
-  for (const symbol of SYMBOLS) {
+  for (const entry of WATCHLIST) {
     const started = Date.now();
-    await helper.save(symbol);
-    logger.info(`${symbol} took ${((Date.now() - started) / 1000).toFixed(1)}s.`);
+    await helper.save(entry.symbol);
+    logger.info(`${entry.symbol} took ${((Date.now() - started) / 1000).toFixed(1)}s.`);
   }
 }
 
 async function read(): Promise<void> {
   const client = marketDataClient();
   const helper = impliedVolatilityHistoryHelper(client, optionsAvailabilitiesHelper(client));
-  const sessions = await helper.sessions('AAPL');
+  const sessions = await helper.sessions('HPE');
 
-  for (const session of sessions.slice(-10)) {
+  for (const session of sessions) {
     const sample = session.samples.find((candidate) => candidate.time === '11:00:00');
     if (sample?.status !== 'measured') {
       logger.info(`${session.date} 11:00 ${sample === undefined ? 'no sample' : sample.reason}`);
@@ -47,7 +46,7 @@ async function read(): Promise<void> {
 
 // Every task is referenced here, so the one not picked still compiles under `noUnusedLocals`.
 const TASKS = { load, read };
-const TASK: keyof typeof TASKS = 'load';
+const TASK: keyof typeof TASKS = 'read';
 
 TASKS[TASK]().catch((error: unknown) => {
   logger.error(`${String(error)}`);
