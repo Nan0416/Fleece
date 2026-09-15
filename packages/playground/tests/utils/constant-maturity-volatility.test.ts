@@ -2,12 +2,12 @@ import { marketHour, requireOccSymbol, type Bar, type OccSymbol } from '@fleece/
 import { easternClock } from '@fleece/utilities';
 
 import type { BacktestMarketData } from '../../src/backtest/marketdata';
-import { BacktestTime } from '../../src/backtest/time';
 import {
   atTheMoneyVolatility,
   constantMaturityVolatility,
-  ConstantMaturityVolatilitySampler,
   HistoricalConstantMaturityVolatility,
+  HistoricalConstantMaturityVolatilityLoader,
+  type ConstantMaturityVolatilityPoint,
   type ExpirationVolatility,
   type OptionTradeVolatility,
 } from '../../src/utils/constant-maturity-volatility';
@@ -114,11 +114,6 @@ class FakeMarketData {
     this.current = timestamp;
   }
 
-  resetTimestamp(): void {
-    this.current = 0;
-    this.clock.push('reset');
-  }
-
   async minuteBars(request: { readonly symbol: string; readonly from: number }): Promise<unknown> {
     const session = marketHour(request.from);
     const bars: Bar[] = [];
@@ -161,66 +156,74 @@ function props(data: FakeMarketData, availabilities: OptionsAvailabilitiesHelper
   return { symbol: 'AAPL', dividendYield: 0, data: data as unknown as BacktestMarketData, availabilities, daysToExpiration: { min: 23, target: 30, max: 37 } };
 }
 
-describe('ConstantMaturityVolatilitySampler', () => {
-  it('refuses a window whose target is outside what it measures', () => {
-    const build = (min: number, target: number, max: number) => () =>
-      new ConstantMaturityVolatilitySampler({ ...props(new FakeMarketData()), daysToExpiration: { min, target, max } });
+function loader(data: FakeMarketData = new FakeMarketData(), availabilities: OptionsAvailabilitiesHelper = new FakeAvailabilities()): HistoricalConstantMaturityVolatilityLoader {
+  return new HistoricalConstantMaturityVolatilityLoader({ ...props(data, availabilities), fromDate: DAY, toDate: DAY });
+}
 
-    expect(build(23, 30, 37)).not.toThrow();
-    expect(build(31, 30, 37)).toThrow('min ≤ target ≤ max');
-    expect(build(23, 40, 37)).toThrow('min ≤ target ≤ max');
-    expect(build(-1, 30, 37)).toThrow('min ≤ target ≤ max');
-  });
+/** A history of one point per half hour of DAY, read by a fresh reader. */
+function reader(): HistoricalConstantMaturityVolatility {
+  const points: ConstantMaturityVolatilityPoint[] = HALF_HOURS.map((time) => ({ date: DAY, time, timestamp: easternClock.timestamp(DAY, time) }));
+  return new HistoricalConstantMaturityVolatility({ symbol: 'AAPL', fromDate: DAY, toDate: DAY, precomputedIvs: points });
+}
 
-  it('takes a point for every half hour of the session, the last included, labelled by where it starts', async () => {
-    const data = new FakeMarketData();
-    const sampler = new ConstantMaturityVolatilitySampler(props(data));
-    const time = new BacktestTime(easternClock.timestamp(DAY), easternClock.timestamp(DAY, '23:59:59'), 30_000).subscribe(data).subscribe(sampler);
+describe('HistoricalConstantMaturityVolatilityLoader', () => {
+  it('samples a point for every half hour of each session in the range, the last included, labelled by where it starts', async () => {
+    const history = loader();
+    await history.load();
 
-    await time.init();
-    while (await time.forward()) {
-      // Stepping is the sampling.
-    }
-
-    const points = sampler.getIvs();
+    const points = history.getIvs();
     expect(points.map((point) => point.time)).toEqual(HALF_HOURS);
     expect(points[0]).toMatchObject({ date: DAY, timestamp: easternClock.timestamp(DAY, '09:30:00'), iv: undefined });
   });
 
-  it('hands back a copy of its points, so a caller cannot edit what was measured', () => {
-    const sampler = new ConstantMaturityVolatilitySampler(props(new FakeMarketData()));
-    expect(sampler.getIvs()).not.toBe(sampler.getIvs());
+  it('refuses a window whose target is outside what it measures', async () => {
+    const history = new HistoricalConstantMaturityVolatilityLoader({
+      ...props(new FakeMarketData()),
+      daysToExpiration: { min: 31, target: 30, max: 37 },
+      fromDate: DAY,
+      toDate: DAY,
+    });
+    await expect(history.load()).rejects.toThrow('min ≤ target ≤ max');
   });
 
   it('refreshes the option availability only when it was not refreshed after the latest completed trading day', async () => {
     const fresh = new FakeAvailabilities(Date.now());
-    await new ConstantMaturityVolatilitySampler(props(new FakeMarketData(), fresh)).init();
+    await loader(new FakeMarketData(), fresh).load();
     expect(fresh.saves).toBe(0);
 
     const stale = new FakeAvailabilities(easternClock.timestamp('2024-01-02', '20:00:00'));
-    await new ConstantMaturityVolatilitySampler(props(new FakeMarketData(), stale)).init();
+    await loader(new FakeMarketData(), stale).load();
     expect(stale.saves).toBe(1);
+  });
+
+  it('says it is not loaded, rather than handing out an empty history', () => {
+    expect(() => loader().getIvs()).toThrow('not loaded yet');
+    expect(() => loader().buildTimeSubscriber()).toThrow('not loaded yet');
+  });
+
+  it('builds a reader per backtest, each on its own clock over the same points', async () => {
+    const history = loader();
+    await history.load();
+    const early = history.buildTimeSubscriber();
+    const late = history.buildTimeSubscriber();
+
+    await early.init(easternClock.timestamp(DAY, '10:00:05'));
+    await late.init(easternClock.timestamp(DAY, '20:00:00'));
+
+    expect(early.getIvs()).toHaveLength(1);
+    expect(late.getIvs()).toHaveLength(HALF_HOURS.length);
   });
 });
 
 describe('HistoricalConstantMaturityVolatility', () => {
-  const START = easternClock.timestamp(DAY);
-
-  async function precomputed(data: FakeMarketData = new FakeMarketData()): Promise<HistoricalConstantMaturityVolatility> {
-    const history = new HistoricalConstantMaturityVolatility({ ...props(data), fromDate: DAY, toDate: DAY });
-    await history.init(START);
-    return history;
-  }
-
   it('refuses a backtest that starts outside the dates it samples, rather than reading as no volatility', async () => {
-    const history = new HistoricalConstantMaturityVolatility({ ...props(new FakeMarketData()), fromDate: DAY, toDate: DAY });
-
-    await expect(history.init(easternClock.timestamp('2024-03-01', '09:30:00'))).rejects.toThrow('outside the 2024-03-04 to 2024-03-04');
-    await expect(history.init(easternClock.timestamp('2024-03-05', '09:30:00'))).rejects.toThrow('Set fromDate and toDate to cover the whole run');
+    await expect(reader().init(easternClock.timestamp('2024-03-01', '09:30:00'))).rejects.toThrow("outside the 2024-03-04 to 2024-03-04 AAPL's volatility history");
+    await expect(reader().init(easternClock.timestamp('2024-03-05', '09:30:00'))).rejects.toThrow('Set fromDate and toDate to cover the whole run');
   });
 
   it("hands out a point only once its chunk has ended and the chunk's last bar is published", async () => {
-    const history = await precomputed();
+    const history = reader();
+    await history.init(easternClock.timestamp(DAY));
 
     await history.forward(easternClock.timestamp(DAY, '10:00:04'));
     expect(history.getIvs()).toEqual([]);
@@ -232,15 +235,32 @@ describe('HistoricalConstantMaturityVolatility', () => {
     expect(history.getIvs().map((point) => point.time)).toEqual(HALF_HOURS);
   });
 
-  it('hands out nothing before the clock first steps', async () => {
-    expect((await precomputed()).getIvs()).toEqual([]);
+  it('hands out what was already known at the instant it starts on', async () => {
+    const history = reader();
+    // By 12:00 the chunks ending 10:00 to 11:30 have been published.
+    await history.init(easternClock.timestamp(DAY, '12:00:00'));
+    expect(history.getIvs().map((point) => point.time)).toEqual(['09:30:00', '10:00:00', '10:30:00', '11:00:00']);
   });
 
-  it("puts market data it shares with the backtest back on the backtest's instant once the range is sampled", async () => {
-    const data = new FakeMarketData();
-    await precomputed(data);
+  it('hands back a copy each call, so a caller cannot edit the history', async () => {
+    const history = reader();
+    await history.init(easternClock.timestamp(DAY, '10:30:05'));
 
-    expect(data.clock).toEqual([`init@${START}`, 'reset', `init@${START}`]);
-    expect(data.current).toBe(START);
+    expect(history.getIvs()).not.toBe(history.getIvs());
+    expect(history.getIvs()).toHaveLength(2);
+  });
+
+  it('refuses to be read or stepped before it is initialised', async () => {
+    expect(() => reader().getIvs()).toThrow('before it was initialised');
+    await expect(reader().forward(easternClock.timestamp(DAY, '10:00:00'))).rejects.toThrow('before it was initialised');
+  });
+
+  it('refuses an instant it is already on or past, and one past the range it samples', async () => {
+    const history = reader();
+    await history.init(easternClock.timestamp(DAY, '10:00:00'));
+
+    await expect(history.forward(easternClock.timestamp(DAY, '10:00:00'))).rejects.toThrow('only ever stepped forward');
+    await expect(history.forward(easternClock.timestamp(DAY, '09:59:00'))).rejects.toThrow('only ever stepped forward');
+    await expect(history.forward(easternClock.timestamp('2024-03-05', '09:30:00'))).rejects.toThrow('Set toDate to cover the whole run');
   });
 });
