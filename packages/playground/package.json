@@ -12,6 +12,7 @@
     "option-research": "npm run build && node dist/option-research.js",
     "option-availability": "npm run build && node dist/option-availability.js",
     "implied-volatility-history": "npm run build && node dist/implied-volatility-history.js",
+    "implied-volatility-v2": "npm run build && node dist/implied-volatility-v2.js",
     "option-quote-spread": "npm run build && node dist/option-quote-spread.js",
     "watchlist": "npm run build && node dist/watchlist.js",
     "sell-put": "npm run build && node dist/research/sell-put.js"
