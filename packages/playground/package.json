@@ -13,6 +13,8 @@
     "implied-volatility-history": "npm run build && node dist/implied-volatility-history.js",
     "constant-maturity-volatility": "npm run build && node dist/constant-maturity-volatility.js",
     "option-quote-spread": "npm run build && node dist/option-quote-spread.js",
+    "realized-volatility": "npm run build && node dist/realized-volatility.js",
+    "volatility-premium": "npm run build && node dist/volatility-premium.js",
     "watchlist": "npm run build && node dist/watchlist.js",
     "sell-put": "npm run build && node dist/research/sell-put.js"
   },
