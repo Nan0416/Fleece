@@ -95,8 +95,8 @@ export interface MarketData {
 }
 
 export interface BacktestMarketData extends MarketData, TimeSubscriber {
-  /** Takes the clock off, as before `init`, so another run can start it again from an earlier instant. */
-  resetTimestamp(): void;
+  /** Market data for another run: its own clock, not started, over the bars fetched so far. */
+  clone(): BacktestMarketData;
 }
 
 function endOfBar(bar: Bar, span: BarSpan, type: 'options' | 'stocks', symbol: string): number | undefined {
@@ -208,12 +208,40 @@ export class BacktestMarketDataImpl implements BacktestMarketData {
   }
 
   /**
-   * A run that steps market data forward leaves it on that run's last instant, where `forward`
-   * refuses anything earlier. Resetting is what lets one instance, and the bars it has already
-   * fetched, serve a second run; until that run starts it, reads say the clock has not started.
+   * A copy with a clock of its own, not started, that reads the bars and splits this one has
+   * already fetched rather than asking for them again. The two go their own ways after: a
+   * segment either fetches from here on is its own, and stepping one never moves the other.
+   *
+   * A fetch still in flight is carried over too, and if it fails the copy forgets it as this one
+   * does, so neither keeps answering with the failure.
    */
-  resetTimestamp(): void {
-    this.currentTimestamp = 0;
+  clone(): BacktestMarketDataImpl {
+    const copy = new BacktestMarketDataImpl(this.client, this.optionsHelper);
+    for (const [key, segments] of this.barsByKey) {
+      copy.barsByKey.set(
+        key,
+        segments.map((segment) => {
+          const copied: BarSegment = { timeWindow: segment.timeWindow, barsPromise: segment.barsPromise };
+          const fetching = segment.barsPromise;
+          // A handler of its own that swallows, so the copy evicts without leaving a rejection nobody handles.
+          fetching?.catch(() => {
+            if (copied.barsPromise === fetching) {
+              copied.barsPromise = undefined;
+            }
+          });
+          return copied;
+        }),
+      );
+    }
+    for (const [symbol, splits] of this.splitsBySymbol) {
+      copy.splitsBySymbol.set(symbol, splits);
+      splits.catch(() => {
+        if (copy.splitsBySymbol.get(symbol) === splits) {
+          copy.splitsBySymbol.delete(symbol);
+        }
+      });
+    }
+    return copy;
   }
 
   async minuteBars(request: BacktestMinuteBarsRequest): Promise<BarsResponse> {

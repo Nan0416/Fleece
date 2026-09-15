@@ -683,21 +683,54 @@ describe('BacktestMarketDataImpl', () => {
     });
   });
 
-  describe('resetTimestamp', () => {
-    it('lets a run that went further start again from an earlier instant, keeping the bars it fetched', async () => {
+  describe('clone', () => {
+    it('reads the bars already fetched without asking again, on a clock of its own that has not started', async () => {
       const client = new FakeClient([minuteBar(DAY, '09:30:00', 10), minuteBar(NEXT, '09:30:00', 11)]);
-      const subject = await marketData(client, at(NEXT, '12:00:00'));
-      await subject.minuteBars({ symbol: 'AMZN', from: DAY });
-      await expect(subject.forward(at(DAY, '12:00:00'))).rejects.toThrow(/only ever stepped forward/);
+      const original = await marketData(client, at(NEXT, '12:00:00'));
+      await original.minuteBars({ symbol: 'AMZN', from: DAY });
 
-      subject.resetTimestamp();
+      const copy = original.clone();
 
-      // Taken off the clock, as before it was first started.
-      await expect(subject.minuteBars({ symbol: 'AMZN', from: DAY })).rejects.toThrow(/clock has not started/);
-      await subject.forward(at(DAY, '12:00:00'));
-      const { bars } = await subject.minuteBars({ symbol: 'AMZN', from: DAY });
-      expect(bars.map((bar) => bar.c)).toEqual([10]); // the later session's bar is not there yet
+      await expect(copy.minuteBars({ symbol: 'AMZN', from: DAY })).rejects.toThrow(/clock has not started/);
+      await copy.init(at(DAY, '12:00:00'));
+      const { bars } = await copy.minuteBars({ symbol: 'AMZN', from: DAY });
+      expect(bars.map((bar) => bar.c)).toEqual([10]); // the later session's bar is not there yet on the copy's clock
       expect(requestsOf(client, 'minute')).toHaveLength(1);
+    });
+
+    it('steps apart from the original, so moving one never moves the other', async () => {
+      const original = await marketData(new FakeClient(), at(NEXT, '12:00:00'));
+      const copy = original.clone();
+      await copy.init(at(DAY, '12:00:00'));
+
+      await copy.forward(at(DAY, '12:01:00'));
+      await expect(original.forward(at(DAY, '12:02:00'))).rejects.toThrow(/only ever stepped forward/);
+    });
+
+    it('fetches a segment the original never had, without handing it back', async () => {
+      const client = new FakeClient([minuteBar(DAY, '09:30:00', 10)]);
+      const original = build(client);
+      const copy = original.clone();
+      await original.init(at(DAY, '12:00:00'));
+      await copy.init(at(DAY, '12:00:00'));
+
+      await copy.minuteBars({ symbol: 'AMZN', from: DAY });
+      await original.minuteBars({ symbol: 'AMZN', from: DAY });
+
+      expect(requestsOf(client, 'minute')).toHaveLength(2);
+    });
+
+    it('forgets a fetch that was in flight when it was cloned and then failed, as the original does', async () => {
+      const client = new FakeClient([minuteBar(DAY, '09:30:00', 10)]);
+      client.failures = 1;
+      const original = await marketData(client, at(DAY, '12:00:00'));
+      const failing = original.minuteBars({ symbol: 'AMZN', from: DAY });
+      const copy = original.clone();
+      await copy.init(at(DAY, '12:00:00'));
+
+      await expect(failing).rejects.toThrow('429');
+      const { bars } = await copy.minuteBars({ symbol: 'AMZN', from: DAY });
+      expect(bars.map((bar) => bar.c)).toEqual([10]);
     });
   });
 });

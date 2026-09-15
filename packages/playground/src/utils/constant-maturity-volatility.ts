@@ -19,6 +19,13 @@ const MS_PER_YEAR = 365 * MS_PER_DAY;
 /** Alpaca's rate limit is what the other sweeps stay under at 10, and the client does not retry a 429. */
 const FETCH_CONCURRENCY = 10;
 
+/**
+ * How often, in wall-clock time, sampling says where it has got to. By time rather than by chunk
+ * or contract: a chunk fetching a new month of bars for every contract can take minutes, and a
+ * range of cached ones passes thousands of chunks a minute.
+ */
+const PROGRESS_INTERVAL = 5_000;
+
 const GRID_TIME = /^\d{2}:(00|30):00$/;
 
 /** The length of a chunk, which is also how often one is taken. */
@@ -155,13 +162,15 @@ export function constantMaturityVolatility(expirations: ReadonlyArray<Expiration
  * each contract's earliest out-of-the-money trade in the chunk: at the money per expiration
  * from the nearest put and call, then interpolated to the target maturity across expirations.
  */
-export class ConstantMaturityVolatilitySampler implements TimeSubscriber {
+class ConstantMaturityVolatilitySampler implements TimeSubscriber {
   private readonly symbol: string;
   private readonly dividendYield: number;
   private readonly availabilities: OptionsAvailabilitiesHelper;
   private readonly window: DaysToExpirationWindow;
   private readonly data: BacktestMarketData;
   private readonly points: ConstantMaturityVolatilityPoint[];
+  /** When progress was last logged, in wall-clock time. */
+  private progressLoggedAt: number;
 
   readonly timeSubscriberId: string;
 
@@ -180,6 +189,7 @@ export class ConstantMaturityVolatilitySampler implements TimeSubscriber {
     this.data = props.data;
     this.points = [];
     this.timeSubscriberId = 'volatility-sampler' + nanoid();
+    this.progressLoggedAt = Date.now();
   }
 
   /**
@@ -240,8 +250,11 @@ export class ConstantMaturityVolatilitySampler implements TimeSubscriber {
     });
 
     const referenceOptions: OptionTradeVolatility[] = [];
+    let fetched = 0;
     await mapWithConcurrency(optionOccSymbols, FETCH_CONCURRENCY, async (occSymbol) => {
       const { bars } = await this.data.optionMinuteBars({ symbol: occSymbol.symbol, from: segmentStartTime });
+      fetched += 1;
+      this.logProgress(`${date} ${easternClock.time(segmentStartTime)}`, fetched, optionOccSymbols.length);
       // The earliest trade in the chunk that has a stock bar at its minute and is out of the
       // money against it. One that cannot be priced is passed over for the next rather than
       // stopping the run.
@@ -290,13 +303,23 @@ export class ConstantMaturityVolatilitySampler implements TimeSubscriber {
     return undefined;
   }
 
+  /** At most once every `PROGRESS_INTERVAL`, which chunk is being sampled and how far through its contracts it is. */
+  private logProgress(chunk: string, fetched: number, contracts: number): void {
+    const now = Date.now();
+    if (now - this.progressLoggedAt < PROGRESS_INTERVAL) {
+      return;
+    }
+    this.progressLoggedAt = now;
+    logger.info(`${this.symbol}: sampling the chunk starting ${chunk}, ${fetched} of ${contracts} contracts fetched, ${this.points.length} chunks sampled so far.`);
+  }
+
   /** Every point taken so far, in the order taken. A copy, so a caller cannot edit what was measured. */
   getIvs(): ReadonlyArray<ConstantMaturityVolatilityPoint> {
     return [...this.points];
   }
 }
 
-export interface HistoricalConstantMaturityVolatilityProps extends ConstantMaturityVolatilitySamplerProps {
+export interface HistoricalConstantMaturityVolatilityLoaderProps extends ConstantMaturityVolatilitySamplerProps {
   /** The first date sampled, Eastern `YYYY-MM-DD`. A backtest reading the history must start on or after it. */
   readonly fromDate: string;
   /** The last date sampled, Eastern `YYYY-MM-DD`, through its close. */
@@ -304,50 +327,43 @@ export interface HistoricalConstantMaturityVolatilityProps extends ConstantMatur
 }
 
 /**
- * A constant-maturity volatility history for a backtest to read as its clock passes: sampled
- * over the whole range when the backtest initialises, then handed out only as far as each
- * chunk could have been known at the backtest's instant.
+ * Samples an underlying's constant-maturity volatility over a date range once, so any number of
+ * backtests can read it through a `HistoricalConstantMaturityVolatility` of their own.
+ *
+ *     const loader = new HistoricalConstantMaturityVolatilityLoader({ symbol: 'AAPL', ..., fromDate, toDate });
+ *     await loader.load();                          // before the backtest's clock initialises
+ *     time.subscribe(data).subscribe(loader.buildTimeSubscriber());
  */
-export class HistoricalConstantMaturityVolatility implements TimeSubscriber {
-  readonly timeSubscriberId: string;
+export class HistoricalConstantMaturityVolatilityLoader {
   readonly symbol: string;
   readonly dividendYield: number;
-  private readonly fromDate: string;
-  private readonly toDate: string;
+  readonly fromDate: string;
+  readonly toDate: string;
+
   private readonly data: BacktestMarketData;
   private readonly availabilities: OptionsAvailabilitiesHelper;
   private readonly daysToExpiration: DaysToExpirationWindow;
-
-  private currentTimestamp: number | undefined;
   private precomputedIvs: ReadonlyArray<ConstantMaturityVolatilityPoint> | undefined;
 
-  constructor(props: HistoricalConstantMaturityVolatilityProps) {
-    this.timeSubscriberId = 'historical-volatility' + nanoid();
+  constructor(props: HistoricalConstantMaturityVolatilityLoaderProps) {
     this.fromDate = props.fromDate;
     this.toDate = props.toDate;
-    this.symbol = props.symbol;
+    this.symbol = props.symbol.trim().toUpperCase();
     this.dividendYield = props.dividendYield;
     this.data = props.data;
     this.availabilities = props.availabilities;
     this.daysToExpiration = props.daysToExpiration;
     this.precomputedIvs = undefined;
-    this.currentTimestamp = undefined;
   }
 
   /**
-   * Samples the whole range on a clock of its own. The market data may be the backtest's, so it
-   * is reset afterwards and put back on the instant the backtest is initialising: left on the
-   * range's last instant, the backtest's first step would be refused as a step backwards.
+   * Samples the whole range on a clock of its own, which leaves the market data on the range's
+   * last instant. Market data shared with a backtest is therefore loaded before that backtest's
+   * clock initialises, which puts it back on the backtest's start.
    */
-  async init(timestamp: number): Promise<void> {
+  async load(): Promise<void> {
     const start = easternClock.timestamp(this.fromDate);
     const end = easternClock.timestamp(this.toDate, '23:59:59');
-    if (timestamp < start || timestamp >= end) {
-      throw new Error(
-        `The backtest starts at ${easternClock.datetime(timestamp)}, outside the ${this.fromDate} to ${this.toDate} ${this.symbol}'s volatility history is sampled over, so it would have no points to read. Set fromDate and toDate to cover the whole run.`,
-      );
-    }
-
     const time = new BacktestTime(start, end, PRECOMPUTE_STEP);
     const sampler = new ConstantMaturityVolatilitySampler({
       symbol: this.symbol,
@@ -358,46 +374,131 @@ export class HistoricalConstantMaturityVolatility implements TimeSubscriber {
     });
     time.subscribe(this.data).subscribe(sampler);
 
-    try {
-      await time.init();
-      while (await time.forward()) {
-        // Each step is the sampler measuring; its points are read once the range is done.
-      }
-    } finally {
-      this.data.resetTimestamp();
-      await this.data.init(timestamp);
+    await time.init();
+    while (await time.forward()) {
+      // Each step is the sampler measuring; its points are read once the range is done.
     }
 
-    this.precomputedIvs = sampler.getIvs();
-    this.currentTimestamp = undefined;
+    this.precomputedIvs = Object.freeze(sampler.getIvs());
   }
 
-  async forward(timestamp: number): Promise<void> {
+  /**
+   * Every point sampled, future ones included, in time order. For reporting on the history, not
+   * for a strategy: a strategy reads it through `buildTimeSubscriber`, which shows only what its
+   * clock could have known.
+   */
+  getIvs(): ReadonlyArray<ConstantMaturityVolatilityPoint> {
+    return this.requireLoaded();
+  }
+
+  /** A reader for one backtest, with its own clock over the points this loaded. */
+  buildTimeSubscriber(): HistoricalConstantMaturityVolatility {
+    return new HistoricalConstantMaturityVolatility({
+      symbol: this.symbol,
+      fromDate: this.fromDate,
+      toDate: this.toDate,
+      precomputedIvs: this.requireLoaded(),
+    });
+  }
+
+  private requireLoaded(): ReadonlyArray<ConstantMaturityVolatilityPoint> {
+    if (this.precomputedIvs === undefined) {
+      throw new Error(`${this.symbol}'s volatility history from ${this.fromDate} to ${this.toDate} is not loaded yet. Call load() first.`);
+    }
+    return this.precomputedIvs;
+  }
+}
+
+export interface HistoricalConstantMaturityVolatilityProps {
+  readonly symbol: string;
+  /** The first date sampled, Eastern `YYYY-MM-DD`. A backtest reading the history must start on or after it. */
+  readonly fromDate: string;
+  /** The last date sampled, Eastern `YYYY-MM-DD`, through its close. A backtest reading the history must end by it. */
+  readonly toDate: string;
+  /** In time order, as a sampler takes them. */
+  readonly precomputedIvs: ReadonlyArray<ConstantMaturityVolatilityPoint>;
+}
+
+/**
+ * A precomputed constant-maturity volatility history for a backtest to read as its clock passes:
+ * a point is handed out only once its chunk has ended and the chunk's last bar is published.
+ */
+export class HistoricalConstantMaturityVolatility implements TimeSubscriber {
+  readonly timeSubscriberId: string;
+  readonly symbol: string;
+  readonly fromDate: string;
+  readonly toDate: string;
+  private readonly precomputedIvs: ReadonlyArray<ConstantMaturityVolatilityPoint>;
+  private readonly start: number;
+  private readonly end: number;
+
+  private currentTimestamp: number | undefined;
+  /**
+   * How many points could be known at the current instant. Always a prefix, since the points are
+   * in time order and the clock only moves forward, so it only ever grows.
+   */
+  private visibleCount: number;
+
+  constructor(props: HistoricalConstantMaturityVolatilityProps) {
+    this.timeSubscriberId = 'historical-volatility' + nanoid();
+    this.symbol = props.symbol;
+    this.fromDate = props.fromDate;
+    this.toDate = props.toDate;
+    this.precomputedIvs = Object.freeze(Array.from(props.precomputedIvs));
+    this.start = easternClock.timestamp(props.fromDate);
+    this.end = easternClock.timestamp(props.toDate, '23:59:59');
+    this.currentTimestamp = undefined;
+    this.visibleCount = 0;
+  }
+
+  /** Refuses a backtest starting outside the sampled range, which would otherwise read as no volatility. */
+  async init(timestamp: number): Promise<void> {
+    if (timestamp < this.start || timestamp >= this.end) {
+      throw new Error(
+        `The backtest starts at ${easternClock.datetime(timestamp)}, outside the ${this.fromDate} to ${this.toDate} ${this.symbol}'s volatility history is sampled over, so it would have no points to read. Set fromDate and toDate to cover the whole run.`,
+      );
+    }
     this.currentTimestamp = timestamp;
+    this.visibleCount = 0;
+    this.reveal(timestamp);
+  }
+
+  /** Refuses an instant not past the one it is on, and one past the sampled range, where no new point would ever appear. */
+  async forward(timestamp: number): Promise<void> {
+    if (this.currentTimestamp === undefined) {
+      throw new Error(
+        `${this.symbol}'s volatility history was stepped to ${easternClock.datetime(timestamp)} before it was initialised. Subscribe it to the backtest's clock before calling init().`,
+      );
+    }
+    if (timestamp <= this.currentTimestamp) {
+      throw new Error(
+        `The clock moved to ${timestamp}, which is not past the ${this.currentTimestamp} ${this.symbol}'s volatility history is already on. A subscriber is only ever stepped forward.`,
+      );
+    }
+    if (timestamp > this.end) {
+      throw new Error(
+        `The backtest reached ${easternClock.datetime(timestamp)}, past the ${this.fromDate} to ${this.toDate} ${this.symbol}'s volatility history is sampled over, so no new point would appear. Set toDate to cover the whole run.`,
+      );
+    }
+    this.currentTimestamp = timestamp;
+    this.reveal(timestamp);
   }
 
   /**
    * The points whose chunk had ended, and its last bar been published, by the clock: the chunk
-   * starting 09:30 from 10:00:04 on. Nothing before the clock's first step.
+   * starting 09:30 from 10:00:04 on. A copy each call.
    */
   getIvs(): ReadonlyArray<ConstantMaturityVolatilityPoint> {
-    const current = this.currentTimestamp;
-    const points = this.precomputedIvs ?? [];
-    if (current === undefined) {
-      return [];
+    if (this.currentTimestamp === undefined) {
+      throw new Error(`${this.symbol}'s volatility history was read before it was initialised. Subscribe it to the backtest's clock before calling init().`);
     }
-    // Points are in the order sampled, so the visible ones are a prefix, found by bisection
-    // rather than a scan since a strategy may ask on every step.
-    let low = 0;
-    let high = points.length;
-    while (low < high) {
-      const mid = (low + high) >>> 1;
-      if (points[mid].timestamp + CHUNK_LENGTH + BAR_PUBLISH_DELAY < current) {
-        low = mid + 1;
-      } else {
-        high = mid;
-      }
+    return this.precomputedIvs.slice(0, this.visibleCount);
+  }
+
+  /** Walks each point once over the whole run, since what is visible only ever grows. */
+  private reveal(timestamp: number): void {
+    while (this.visibleCount < this.precomputedIvs.length && this.precomputedIvs[this.visibleCount].timestamp + CHUNK_LENGTH + BAR_PUBLISH_DELAY < timestamp) {
+      this.visibleCount += 1;
     }
-    return points.slice(0, low);
   }
 }
