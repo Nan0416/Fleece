@@ -194,7 +194,9 @@ export class SellPut extends BaseStrategy {
     // moneyness wide does not need to the minute, so the entry's looser bound serves here too.
     const spot = await this.spot(now);
     if (spot === undefined) {
-      logger.warn(`${minute(now)} ${this.symbol} has no print in the last ${ENTRY_PRINT_MAX_AGE / MINUTE} minutes, so ${held.symbol} has no spread to buy back at. No exit check this minute.`);
+      logger.warn(
+        `${minute(now)} ${this.symbol} has no print in the last ${ENTRY_PRINT_MAX_AGE / MINUTE} minutes, so ${held.symbol} has no spread to buy back at. No exit check this minute.`,
+      );
       return undefined;
     }
     const quote = await this.quoteSpread.estimateQuote({ contract: occSymbol, underlyingPrice: spot, referencePrice: print.price, timestamp: now });
