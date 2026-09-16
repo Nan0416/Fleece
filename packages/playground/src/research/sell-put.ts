@@ -6,10 +6,11 @@ import { BacktestDriver, BaseStrategy, type StrategyTrade } from '../backtest/dr
 import { BacktestMarketDataImpl } from '../backtest/marketdata';
 import { BacktestTime } from '../backtest/time';
 import { TradeReport } from '../backtest/trade-report';
-import { impliedVolatilityHistoryHelper, marketDataClient, optionsAvailabilitiesHelper } from '../client';
+import { impliedVolatilityHistoryHelper, marketDataClient, optionsAvailabilitiesHelper, optionsQuoteSpreadHelper } from '../client';
 import { findGreek, type OptionPrice } from './greeks';
 import type { ImpliedVolatilityHistoryHelper, ImpliedVolatilityPoint } from '../utils/implied-volatility-history';
 import { daysToExpiration, expirationsByPreference } from '../utils/option-selection';
+import type { OptionsQuoteSpreadHelper } from '../utils/options-quote-spread';
 import { choosePut, ENTRY_DELTA, ENTRY_DTE, EXIT_DTE, exitReason, ivPercentile, type PutCandidate } from './sell-put-rules';
 
 const logger = LoggerFactory.getLogger('SellPut');
@@ -32,13 +33,11 @@ const RISK_FREE_RATE = 0.043;
 /** AAPL's, roughly. */
 const DIVIDEND_YIELD = 0.004;
 
-/**
- * Placeholders until the historical figures are measured. A minute bar's close is a trade
- * print, not a price anyone was offering, and a short-premium backtest filled at the print
- * on both sides reports the spread it never paid as profit.
- */
-const SLIPPAGE_PER_SHARE = Decimal.of('0.05');
-const COMMISSION_PER_CONTRACT = Decimal.of('0.65');
+/** Alpaca is commission free. */
+const COMMISSION_PER_CONTRACT = Decimal.of('0.0');
+
+/** Options are quoted in cents, and a fill lands on that grid wherever the estimate falls. */
+const PRICE_SCALE = 2;
 
 const IV_LOOKBACK_SAMPLES = 252;
 const MIN_ENTRY_IV_PERCENTILE = 30;
@@ -78,6 +77,15 @@ function volPoints(iv: number): string {
   return `${(iv * 100).toFixed(1)}%`;
 }
 
+/**
+ * A side of an estimated quote as a fill price. The estimate is floating-point arithmetic over
+ * a median and a print, which `Decimal.of` does not take; rounding to the cent settles the scale
+ * at the grid the quote itself would sit on.
+ */
+function fillPrice(estimate: number): Decimal {
+  return Decimal.of(estimate.toFixed(PRICE_SCALE));
+}
+
 export interface SellPutProps {
   /** The stock whose puts are sold. */
   readonly symbol: string;
@@ -89,6 +97,13 @@ export interface SellPutProps {
   readonly dividendYield: number;
   /** Where today's at-the-money volatility and the sessions it is ranked against come from. */
   readonly volatilityHistory: ImpliedVolatilityHistoryHelper;
+  /**
+   * What every fill is priced from. A minute bar's close is a trade print, not a price anyone
+   * was offering, and a short-premium backtest filled at the print on both sides reports the
+   * spread it never paid as profit. The print is taken as the middle of the quote, and this
+   * strategy sells at the estimated bid and buys back at the estimated ask.
+   */
+  readonly quoteSpread: OptionsQuoteSpreadHelper;
 }
 
 /**
@@ -103,6 +118,7 @@ export class SellPut extends BaseStrategy {
   private readonly symbol: string;
   private readonly dividendYield: number;
   private readonly volatilityHistory: ImpliedVolatilityHistoryHelper;
+  private readonly quoteSpread: OptionsQuoteSpreadHelper;
 
   constructor(props: SellPutProps) {
     const symbol = props.symbol.trim().toUpperCase();
@@ -110,15 +126,19 @@ export class SellPut extends BaseStrategy {
     this.symbol = symbol;
     this.dividendYield = props.dividendYield;
     this.volatilityHistory = props.volatilityHistory;
+    this.quoteSpread = props.quoteSpread;
   }
 
   /**
    * Sweeps whatever sessions the volatility history does not hold yet and loads it, so the
    * run starts from a current history and the first decision does not stall on reading it.
+   * The spread table is read here for the other reason: a run whose captures are missing
+   * cannot fill anything, and its first entry can be months of sessions away.
    */
   async init(): Promise<void> {
     await this.volatilityHistory.save(this.symbol);
     await this.volatilityHistory.sessions(this.symbol);
+    await this.quoteSpread.warm(this.symbol);
   }
 
   async tick(): Promise<ReadonlyArray<StrategyTrade> | undefined> {
@@ -170,9 +190,20 @@ export class SellPut extends BaseStrategy {
       return undefined;
     }
 
+    // Spot is read for the moneyness group the spread comes from, which a group 5 points of
+    // moneyness wide does not need to the minute, so the entry's looser bound serves here too.
+    const spot = await this.spot(now);
+    if (spot === undefined) {
+      logger.warn(
+        `${minute(now)} ${this.symbol} has no print in the last ${ENTRY_PRINT_MAX_AGE / MINUTE} minutes, so ${held.symbol} has no spread to buy back at. No exit check this minute.`,
+      );
+      return undefined;
+    }
+    const quote = await this.quoteSpread.estimateQuote({ contract: occSymbol, underlyingPrice: spot, referencePrice: print.price, timestamp: now });
+
     // Net of the opening commission, which the account keeps in the position's basis.
     const credit = Decimal.of(held.averagePrice);
-    const debit = Decimal.of(print.price).add(SLIPPAGE_PER_SHARE);
+    const debit = fillPrice(quote.ask);
     const reason = exitReason({ credit, debit, daysToExpiration: daysLeft });
     if (reason === undefined) {
       return undefined;
@@ -181,7 +212,7 @@ export class SellPut extends BaseStrategy {
     const contracts = Decimal.of(held.size).abs();
     const trade: Trade = { symbol: held.symbol, size: contracts.toString(), price: debit.toString(), timestamp: now };
     logger.info(
-      `${minute(now)} ${reason}: bought back ${contracts.toString()} ${held.symbol} at ${debit.toFixed(2)} (print ${print.price.toFixed(2)}, printed ${minute(print.at)}), sold at ${credit.toFixed(4)} after commission, ${daysLeft} days left.`,
+      `${minute(now)} ${reason}: bought back ${contracts.toString()} ${held.symbol} at the ${debit.toFixed(2)} ask (print ${print.price.toFixed(2)}, printed ${minute(print.at)}, spread ${quote.spread.toFixed(2)}), sold at ${credit.toFixed(4)} after commission, ${daysLeft} days left.`,
     );
     return { trade, context: { kind: 'close', commission: COMMISSION_PER_CONTRACT.mul(contracts).toString(), reason } };
   }
@@ -237,9 +268,10 @@ export class SellPut extends BaseStrategy {
       return undefined;
     }
 
-    const credit = Decimal.of(put.price).sub(SLIPPAGE_PER_SHARE);
+    const quote = await this.quoteSpread.estimateQuote({ contract: put.occSymbol, underlyingPrice: spot, referencePrice: put.price, timestamp: now });
+    const credit = fillPrice(quote.bid);
     if (!credit.isPositive()) {
-      logger.info(`${context}. ${put.occSymbol.symbol} printed ${put.price}, which is no credit after ${SLIPPAGE_PER_SHARE.toString()} slippage. No entry.`);
+      logger.info(`${context}. ${put.occSymbol.symbol} printed ${put.price}, which leaves no credit at the bid across a ${quote.spread.toFixed(2)} spread. No entry.`);
       return undefined;
     }
 
@@ -249,7 +281,9 @@ export class SellPut extends BaseStrategy {
     const trade: Trade = { symbol, size: contracts.neg().toString(), price: credit.toString(), timestamp: now };
     // Strike × 100 per contract, from the exact thousandths OCC states rather than the float strike.
     const capital = Decimal.of(put.occSymbol.strikeMils).mul(contractMultiplier(symbol)).mul(contracts).div(Decimal.of(1000), LEDGER_SCALE);
-    logger.info(`${context}. Sold ${CONTRACTS} ${symbol} at ${credit.toFixed(2)} (print ${put.price.toFixed(2)}), delta ${put.delta.toFixed(3)}, ${daysLeft} days out.`);
+    logger.info(
+      `${context}. Sold ${CONTRACTS} ${symbol} at the ${credit.toFixed(2)} bid (print ${put.price.toFixed(2)}, spread ${quote.spread.toFixed(2)}), delta ${put.delta.toFixed(3)}, ${daysLeft} days out.`,
+    );
     return {
       trade,
       context: {
@@ -259,6 +293,7 @@ export class SellPut extends BaseStrategy {
         notes: {
           dte: String(daysLeft),
           delta: put.delta.toFixed(3),
+          spread: quote.spread.toFixed(2),
           iv: volPoints(put.iv),
           atmIv: volPoints(iv),
           ivPct: percentile.toFixed(0),
@@ -353,7 +388,14 @@ async function main(): Promise<void> {
   const account = new BacktestAccountImpl(report);
 
   const driver = new BacktestDriver({ time, marketData, account });
-  driver.addStrategy(new SellPut({ symbol: SYMBOL, dividendYield: DIVIDEND_YIELD, volatilityHistory: impliedVolatilityHistoryHelper(client, availabilities) }));
+  driver.addStrategy(
+    new SellPut({
+      symbol: SYMBOL,
+      dividendYield: DIVIDEND_YIELD,
+      volatilityHistory: impliedVolatilityHistoryHelper(client, availabilities),
+      quoteSpread: optionsQuoteSpreadHelper(client),
+    }),
+  );
   await driver.run();
 
   for (const line of report.render()) {

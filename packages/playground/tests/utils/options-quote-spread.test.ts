@@ -145,6 +145,22 @@ describe('OptionsQuoteSpreadHelperImpl.save', () => {
   });
 });
 
+describe('OptionsQuoteSpreadHelperImpl.warm', () => {
+  it('says to capture first when there is no file, rather than waiting for the first estimate to ask', async () => {
+    const state = setup();
+    await expect(state.helper.warm('amzn')).rejects.toThrow(/Run save\('AMZN'\)/);
+  });
+
+  it('leaves a warmed underlying answering the same quote', async () => {
+    const state = setup();
+    await capture(state, atTheMoneyNear(0.1));
+    await state.helper.warm('amzn');
+
+    const quote = await state.helper.estimateQuote({ contract: NEAR_CALL, underlyingPrice: SPOT, referencePrice: 5, timestamp: CAPTURED_AT });
+    expect(quote.spread).toBeCloseTo(0.5, 9);
+  });
+});
+
 describe('OptionsQuoteSpreadHelperImpl.estimateQuote', () => {
   const at = CAPTURED_AT;
 

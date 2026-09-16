@@ -68,6 +68,8 @@ export interface EstimatedQuote {
 export interface OptionsQuoteSpreadHelper {
   readonly cachePath: string;
   save(underlying: string): Promise<void>;
+  /** Reads the underlying's captures in, so a caller that will need them learns now that they are missing. */
+  warm(underlying: string): Promise<void>;
   estimateQuote(request: EstimateQuoteRequest): Promise<EstimatedQuote>;
 }
 
@@ -238,6 +240,15 @@ export class OptionsQuoteSpreadHelperImpl implements OptionsQuoteSpreadHelper {
     this.append({ underlying: ticker, capturedAt, underlyingBar, contracts });
     this.tables.delete(ticker);
     logger.info(`${ticker}: captured ${contracts.length} contracts against spot ${underlyingBar.c} to ${this.file(ticker)}.`);
+  }
+
+  /**
+   * A backtest that prices every fill from this table only reaches its first estimate once
+   * its rules fire, which can be months of simulated sessions in. Warming says at the start
+   * of the run what the first entry would otherwise say in the middle of it.
+   */
+  async warm(underlying: string): Promise<void> {
+    await this.table(underlying.trim().toUpperCase());
   }
 
   async estimateQuote(request: EstimateQuoteRequest): Promise<EstimatedQuote> {
