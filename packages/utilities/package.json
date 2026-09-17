@@ -2,7 +2,7 @@
   "name": "@fleece/utilities",
   "version": "1.0.0",
   "private": true,
-  "description": "Exact decimals, the clock, logging, environment reading, assertions, error types and the HTTP client seam. Imports nothing of ours.",
+  "description": "Exact decimals, the clock, logging, environment reading, assertions, error types, the HTTP client seam and the mini-cloud job runner. Imports nothing of ours.",
   "engines": {
     "node": ">=22"
   },
@@ -17,6 +17,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
+    "@mini-cloud/reporter": "^1.0.0",
     "decimal.js": "^10.6.0",
     "moment-timezone": "^0.6.3"
   },
