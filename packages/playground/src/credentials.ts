@@ -16,14 +16,39 @@
  * A script names its account by calling one of these, so no environment variable can move
  * one from paper to live.
  */
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 import { AlpacaAccountIdentifier, AlpacaCredentials } from '@fleece/broker';
 import { getenv } from '@fleece/utilities';
 import { config as loadEnv } from 'dotenv';
 
-/** `dist/` at runtime, so three levels up is the repo root. */
-const REPO_ROOT = resolve(__dirname, '../../..');
+function isRepoRoot(dir: string): boolean {
+  const manifest = resolve(dir, 'package.json');
+  if (!existsSync(manifest)) {
+    return false;
+  }
+  const parsed: unknown = JSON.parse(readFileSync(manifest, 'utf8'));
+  return typeof parsed === 'object' && parsed !== null && 'name' in parsed && parsed.name === 'fleece';
+}
+
+/**
+ * Found by walking up rather than by counting levels: this file runs from `src/` under
+ * ts-node and from `dist/src/` after a build, which sit at different depths.
+ */
+function findRepoRoot(): string {
+  let dir = __dirname;
+  while (!isRepoRoot(dir)) {
+    const parent = dirname(dir);
+    if (parent === dir) {
+      throw new Error(`Found no Fleece repo root above ${__dirname}.`);
+    }
+    dir = parent;
+  }
+  return dir;
+}
+
+export const REPO_ROOT = findRepoRoot();
 
 // `dotenv` does not throw when the file is absent, so importing this module is safe with
 // no `.env` at all.

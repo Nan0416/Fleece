@@ -18,12 +18,12 @@
  */
 import { Decimal, runJob } from '@fleece/utilities';
 
-import { alpacaTradingClient, marketDataClient } from '../../client';
-import { creditSpreadAttentionWebhookUrl, creditSpreadMonitorWebhookUrl } from '../../credentials';
-import { DiscordNotifier } from './notifier';
-import { PositionMonitor } from './position-monitor';
-import type { CreditSpreadRules } from './strategies';
-import { BearCallSpreadDetector, BullPutSpreadDetector, ChainedStrategyDetector } from './strategy-detectors';
+import { alpacaTradingClient, marketDataClient } from '../src/client';
+import { creditSpreadAttentionWebhookUrl, creditSpreadMonitorWebhookUrl } from '../src/credentials';
+import { DiscordNotifier } from '../src/monitor/position/notifier';
+import { PositionMonitor } from '../src/monitor/position/position-monitor';
+import type { CreditSpreadRules } from '../src/monitor/position/strategies';
+import { BearCallSpreadDetector, BullPutSpreadDetector, ChainedStrategyDetector } from '../src/monitor/position/strategy-detectors';
 
 /** Real money: the account whose spreads are watched. Nothing here trades in it. */
 const LIVE = true;
