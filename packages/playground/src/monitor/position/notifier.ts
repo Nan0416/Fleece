@@ -10,7 +10,7 @@
 import { easternClock } from '@fleece/utilities';
 import { escapeMarkdown, WebhookClient, type APIEmbed, type APIEmbedField } from 'discord.js';
 
-import { dollars, errorMessage, optionLetter, percentOf, shortDate, signedDollars, strike } from './formatting';
+import { dollars, errorMessage, percentOf, shortDate, signedDollars } from './formatting';
 import type { PositionMonitorOutcome, PositionMonitorReport } from './position-monitor';
 import type { CreditSpreadMetrics, Signal, SignalKind, Strategy, StrategyEvaluation } from './strategies';
 
@@ -152,12 +152,12 @@ export function renderAttentionChannel(outcome: PositionMonitorOutcome): Discord
   for (const evaluation of report.evaluations) {
     for (const signal of evaluation.signals) {
       const style = SIGNAL_STYLES[signal.kind];
-      cards.push({ headline: `${style.emoji} ${style.label} ${spreadLabel(evaluation.strategy, today)}`, embed: { ...signalCard(evaluation, signal, today), timestamp } });
+      cards.push({ headline: `${style.emoji} ${style.label} ${evaluation.strategy.label(today)}`, embed: { ...signalCard(evaluation, signal, today), timestamp } });
     }
   }
   for (const failure of report.failures) {
     cards.push({
-      headline: `${WARNING} Could not check ${spreadLabel(failure.strategy, today)}`,
+      headline: `${WARNING} Could not check ${failure.strategy.label(today)}`,
       embed: { ...failureCard(`Could not check ${strategyTitle(failure.strategy, today)}`, failure.error), timestamp },
     });
   }
@@ -184,8 +184,9 @@ function unmatched(report: PositionMonitorReport): string[] {
   return [`Unmatched: ${report.unmatched.map((leg) => `${leg.contract.symbol} x${leg.quantity.toString()}`).join(', ')}`];
 }
 
-/** A spread's state, colored by its most urgent signal, with its signals and warnings as the description. */
-function spreadCard({ strategy, metrics, signals, warnings }: StrategyEvaluation, today: string): APIEmbed {
+/** A strategy's state, colored by its most urgent signal, with its signals and warnings as the description. */
+function spreadCard(evaluation: StrategyEvaluation, today: string): APIEmbed {
+  const { strategy, signals, warnings } = evaluation;
   const lines = [
     ...signals.map((signal) => `${SIGNAL_STYLES[signal.kind].emoji} **${SIGNAL_STYLES[signal.kind].label}**: ${signal.reason}`),
     ...warnings.map((warning) => `${WARNING} ${escapeMarkdown(warning)}`),
@@ -195,17 +196,17 @@ function spreadCard({ strategy, metrics, signals, warnings }: StrategyEvaluation
     title: truncate(strategyTitle(strategy, today), LIMITS.embedTitle),
     description: lines.length === 0 ? undefined : truncate(lines.join('\n'), LIMITS.embedDescription),
     color: urgent === undefined ? QUIET_COLOR : SIGNAL_STYLES[urgent.kind].color,
-    fields: metricFields(metrics),
+    fields: evaluationFields(evaluation),
   };
 }
 
-function signalCard({ strategy, metrics }: StrategyEvaluation, signal: Signal, today: string): APIEmbed {
+function signalCard(evaluation: StrategyEvaluation, signal: Signal, today: string): APIEmbed {
   const style = SIGNAL_STYLES[signal.kind];
   return {
-    title: truncate(`${style.emoji} ${style.label} · ${strategyTitle(strategy, today)}`, LIMITS.embedTitle),
+    title: truncate(`${style.emoji} ${style.label} · ${strategyTitle(evaluation.strategy, today)}`, LIMITS.embedTitle),
     description: signal.reason,
     color: style.color,
-    fields: metricFields(metrics),
+    fields: evaluationFields(evaluation),
   };
 }
 
@@ -217,8 +218,16 @@ function failureCard(title: string, error: unknown): APIEmbed {
   };
 }
 
+/** What a card shows about a strategy, which depends on what kind it is. */
+function evaluationFields(evaluation: StrategyEvaluation): APIEmbedField[] {
+  switch (evaluation.kind) {
+    case 'credit-spread':
+      return creditSpreadFields(evaluation.metrics);
+  }
+}
+
 /** Six inline fields, which Discord shows as two rows of three where there is room. */
-function metricFields(metrics: CreditSpreadMetrics): APIEmbedField[] {
+function creditSpreadFields(metrics: CreditSpreadMetrics): APIEmbedField[] {
   const { credit, unrealizedProfit, closeAtNatural, netDelta, shortDelta, daysToExpiration } = metrics;
   let profit = NONE;
   if (unrealizedProfit !== undefined) {
@@ -302,14 +311,9 @@ function embedCharacters(embed: APIEmbed): number {
   );
 }
 
-/** `AAPL 10/23 360/375C`, for the one-line push notification. */
-function spreadLabel(strategy: Strategy, today: string): string {
-  return `${strategy.underlying} ${shortDate(strategy.expiration, today)} ${strategy.strikes.map(strike).join('/')}${optionLetter(strategy.optionType)}`;
-}
-
-/** `AAPL 10/23 360/375 bear call spread ×1`, for a card's title. */
+/** `AAPL 10/23 360/375C ×1 · bear call spread`, for a card's title. */
 function strategyTitle(strategy: Strategy, today: string): string {
-  return `${strategy.underlying} ${shortDate(strategy.expiration, today)} ${strategy.strikes.map(strike).join('/')} ${strategy.name} ×${strategy.quantity.toString()}`;
+  return `${strategy.label(today)} · ${strategy.name}`;
 }
 
 function when(at: number): string {

@@ -5,7 +5,7 @@ import { easternClock } from '@fleece/utilities';
 
 import { dollars, errorMessage, percentOf, signedDollars } from './formatting';
 import type { PositionMonitorReport } from './position-monitor';
-import type { StrategyEvaluation } from './strategies';
+import type { CreditSpreadEvaluation, StrategyEvaluation } from './strategies';
 
 /** The header, each spread's state and signals, and what could not be checked or paired. */
 export function reportLines(report: PositionMonitorReport): string[] {
@@ -32,7 +32,15 @@ export function reportLines(report: PositionMonitorReport): string[] {
   return lines;
 }
 
-function summary({ strategy, metrics }: StrategyEvaluation): string {
+/** One line per strategy, saying what matters for its kind. */
+function summary(evaluation: StrategyEvaluation): string {
+  switch (evaluation.kind) {
+    case 'credit-spread':
+      return creditSpreadSummary(evaluation);
+  }
+}
+
+function creditSpreadSummary({ strategy, metrics }: CreditSpreadEvaluation): string {
   const { credit, unrealizedProfit, closeAtMid, closeAtNatural, maxLoss, netDelta, shortDelta, daysToExpiration } = metrics;
   const parts = [`credit ${dollars(credit)}`];
   if (unrealizedProfit !== undefined) {

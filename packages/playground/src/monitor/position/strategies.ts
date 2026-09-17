@@ -4,7 +4,7 @@
 import type { OptionType } from '@fleece/marketdata';
 import { Decimal } from '@fleece/utilities';
 
-import { dollars, percentOf } from './formatting';
+import { dollars, optionLetter, percentOf, shortDate, strike } from './formatting';
 import { fetchOptionMarks, type OptionMarks, type OptionQuote, type OptionSnapshotReader } from './option-marks';
 import { Positions, type OptionLeg } from './positions';
 
@@ -20,29 +20,33 @@ export interface Signal {
   readonly reason: string;
 }
 
-export interface StrategyEvaluation {
-  readonly strategy: Strategy;
-  /** Every strategy so far is a credit spread, so every evaluation measures one. */
-  readonly metrics: CreditSpreadMetrics;
+/**
+ * What a strategy's check found, one member per kind of strategy, since what is worth
+ * measuring differs between them. Whatever shows an evaluation picks its fields by `kind`.
+ */
+export type StrategyEvaluation = CreditSpreadEvaluation;
+
+interface BaseEvaluation {
   readonly signals: ReadonlyArray<Signal>;
   /** A rule that could not be checked, and why. */
   readonly warnings: ReadonlyArray<string>;
 }
 
+export interface CreditSpreadEvaluation extends BaseEvaluation {
+  readonly kind: 'credit-spread';
+  readonly strategy: CreditSpread;
+  readonly metrics: CreditSpreadMetrics;
+}
+
+/** Anything held together for one purpose. Nothing here assumes it is made of options. */
 export interface Strategy {
   /** `bear call spread`. */
   readonly name: string;
-  readonly underlying: string;
-  /** ISO `YYYY-MM-DD`. */
-  readonly expiration: string;
-  readonly optionType: OptionType;
-  /** In dollars, the short leg's first. */
-  readonly strikes: ReadonlyArray<number>;
-  /** Contracts in each leg. */
-  readonly quantity: Decimal;
   readonly positions: Positions;
-  /** `AAPL 2026-10-23 360/375 bear call spread x1`. */
+  /** In full, for logs: `AAPL 2026-10-23 360/375 bear call spread x1`. */
   describe(): string;
+  /** Short enough for a card or a notification, with dates relative to `today`: `AAPL 10/23 360/375C ×1`. */
+  label(today: string): string;
   /** Reads the market data it needs itself. `today` is the Eastern calendar date, `YYYY-MM-DD`. */
   evaluate(today: string): Promise<StrategyEvaluation>;
 }
@@ -79,8 +83,9 @@ export interface CreditSpreadMetrics {
  * a credit. The rules are measured against that credit, which comes from Alpaca's averaged
  * entry prices rather than from the order that opened the spread.
  */
-abstract class CreditSpread implements Strategy {
+export abstract class CreditSpread implements Strategy {
   readonly positions: Positions;
+  /** Contracts in each leg. */
   readonly quantity: Decimal;
 
   protected constructor(
@@ -116,12 +121,17 @@ abstract class CreditSpread implements Strategy {
     return this.shortLeg.contract.type;
   }
 
+  /** In dollars, the short leg's first. */
   get strikes(): ReadonlyArray<number> {
     return [this.shortLeg.contract.strike, this.longLeg.contract.strike];
   }
 
   describe(): string {
     return `${this.underlying} ${this.expiration} ${this.strikes.join('/')} ${this.name} x${this.quantity.toString()}`;
+  }
+
+  label(today: string): string {
+    return `${this.underlying} ${shortDate(this.expiration, today)} ${this.strikes.map(strike).join('/')}${optionLetter(this.optionType)} ×${this.quantity.toString()}`;
   }
 
   metrics(marks: OptionMarks, today: string): CreditSpreadMetrics {
@@ -148,13 +158,13 @@ abstract class CreditSpread implements Strategy {
     };
   }
 
-  async evaluate(today: string): Promise<StrategyEvaluation> {
+  async evaluate(today: string): Promise<CreditSpreadEvaluation> {
     const marks = await fetchOptionMarks(this.marketData, [this.shortLeg.contract, this.longLeg.contract]);
     return this.assess(marks, today);
   }
 
   /** `evaluate` without the request, so the rules can be checked against marks given to it. */
-  assess(marks: OptionMarks, today: string): StrategyEvaluation {
+  assess(marks: OptionMarks, today: string): CreditSpreadEvaluation {
     const metrics = this.metrics(marks, today);
     const { credit, unrealizedProfit: profit, daysToExpiration } = metrics;
     const signals: Signal[] = [];
@@ -191,7 +201,7 @@ abstract class CreditSpread implements Strategy {
       });
     }
 
-    return { strategy: this, metrics, signals, warnings };
+    return { kind: 'credit-spread', strategy: this, metrics, signals, warnings };
   }
 }
 
