@@ -1019,6 +1019,16 @@ export const WATCHLIST: readonly WatchlistEntry[] = [
     tags: ['aerospace', 'defense'],
     note: 'Mostly commercial jets, but its defense and space arm is one of the largest Pentagon contractors.',
   },
+  {
+    symbol: 'SPCX',
+    name: 'Space Exploration Technologies Corp.',
+    kind: 'stock',
+    sector: 'Industrials',
+    industry: 'Aerospace & Defense',
+    country: 'US',
+    tags: ['aerospace', 'space'],
+    note: 'SpaceX, public since its June 2026 IPO. Most of its revenue is Starlink, not launches, and it also owns xAI and X, so it is only partly an aerospace stock.',
+  },
   { symbol: 'UNP', name: 'Union Pacific Corporation', kind: 'stock', sector: 'Industrials', industry: 'Ground Transportation', country: 'US', tags: ['freight', 'cyclical'] },
   {
     symbol: 'UPS',

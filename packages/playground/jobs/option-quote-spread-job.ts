@@ -2,8 +2,8 @@
  * Two tasks over the option quote spread cache; `TASK` below picks one.
  *
  * - `load` captures each watchlist symbol's live chain and appends it to the cache. Run it
- *   during regular hours, at different times of day and on different days — which is what
- *   scheduling it as a mini-cloud job is for.
+ *   at different times of day and on different days — which is what scheduling it as a
+ *   mini-cloud job is for. Outside regular hours it captures nothing.
  * - `read` prints the quote the cache estimates for one contract.
  *
  *   npm run option-quote-spread -w @fleece/playground
@@ -11,15 +11,25 @@
  * Under mini-cloud, either one reports its pid and exit to the agent, and `load` records how
  * many chains it captured in its instance's event log. Run by hand, it reports nothing.
  */
-import { parseOccSymbol, WATCHLIST } from '@fleece/marketdata';
+import { marketState, parseOccSymbol, requireMarketHoursCover, WATCHLIST } from '@fleece/marketdata';
 import { easternClock, LoggerFactory, runJob, type JobReporter } from '@fleece/utilities';
 
-import { marketDataClient, optionsQuoteSpreadHelper } from './research';
+import { marketDataClient, optionsQuoteSpreadHelper } from '../src/research';
 
 const logger = LoggerFactory.getLogger('OptionQuoteSpread');
 
-/** Exits 0 even when some symbols fail: one chain missing from a capture is not a failed capture. */
+/**
+ * Exits 0 even when some symbols fail: one chain missing from a capture is not a failed capture.
+ * Captures nothing, and exits 0, outside regular hours.
+ */
 async function load(reporter: JobReporter | undefined): Promise<number> {
+  // The table reads every date past its end as closed, so without this check a stale table
+  // would skip every run without saying why.
+  requireMarketHoursCover(easternClock.date(Date.now()), 'tell whether the market is open');
+  if (marketState() !== 'open') {
+    logger.info('The market is not open, so there is no live chain to capture.');
+    return 0;
+  }
   const helper = optionsQuoteSpreadHelper(marketDataClient());
   const failed: string[] = [];
   for (const entry of WATCHLIST) {

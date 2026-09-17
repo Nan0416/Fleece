@@ -18,7 +18,7 @@ import { dirname, resolve } from 'node:path';
 import { AlpacaMarketDataClient, type OptionChainRequest, type OptionSnapshot, type OptionType } from '@fleece/marketdata';
 import { LoggerFactory, easternClock } from '@fleece/utilities';
 
-import { marketDataKeys } from './credentials';
+import { marketDataKeys, REPO_ROOT } from './credentials';
 
 const logger = LoggerFactory.getLogger('OptionChain');
 
@@ -55,9 +55,7 @@ const SEAM_MINIMUM_BID = 0.05;
 /** Alpaca's page maximum for a chain. */
 const PAGE_SIZE = 1_000;
 
-/** `dist/` at runtime, so three levels up is the repo root. */
-const ROOT = resolve(__dirname, '../../..');
-const OUTPUT = resolve(ROOT, 'viz/data/option-chain.json');
+const OUTPUT = resolve(REPO_ROOT, 'viz/data/option-chain.json');
 
 /**
  * One contract, flat. Every measure is nullable and every key always present, so a missing

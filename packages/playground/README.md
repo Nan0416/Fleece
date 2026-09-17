@@ -1,6 +1,7 @@
 # @fleece/playground
 
 Experiment scripts. One file per experiment under `src/`, each with its own npm script.
+The ones scheduled as mini-cloud jobs live under `jobs/` instead, beside `src/`.
 
 This package is deliberately outside the product: nothing imports it, and the root
 `npm run build` skips it, so a half-finished experiment can never break `serve`, the
@@ -102,9 +103,11 @@ UUIDs.
 ## Adding one
 
 Drop `src/<name>.ts` in, give it a `main()` that returns a promise, and add
-`"<name>": "npm run build && node dist/<name>.js"` to `package.json`. If it is to run
-as a mini-cloud job, have `main()` resolve to an exit code and hand it to `runJob` — see
-below. Take a trading
+`"<name>": "npm run build && node dist/src/<name>.js"` to `package.json`. If it is to run
+as a mini-cloud job, put it in `jobs/<name>-job.ts` and point the script at
+`dist/jobs/<name>-job.js`, and have `main()` resolve to an exit code and hand it to
+`runJob` — see below. The package compiles from its own root, not from `src/`, so that
+`jobs/` can import from `src/`. That is why the output is `dist/src/` and `dist/jobs/`. Take a trading
 client from `alpacaTradingClient()` in `./client`, or the account and its credentials from
 the `credentials.ts` functions, rather than reading the environment directly, so the
 missing-key check comes for free. No tests — this
@@ -112,7 +115,7 @@ package is not covered by `npm test` and is not meant to be.
 
 ## Running under mini-cloud
 
-`position-monitor` and `option-quote-spread` are scheduled as
+`position-monitor` and `option-quote-spread`, in `jobs/`, are scheduled as
 [mini-cloud](https://github.com/Nan0416/mini-cloud) jobs, and report to the agent that
 launched them through `runJob` from `@fleece/utilities`:
 
@@ -133,8 +136,9 @@ Nothing is configured here: the agent injects `MINI_CLOUD_*` into the job's envi
 Run by hand there is none of it, the reporter is `undefined`, and nothing is reported.
 
 The task's command can be the npm script, which rebuilds on every run, or
-`node packages/playground/dist/monitor/position/main.js` from the repo root after a build.
-`.env` is found relative to the compiled file, so the working directory does not matter.
+`node packages/playground/dist/jobs/position-monitor-job.js` from the repo root after a build.
+`.env` is found by walking up from the running file to the repo root, so neither the
+working directory nor running the source under ts-node changes which file is read.
 
 ## Charts
 
