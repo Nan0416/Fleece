@@ -153,6 +153,8 @@ here can move one from paper to live.
 | `ALPACA_LIVE_ACCOUNT_ID` | **required for the live account** | Alpaca account id. Real money |
 | `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_SECRET_KEY` | **required for the live account** | Real money |
 | `MARKETDATA_CACHE_PATH` | **required for `npm run option-availability`** | Where the sweep is kept, one file per underlying |
+| `CREDIT_SPREAD_MONITOR_CHANNEL` | **required for `npm run position-monitor`** | Discord webhook URL of the channel every report is posted to. Meant to be muted. The URL carries the webhook's token, so treat it as a secret |
+| `CREDIT_SPREAD_ATTENTION_CHANNEL` | **required for `npm run position-monitor`** | Discord webhook URL of the channel signals and failed runs are posted to. Meant to notify |
 
 The chart writers take the paper pair through `marketDataKeys()` rather than an account,
 because market data is the one thing a paper key does as well as a live one — so a script

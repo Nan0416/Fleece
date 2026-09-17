@@ -1,6 +1,6 @@
 /**
- * Checks the live account's credit spreads against their closing rules, and prints a signal
- * for each rule that says to act.
+ * Checks the live account's credit spreads against their closing rules, and posts what it
+ * finds to Discord.
  *
  *   npm run position-monitor -w @fleece/playground
  *
@@ -9,13 +9,17 @@
  * are the close's and Alpaca's greeks drift from them, so a run then reports a stale mark
  * and delta.
  *
- * The report goes to stdout, one `SIGNAL` line per signal. A failed run logs the error and
- * exits non-zero.
+ * Every run posts a card per spread to the monitor channel, which is meant to be muted, and
+ * prints the report to stdout. A run with a signal or a failure also posts a card for each
+ * to the attention channel, which is meant to notify — on every run the condition holds, not
+ * only the first. A run that fails, or cannot post, exits non-zero.
  */
-import { Decimal, easternClock, LoggerFactory } from '@fleece/utilities';
+import { Decimal, LoggerFactory } from '@fleece/utilities';
 
 import { alpacaTradingClient, marketDataClient } from '../../client';
-import { PositionMonitor, type PositionMonitorReport } from './position-monitor';
+import { creditSpreadAttentionWebhookUrl, creditSpreadMonitorWebhookUrl } from '../../credentials';
+import { DiscordNotifier } from './notifier';
+import { PositionMonitor } from './position-monitor';
 import type { CreditSpreadRules } from './strategies';
 import { BearCallSpreadDetector, BullPutSpreadDetector, ChainedStrategyDetector } from './strategy-detectors';
 
@@ -30,35 +34,21 @@ const RULES: CreditSpreadRules = {
   closeAtDaysToExpiration: 21,
 };
 
-function print(report: PositionMonitorReport): void {
-  const signals = report.evaluations.flatMap((evaluation) => evaluation.signals);
-  const failed = report.failures.length > 0 ? `, ${report.failures.length} failed` : '';
-  console.log(`${easternClock.datetime(report.at)} ${report.evaluations.length} spread(s), ${signals.length} signal(s)${failed}`);
-  for (const evaluation of report.evaluations) {
-    console.log(`  ${evaluation.summary}`);
-    for (const warning of evaluation.warnings) {
-      console.log(`    warning: ${warning}`);
-    }
-  }
-  for (const failure of report.failures) {
-    logger.error(`Could not evaluate ${failure.strategy}.`, failure.error);
-  }
-  for (const leg of report.unmatched) {
-    console.log(`  unmatched: ${leg.contract.symbol} x${leg.quantity.toString()}`);
-  }
-  for (const signal of signals) {
-    console.log(`SIGNAL ${signal.kind} ${signal.strategy}: ${signal.message}`);
-  }
-}
-
 async function main(): Promise<void> {
-  const marketData = marketDataClient();
-  const detector = new ChainedStrategyDetector([new BearCallSpreadDetector(marketData, RULES), new BullPutSpreadDetector(marketData, RULES)]);
-  const report = await new PositionMonitor(alpacaTradingClient(LIVE), detector).run();
-  print(report);
-  // A run that could not check every spread did not do its job, whatever it printed.
-  if (report.failures.length > 0) {
-    process.exitCode = 1;
+  const notifier = new DiscordNotifier({
+    monitorWebhookUrl: creditSpreadMonitorWebhookUrl(),
+    attentionWebhookUrl: creditSpreadAttentionWebhookUrl(),
+  });
+  try {
+    const marketData = marketDataClient();
+    const detector = new ChainedStrategyDetector([new BearCallSpreadDetector(marketData, RULES), new BullPutSpreadDetector(marketData, RULES)]);
+    const outcome = await new PositionMonitor(alpacaTradingClient(LIVE), detector, notifier).run();
+    // A run that could not check every spread did not do its job, whatever it posted.
+    if (outcome.kind === 'failed' || outcome.report.failures.length > 0) {
+      process.exitCode = 1;
+    }
+  } finally {
+    notifier.close();
   }
 }
 
