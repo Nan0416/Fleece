@@ -160,6 +160,12 @@ export interface OptionContractsRequest extends OptionListingRequest {
 /** A chain is quotes, so it reaches only what is quoted now. */
 export type OptionChainRequest = OptionListingRequest;
 
+/** The latest quote, trade and greeks for contracts named one by one, as a chain has them. */
+export interface OptionSnapshotsRequest {
+  /** OCC contract symbols. Duplicates are collapsed. */
+  readonly symbols: ReadonlyArray<string>;
+}
+
 /**
  * No `adjustForSplit`, unlike `BarsRequest`, and not by omission: a split does not restate
  * an option's history, it re-issues the contract under a new symbol with a new strike and
@@ -262,6 +268,11 @@ export interface OptionContractsResponse {
 export interface OptionChainResponse {
   readonly contracts: ReadonlyArray<OptionSnapshot>;
   readonly resumeFrom?: string;
+}
+
+/** Keyed by contract symbol. A contract Alpaca has no snapshot for is absent. */
+export interface OptionSnapshotsResponse {
+  readonly snapshots: ReadonlyMap<string, OptionSnapshot>;
 }
 
 export interface OptionBarsResponse {
@@ -371,6 +382,8 @@ export interface AlpacaMarketDataRestClient extends StockRestClient {
   /** The only listing here that reaches contracts which no longer trade. */
   listOptionContracts(request: OptionContractsRequest): Promise<OptionContractsResponse>;
   optionChain(request: OptionChainRequest): Promise<OptionChainResponse>;
+  /** Named contracts rather than a slice of a chain, so a spread's legs are one small request. */
+  optionSnapshots(request: OptionSnapshotsRequest): Promise<OptionSnapshotsResponse>;
   optionBars(request: OptionBarsRequest): Promise<OptionBarsResponse>;
   /**
    * Many contracts in one call. A chain's worth of bars is one request rather than one

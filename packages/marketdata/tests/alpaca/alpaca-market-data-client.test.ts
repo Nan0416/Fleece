@@ -780,6 +780,92 @@ describe('an option chain', () => {
   });
 });
 
+describe('option snapshots for named contracts', () => {
+  it('asks for every contract in one request, on the route keyed by symbols rather than by underlying', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }, { symbol: PUT }));
+    await client(http).optionSnapshots({ symbols: [CONTRACT, PUT] });
+
+    expect(http.requests).toHaveLength(1);
+    expect(http.lastRequest.url).toBe('/v1beta1/options/snapshots');
+    expect(http.lastRequest.query['symbols']).toBe(`${CONTRACT},${PUT}`);
+  });
+
+  it('asks for the consolidated options tape by default, and the largest page', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await client(http).optionSnapshots({ symbols: [CONTRACT] });
+
+    expect(http.lastRequest.query['feed']).toBe('opra');
+    expect(http.lastRequest.query['limit']).toBe('1000');
+  });
+
+  it('keys the answer by contract, with each symbol taken apart and its quote and greeks carried', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT, price: 2 }, { symbol: PUT }));
+    const { snapshots } = await client(http).optionSnapshots({ symbols: [CONTRACT, PUT] });
+
+    expect([...snapshots.keys()].sort()).toEqual([CONTRACT, PUT].sort());
+    const call = snapshots.get(CONTRACT);
+    expect(call?.contract).toEqual({ symbol: CONTRACT, underlying: 'AAPL', root: 'AAPL', expiration: '2026-09-18', type: 'call', strike: 230, strikeMils: 230000 });
+    expect([call?.lq?.bp, call?.lq?.ap]).toEqual([1.9, 2.1]);
+    expect(call?.greeks?.delta).toBe(0.5);
+    expect(snapshots.get(PUT)?.contract.type).toBe('put');
+  });
+
+  it('leaves a contract Alpaca has no snapshot for absent, whether it is left out or sent as null', async () => {
+    const http = new FakeHttpClient().reply({ snapshots: { [CONTRACT]: null } });
+    const { snapshots } = await client(http).optionSnapshots({ symbols: [CONTRACT, PUT] });
+
+    expect(snapshots.size).toBe(0);
+  });
+
+  it('collapses a symbol asked for twice', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }));
+    await client(http).optionSnapshots({ symbols: [CONTRACT, CONTRACT] });
+
+    expect(http.lastRequest.query['symbols']).toBe(CONTRACT);
+  });
+
+  it('spends no request on an empty list', async () => {
+    const http = new FakeHttpClient();
+    const { snapshots } = await client(http).optionSnapshots({ symbols: [] });
+
+    expect(snapshots.size).toBe(0);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('refuses a symbol that is not a contract before spending a request on any of them', async () => {
+    const http = new FakeHttpClient();
+    await expect(client(http).optionSnapshots({ symbols: [CONTRACT, 'AAPL'] })).rejects.toThrow(InvalidRequestError);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it('reports a snapshot of a contract it did not ask for, rather than filing it under a symbol it cannot vouch for', async () => {
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: CONTRACT }, { symbol: PUT }));
+    const send = client(http).optionSnapshots({ symbols: [CONTRACT] });
+
+    await expect(send).rejects.toThrow(DataProviderError);
+    await expect(send).rejects.toThrow(/not asked for/);
+  });
+
+  it('follows the cursor to the last page, keeping every page', async () => {
+    const http = new FakeHttpClient().reply(withPageToken(optionSnapshots({ symbol: CONTRACT }), 'next'), withPageToken(optionSnapshots({ symbol: PUT }), null));
+    const { snapshots } = await client(http).optionSnapshots({ symbols: [CONTRACT, PUT] });
+
+    expect([...snapshots.keys()].sort()).toEqual([CONTRACT, PUT].sort());
+    expect(http.requests.map((request) => request.query['page_token'])).toEqual([undefined, 'next']);
+  });
+
+  it('chunks a list longer than Alpaca documents a request carrying, and merges the chunks', async () => {
+    const many = Array.from({ length: 101 }, (_, index) => `AAPL260918C${String(100_000 + index * 1000).padStart(8, '0')}`);
+    const http = new FakeHttpClient().reply(optionSnapshots({ symbol: many[0] }), optionSnapshots({ symbol: many[100] }));
+    const { snapshots } = await client(http).optionSnapshots({ symbols: many });
+
+    expect(http.requests).toHaveLength(2);
+    expect(http.requests[0].query['symbols'].split(',')).toHaveLength(100);
+    expect(http.requests[1].query['symbols']).toBe(many[100]);
+    expect([...snapshots.keys()].sort()).toEqual([many[0], many[100]].sort());
+  });
+});
+
 describe('option bars for many contracts', () => {
   const range = { from: SESSION, to: SESSION, multiplier: 1, timespan: 'minute' as const };
 

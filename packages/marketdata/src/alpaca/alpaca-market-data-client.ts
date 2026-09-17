@@ -9,6 +9,7 @@ import {
   type MarketHoursRequest,
   type MarketHoursResponse,
   type MinuteBarsRequest,
+  type OccSymbol,
   type QuotesRequest,
   type QuotesResponse,
   type AlpacaMarketDataRestClient,
@@ -26,6 +27,8 @@ import {
   type OptionContractsRequest,
   type OptionContractsResponse,
   type OptionSnapshot,
+  type OptionSnapshotsRequest,
+  type OptionSnapshotsResponse,
   type OptionTradesRequest,
   type OptionTradesResponse,
   type StockSplitsRequest,
@@ -113,6 +116,9 @@ const MAX_CHAIN_PAGE = 1_000;
  * a quiet chain.
  */
 const MAX_BAR_SYMBOLS = 100;
+
+/** Contracts per snapshots request: Alpaca documents the same limit of 100 as for bars, and absence means the same there. */
+const MAX_SNAPSHOT_SYMBOLS = 100;
 
 /** Alpaca's corporate-action history does not reach further back than this. */
 const EARLIEST_CORPORATE_ACTION = '2000-01-01';
@@ -364,6 +370,52 @@ export class AlpacaMarketDataClient implements AlpacaMarketDataRestClient {
     }
 
     return { contracts, resumeFrom: cursor(body) };
+  }
+
+  /**
+   * The chain's snapshot for each contract named, chunked and paged into one map.
+   *
+   * Absent rather than an error for a contract Alpaca has no snapshot for, which is what it
+   * answers for an expired or unlisted symbol.
+   */
+  async optionSnapshots(request: OptionSnapshotsRequest): Promise<OptionSnapshotsResponse> {
+    const contracts = new Map<string, OccSymbol>();
+    for (const symbol of request.symbols) {
+      contracts.set(symbol, requireOccSymbol(symbol, 'fetch a snapshot of'));
+    }
+    const symbols = [...contracts.keys()];
+
+    const snapshots = new Map<string, OptionSnapshot>();
+    for (let first = 0; first < symbols.length; first += MAX_SNAPSHOT_SYMBOLS) {
+      const chunk = symbols.slice(first, first + MAX_SNAPSHOT_SYMBOLS).join(',');
+      let pageToken: string | undefined = undefined;
+      for (let page = 0; ; page += 1) {
+        if (page === MAX_PAGES) {
+          throw new DataProviderError(SOURCE, `has more than ${MAX_PAGES} pages of snapshots for ${symbols.length} contracts. Ask for fewer.`);
+        }
+        const body: AlpacaOptionSnapshotsResponse = await this.get<AlpacaOptionSnapshotsResponse>('/v1beta1/options/snapshots', {
+          feed: this.optionFeed,
+          symbols: chunk,
+          limit: MAX_CHAIN_PAGE,
+          page_token: pageToken,
+        });
+        for (const [symbol, snapshot] of Object.entries(body.snapshots ?? {})) {
+          if (snapshot === null) {
+            continue;
+          }
+          const contract = contracts.get(symbol);
+          if (contract === undefined) {
+            throw new DataProviderError(SOURCE, `returned a snapshot of ${JSON.stringify(symbol)}, which was not asked for.`);
+          }
+          snapshots.set(symbol, normalizeOptionSnapshot(contract, snapshot));
+        }
+        pageToken = cursor(body);
+        if (pageToken === undefined) {
+          break;
+        }
+      }
+    }
+    return { snapshots };
   }
 
   /**

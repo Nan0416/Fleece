@@ -9,6 +9,7 @@
     "order-events": "npm run build && node dist/order-events.js",
     "cancel-order": "npm run build && node dist/cancel-order.js",
     "list-positions": "npm run build && node dist/list-positions.js",
+    "position-monitor": "npm run build && node dist/monitor/position/main.js",
     "option-chain": "npm run build && node dist/option-chain.js",
     "option-availability": "npm run build && node dist/option-availability.js",
     "implied-volatility-history": "npm run build && node dist/implied-volatility-history.js",
