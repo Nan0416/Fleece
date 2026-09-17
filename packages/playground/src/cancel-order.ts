@@ -9,21 +9,13 @@
  * Prints the order before and after, because cancelling tells you almost nothing on
  * its own — see the comments in `main`.
  */
-import { HttpAlpacaRestClient } from '@fleece/broker';
 import { LoggerFactory } from '@fleece/utilities';
-import { prepareAccount } from './account';
-import { paperAccount } from './credentials';
+import { alpacaTradingClient } from './client';
 
 const logger = LoggerFactory.getLogger('CancelOrder');
 
 async function main(): Promise<void> {
-  const account = prepareAccount(paperAccount(), logger); // swap to liveAccount()
-
-  const client = new HttpAlpacaRestClient({
-    account: { accountId: account.accountId, live: account.live },
-    credentialsProvider: { accessKey: account.apiKey, secretKey: account.secretKey },
-    baseUrl: account.restUrl,
-  });
+  const client = alpacaTradingClient();
 
   await client.cancelOrder({ brokerOrderId: '03ba6bb0-3e62-4508-ad44-9a3d8c1b2f67' });
 }

@@ -12,9 +12,9 @@ import { HistoricalConstantMaturityVolatilityLoader, type ConstantMaturityVolati
 
 const logger = LoggerFactory.getLogger('ConstantMaturityVolatilityRunner');
 
-const RUN_FROM = '2025-01-01';
-const RUN_TO = '2026-08-31';
-const SYMBOL = 'AAPL';
+const RUN_FROM = '2026-09-01';
+const RUN_TO = '2026-09-14';
+const SYMBOL = 'SOFI';
 const DIVIDEND_YIELD = 0.0;
 /** Close to VIX's, which reads 30 days from expirations more than 23 and fewer than 37 days out. */
 const DAYS_TO_EXPIRATION = { target: 30, min: 23, max: 37 };

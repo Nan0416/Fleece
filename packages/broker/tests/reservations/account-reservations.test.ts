@@ -17,7 +17,22 @@ describe('AccountReservations', () => {
       // account believed to be empty.
       const { reservations, rest } = harness();
       rest.buyingPower = '50000';
-      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', asset_class: 'us_equity', qty: '10', avg_entry_price: '170', side: 'long', market_value: '1700', cost_basis: '1700' }];
+      rest.positions = [
+        {
+          symbol: 'AAPL',
+          asset_id: 'a',
+          asset_class: 'us_equity',
+          exchange: 'NASDAQ',
+          qty: '10',
+          qty_available: '10',
+          avg_entry_price: '170',
+          side: 'long',
+          market_value: '1700',
+          cost_basis: '1700',
+          current_price: '170',
+          lastday_price: '170',
+        },
+      ];
 
       await reservations.seed();
 
@@ -31,7 +46,20 @@ describe('AccountReservations', () => {
       // the second and multiplying would be a second place to get the multiplier wrong.
       const { reservations, rest } = harness();
       rest.positions = [
-        { symbol: 'AMZN261016C00280000', asset_id: 'a', asset_class: 'us_option', qty: '2', avg_entry_price: '3.85', side: 'long', market_value: '800', cost_basis: '770' },
+        {
+          symbol: 'AMZN261016C00280000',
+          asset_id: 'a',
+          asset_class: 'us_option',
+          exchange: '',
+          qty: '2',
+          qty_available: '2',
+          avg_entry_price: '3.85',
+          side: 'long',
+          market_value: '800',
+          cost_basis: '770',
+          current_price: '4',
+          lastday_price: '4',
+        },
       ];
 
       await reservations.seed();
@@ -41,7 +69,22 @@ describe('AccountReservations', () => {
 
     it('locks shares already committed to an order open at the broker', async () => {
       const { reservations, rest } = harness();
-      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', asset_class: 'us_equity', qty: '20', avg_entry_price: '170', side: 'long', market_value: '3400', cost_basis: '3400' }];
+      rest.positions = [
+        {
+          symbol: 'AAPL',
+          asset_id: 'a',
+          asset_class: 'us_equity',
+          exchange: 'NASDAQ',
+          qty: '20',
+          qty_available: '20',
+          avg_entry_price: '170',
+          side: 'long',
+          market_value: '3400',
+          cost_basis: '3400',
+          current_price: '170',
+          lastday_price: '170',
+        },
+      ];
       rest.openOrders = [alpacaOrder({ id: 'open-sell', side: 'sell', qty: '5', filled_qty: '0' })];
 
       await reservations.seed();
