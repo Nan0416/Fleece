@@ -1,6 +1,6 @@
 /**
- * The broker accounts a playground script can run against, and the market-data keys the
- * chart writers use, all read from the repo-root `.env`. The only file in
+ * The broker accounts a playground script can run against, the market-data keys the chart
+ * writers use, and the Discord channels a script posts to, all read from the repo-root `.env`. The only file in
  * `@fleece/playground` that touches `process.env`.
  *
  * | Variable | Used for |
@@ -10,6 +10,8 @@
  * | `ALPACA_LIVE_ACCOUNT_ID` | The live account's Alpaca account id |
  * | `ALPACA_LIVE_API_KEY` / `ALPACA_LIVE_SECRET_KEY` | The live account |
  * | `MARKETDATA_CACHE_PATH` | Where sweeps of Alpaca's market data are kept between runs |
+ * | `CREDIT_SPREAD_MONITOR_CHANNEL` | Webhook URL of the channel the position monitor posts every report to |
+ * | `CREDIT_SPREAD_ATTENTION_CHANNEL` | Webhook URL of the channel it posts signals and failures to |
  *
  * A script names its account by calling one of these, so no environment variable can move
  * one from paper to live.
@@ -68,6 +70,25 @@ export function marketDataKeys(): { readonly apiKey: string; readonly secretKey:
     apiKey: credential('ALPACA_PAPER_API_KEY', 'paper'),
     secretKey: credential('ALPACA_PAPER_SECRET_KEY', 'paper'),
   };
+}
+
+/** A webhook URL carries its token, so a missing one is named but no value is ever echoed. */
+function webhookUrl(name: string, channel: string): string {
+  const value = getenv(name, '');
+  if (value === '') {
+    throw new Error(`${name} is not set, so there is no ${channel} channel to post to. Add the channel's Discord webhook URL to the repo-root .env — see .env.example.`);
+  }
+  return value;
+}
+
+/** Muted: every position monitor run posts its whole report here, to read when wanted. */
+export function creditSpreadMonitorWebhookUrl(): string {
+  return webhookUrl('CREDIT_SPREAD_MONITOR_CHANNEL', 'credit spread monitor');
+}
+
+/** Notifying: posted to only when a spread has a signal or a run fails. */
+export function creditSpreadAttentionWebhookUrl(): string {
+  return webhookUrl('CREDIT_SPREAD_ATTENTION_CHANNEL', 'credit spread attention');
 }
 
 export function getCachePath(): string {

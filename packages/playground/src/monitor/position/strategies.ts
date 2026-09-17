@@ -1,8 +1,10 @@
 /**
  * The strategies the position monitor recognises, and the rules that say when to close one.
  */
+import type { OptionType } from '@fleece/marketdata';
 import { Decimal } from '@fleece/utilities';
 
+import { dollars, percentOf } from './formatting';
 import { fetchOptionMarks, type OptionMarks, type OptionQuote, type OptionSnapshotReader } from './option-marks';
 import { Positions, type OptionLeg } from './positions';
 
@@ -14,22 +16,32 @@ export type SignalKind = 'take-profit' | 'stop-loss' | 'days-to-expiration';
 
 export interface Signal {
   readonly kind: SignalKind;
-  /** The strategy it is about, as `Strategy.describe` names it. */
-  readonly strategy: string;
-  readonly message: string;
+  /** Why the rule fired, against its threshold: `55.6% of the credit made (target 50%)`. */
+  readonly reason: string;
 }
 
 export interface StrategyEvaluation {
   readonly strategy: Strategy;
-  /** Where the strategy stands, on one line. */
-  readonly summary: string;
+  /** Every strategy so far is a credit spread, so every evaluation measures one. */
+  readonly metrics: CreditSpreadMetrics;
   readonly signals: ReadonlyArray<Signal>;
   /** A rule that could not be checked, and why. */
   readonly warnings: ReadonlyArray<string>;
 }
 
 export interface Strategy {
+  /** `bear call spread`. */
+  readonly name: string;
+  readonly underlying: string;
+  /** ISO `YYYY-MM-DD`. */
+  readonly expiration: string;
+  readonly optionType: OptionType;
+  /** In dollars, the short leg's first. */
+  readonly strikes: ReadonlyArray<number>;
+  /** Contracts in each leg. */
+  readonly quantity: Decimal;
   readonly positions: Positions;
+  /** `AAPL 2026-10-23 360/375 bear call spread x1`. */
   describe(): string;
   /** Reads the market data it needs itself. `today` is the Eastern calendar date, `YYYY-MM-DD`. */
   evaluate(today: string): Promise<StrategyEvaluation>;
@@ -46,6 +58,7 @@ export interface CreditSpreadRules {
 
 /** Dollars for the whole quantity, not per share. */
 export interface CreditSpreadMetrics {
+  /** Not positive when the averaged entry prices make the spread a debit. */
   readonly credit: Decimal;
   /** What the spread loses if it expires with both legs in the money. */
   readonly maxLoss: Decimal;
@@ -68,11 +81,10 @@ export interface CreditSpreadMetrics {
  */
 abstract class CreditSpread implements Strategy {
   readonly positions: Positions;
-  /** Contracts in each leg. */
   readonly quantity: Decimal;
 
   protected constructor(
-    private readonly name: string,
+    readonly name: string,
     readonly shortLeg: OptionLeg,
     readonly longLeg: OptionLeg,
     private readonly marketData: OptionSnapshotReader,
@@ -92,9 +104,24 @@ abstract class CreditSpread implements Strategy {
     this.quantity = longLeg.quantity;
   }
 
+  get underlying(): string {
+    return this.shortLeg.contract.underlying;
+  }
+
+  get expiration(): string {
+    return this.shortLeg.contract.expiration;
+  }
+
+  get optionType(): OptionType {
+    return this.shortLeg.contract.type;
+  }
+
+  get strikes(): ReadonlyArray<number> {
+    return [this.shortLeg.contract.strike, this.longLeg.contract.strike];
+  }
+
   describe(): string {
-    const { underlying, expiration } = this.shortLeg.contract;
-    return `${underlying} ${expiration} ${this.shortLeg.contract.strike}/${this.longLeg.contract.strike} ${this.name} x${this.quantity.toString()}`;
+    return `${this.underlying} ${this.expiration} ${this.strikes.join('/')} ${this.name} x${this.quantity.toString()}`;
   }
 
   metrics(marks: OptionMarks, today: string): CreditSpreadMetrics {
@@ -112,7 +139,7 @@ abstract class CreditSpread implements Strategy {
     return {
       credit,
       maxLoss: width.sub(creditPerShare).mul(shares),
-      daysToExpiration: daysBetween(today, this.shortLeg.contract.expiration),
+      daysToExpiration: daysBetween(today, this.expiration),
       closeAtMid,
       closeAtNatural,
       unrealizedProfit: closeAtMid === undefined ? undefined : credit.sub(closeAtMid),
@@ -129,11 +156,9 @@ abstract class CreditSpread implements Strategy {
   /** `evaluate` without the request, so the rules can be checked against marks given to it. */
   assess(marks: OptionMarks, today: string): StrategyEvaluation {
     const metrics = this.metrics(marks, today);
-    const { credit, unrealizedProfit: profit, closeAtMid, closeAtNatural, daysToExpiration } = metrics;
-    const strategy = this.describe();
+    const { credit, unrealizedProfit: profit, daysToExpiration } = metrics;
     const signals: Signal[] = [];
     const warnings: string[] = [];
-    const closing = closeAtMid !== undefined && closeAtNatural !== undefined ? ` Closing costs ${dollars(closeAtMid)} at mid, ${dollars(closeAtNatural)} at the natural.` : '';
 
     if (!credit.isPositive()) {
       // Measuring a take-profit against a debit would fire on the first loss, or never.
@@ -144,34 +169,29 @@ abstract class CreditSpread implements Strategy {
       const unquoted = [this.shortLeg, this.longLeg].filter((leg) => marks.get(leg.contract.symbol)?.quote === undefined).map((leg) => leg.contract.symbol);
       warnings.push(`No quote for ${unquoted.join(' or ')}, so the profit and loss rules were not checked.`);
     } else {
-      const target = credit.mul(this.rules.takeProfitFraction);
-      if (profit.gte(target)) {
+      if (profit.gte(credit.mul(this.rules.takeProfitFraction))) {
         signals.push({
           kind: 'take-profit',
-          strategy,
-          message: `Up ${dollars(profit)}, ${percentOf(profit, credit)} of the ${dollars(credit)} credit (target ${this.rules.takeProfitFraction.mul(Decimal.of(100)).toString()}%).${closing}`,
+          reason: `${percentOf(profit, credit)} of the credit made (target ${percentOf(this.rules.takeProfitFraction, Decimal.ONE, 0)})`,
         });
       }
       const loss = profit.neg();
       if (loss.gte(credit.mul(this.rules.stopLossMultiple))) {
         signals.push({
           kind: 'stop-loss',
-          strategy,
-          message: `Down ${dollars(loss)}, ${loss.div(credit, 2).toFixed(2)}x the ${dollars(credit)} credit (limit ${this.rules.stopLossMultiple.toString()}x).${closing}`,
+          reason: `Loss is ${loss.div(credit, 2).toFixed(2)}x the credit (limit ${this.rules.stopLossMultiple.toString()}x)`,
         });
       }
     }
 
     if (daysToExpiration <= this.rules.closeAtDaysToExpiration) {
-      const standing = profit === undefined ? '' : ` P&L ${signedDollars(profit)} on a ${dollars(credit)} credit.`;
       signals.push({
         kind: 'days-to-expiration',
-        strategy,
-        message: `${daysToExpiration} days to expiration, at or inside the ${this.rules.closeAtDaysToExpiration} to close at.${standing}${closing}`,
+        reason: `${daysToExpiration} days to expiration (close at ${this.rules.closeAtDaysToExpiration})`,
       });
     }
 
-    return { strategy: this, summary: summarize(strategy, metrics), signals, warnings };
+    return { strategy: this, metrics, signals, warnings };
   }
 }
 
@@ -195,26 +215,6 @@ export class BullPutSpread extends CreditSpread {
   }
 }
 
-function summarize(strategy: string, metrics: CreditSpreadMetrics): string {
-  const { credit, unrealizedProfit, closeAtMid, closeAtNatural, maxLoss, netDelta, shortDelta, daysToExpiration } = metrics;
-  const parts = [`credit ${dollars(credit)}`];
-  if (unrealizedProfit !== undefined) {
-    parts.push(credit.isPositive() ? `P&L ${signedDollars(unrealizedProfit)} (${percentOf(unrealizedProfit, credit)} of credit)` : `P&L ${signedDollars(unrealizedProfit)}`);
-  }
-  if (closeAtMid !== undefined && closeAtNatural !== undefined) {
-    parts.push(`close ${dollars(closeAtMid)} mid / ${dollars(closeAtNatural)} natural`);
-  }
-  parts.push(`max loss ${dollars(maxLoss)}`);
-  if (netDelta !== undefined) {
-    parts.push(`net delta ${netDelta.toFixed(1)}`);
-  }
-  if (shortDelta !== undefined) {
-    parts.push(`short delta ${shortDelta.toFixed(2)}`);
-  }
-  parts.push(`${daysToExpiration} DTE`);
-  return `${strategy}: ${parts.join(', ')}`;
-}
-
 function mid(quote: OptionQuote): Decimal {
   return quote.bid.add(quote.ask).div(Decimal.of(2), 4);
 }
@@ -222,18 +222,4 @@ function mid(quote: OptionQuote): Decimal {
 /** Whole calendar days. Both are ISO dates, which `Date.parse` reads as UTC midnight. */
 function daysBetween(from: string, to: string): number {
   return Math.round((Date.parse(to) - Date.parse(from)) / MS_PER_DAY);
-}
-
-/** Rounded before the sign is read, so a loss of a tenth of a cent prints as `$0.00` rather than `-$0.00`. */
-function dollars(value: Decimal): string {
-  const cents = value.round(2);
-  return cents.signum() < 0 ? `-$${cents.neg().toFixed(2)}` : `$${cents.toFixed(2)}`;
-}
-
-function signedDollars(value: Decimal): string {
-  return value.round(2).signum() > 0 ? `+${dollars(value)}` : dollars(value);
-}
-
-function percentOf(part: Decimal, whole: Decimal): string {
-  return `${part.mul(Decimal.of(100)).div(whole, 1).toFixed(1)}%`;
 }

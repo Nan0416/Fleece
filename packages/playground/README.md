@@ -31,7 +31,7 @@ live trio unset costs nothing.
 | `npm run order-events -w @fleece/playground` | Opens the `trade_updates` stream and prints each order event as JSON. Ctrl-C to stop. |
 | `npm run cancel-order -w @fleece/playground -- <brokerOrderId>` | Cancels one order, printing it before and after. |
 | `npm run list-positions -w @fleece/playground` | Prints the live account's option positions — underlying, entry price, current price and size. |
-| `npm run position-monitor -w @fleece/playground` | Groups the live account's option legs into bear call and bull put spreads and prints a `SIGNAL` line for each one to close: half the credit made, a loss of twice the credit, or 21 days to expiration. Reads only; meant for cron in market hours. |
+| `npm run position-monitor -w @fleece/playground` | Groups the live account's option legs into bear call and bull put spreads and checks each against its closing rules: half the credit made, a loss of twice the credit, or 21 days to expiration. Posts a card per spread to the Discord channel in `CREDIT_SPREAD_MONITOR_CHANNEL`, and a card per signal or failure to the one in `CREDIT_SPREAD_ATTENTION_CHANNEL`. Reads only; meant for cron in market hours. |
 | `npm run option-chain -w @fleece/playground` | Writes an underlying's near-dated chain — both types, greeks, volatility and quote — to `viz/data/` for the Python renderer to draw. |
 | `npm run option-research -w @fleece/playground` | Runs the `src/research/` helpers end to end on one past session and prints the chain, the prices and the greeks. See [src/research/README.md](./src/research/README.md). |
 
