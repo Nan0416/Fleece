@@ -30,6 +30,7 @@ live trio unset costs nothing.
 | --- | --- |
 | `npm run order-events -w @fleece/playground` | Opens the `trade_updates` stream and prints each order event as JSON. Ctrl-C to stop. |
 | `npm run cancel-order -w @fleece/playground -- <brokerOrderId>` | Cancels one order, printing it before and after. |
+| `npm run list-positions -w @fleece/playground` | Prints the live account's option positions — underlying, entry price, current price and size. |
 | `npm run option-chain -w @fleece/playground` | Writes an underlying's near-dated chain — both types, greeks, volatility and quote — to `viz/data/` for the Python renderer to draw. |
 | `npm run option-research -w @fleece/playground` | Runs the `src/research/` helpers end to end on one past session and prints the chain, the prices and the greeks. See [src/research/README.md](./src/research/README.md). |
 
@@ -38,8 +39,9 @@ live trio unset costs nothing.
 Both come from the repo-root `.env` by way of `credentials.ts`, but a script asks for one
 or the other and the difference is what it can do.
 
-- **A broker account** — `paperAccount()` or `liveAccount()`, carrying an account id, a
-  key and the URLs to reach it. This can place and cancel orders.
+- **A broker account** — `paperAccount()` or `liveAccount()`, carrying an account id and
+  whether it is real money, with its key pair from `paperAccountCredentials()` or
+  `liveAccountCredentials()`. This can place and cancel orders.
 - **Market-data keys** — `marketDataKeys()`, the paper pair and nothing else. `option-chain`
   takes these and no account at all, because market data is the one thing a paper key does
   exactly as well as a live one: Alpaca serves the same bars and the same chain to both. A
@@ -54,21 +56,20 @@ writing the same secret down twice and rotating it in two places.
 Each script names its account near the top:
 
 ```ts
-const account = prepareAccount(paperAccount(), logger); // swap to liveAccount()
+const client = alpacaTradingClient(); // pass true for the live account
 ```
 
 Swapping is a one-line edit, which is deliberate — reaching real money should take
 changing the code, not remembering a flag. **No environment variable can move a script
 from paper to live**; the worst a wrong `.env` can do is fail to start.
 
-`paperAccount()` and `liveAccount()` are functions rather than constants so that nothing
+The account and credential readers are functions rather than constants so that nothing
 is read until a script asks for one: a script that only wants paper does not fail on a
 missing live key, and importing the module never throws on an empty `.env` (guideline 14).
-An account with no key refuses to build, naming the variable to set. `prepareAccount` then
-logs a warning if it is the live one.
+An account with no key refuses to build, naming the variable to set.
 
-`AccountInfo` carries `wsUrl` and `restUrl` separately because Alpaca serves the
-websocket and the trading API from different hosts.
+Neither the account nor its credentials carry a URL: Alpaca serves the websocket and the
+trading API from different hosts, and each client derives its own from `live`.
 
 Every script rebuilds first. Run `npm run build -w @fleece/playground` on its own to
 just typecheck.
@@ -100,9 +101,10 @@ UUIDs.
 ## Adding one
 
 Drop `src/<name>.ts` in, give it a `main()` that returns a promise, and add
-`"<name>": "npm run build && node dist/<name>.js"` to `package.json`. Take the account
-through `prepareAccount` from `./account` rather than reading `credentials.ts` fields
-directly, so the live warning and the missing-key check come for free. No tests — this
+`"<name>": "npm run build && node dist/<name>.js"` to `package.json`. Take a trading
+client from `alpacaTradingClient()` in `./client`, or the account and its credentials from
+the `credentials.ts` functions, rather than reading the environment directly, so the
+missing-key check comes for free. No tests — this
 package is not covered by `npm test` and is not meant to be.
 
 ## Charts

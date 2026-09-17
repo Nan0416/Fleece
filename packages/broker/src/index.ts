@@ -33,4 +33,4 @@ export {
   WsAlpacaWsClient,
   convertAlpacaOrderToBrokerOrderEvents,
 } from './alpaca';
-export type { AlpacaAccountIdentifier, AlpacaCredentials, AlpacaOrder, AlpacaWsClient, OrderEventHandler } from './alpaca';
+export type { AlpacaAccountIdentifier, AlpacaCredentials, AlpacaOrder, AlpacaPosition, AlpacaRestClient, AlpacaWsClient, OrderEventHandler } from './alpaca';

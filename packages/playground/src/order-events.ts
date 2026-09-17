@@ -15,10 +15,9 @@
  * (`event`, `execution_id`, `price`, `qty`, `timestamp`) is not printed here.
  * `order.status` carries most of the same information.
  */
-import { AlpacaOrder, WsAlpacaWsClient } from '@fleece/broker';
+import { AlpacaAccountIdentifier, AlpacaCredentials, AlpacaOrder, WsAlpacaWsClient } from '@fleece/broker';
 import { LoggerFactory } from '@fleece/utilities';
-import { prepareAccount } from './account';
-import { AccountInfo, paperAccount } from './credentials';
+import { paperAccount, paperAccountCredentials } from './credentials';
 
 const logger = LoggerFactory.getLogger('OrderEvents');
 
@@ -33,16 +32,15 @@ function untilInterrupted(): Promise<void> {
   });
 }
 
-async function streamOrderEvents(account: AccountInfo): Promise<void> {
+async function streamOrderEvents(account: AlpacaAccountIdentifier, credentials: AlpacaCredentials): Promise<void> {
   // `terminate` closes the socket, which fires `onDisconnected` like any other drop.
   // Without this the last thing Ctrl-C prints is a warning promising a reconnect that
   // is never coming.
   let stopping = false;
 
   const client = new WsAlpacaWsClient({
-    account: { accountId: account.accountId, live: account.live },
-    credentialsProvider: { accessKey: account.apiKey, secretKey: account.secretKey },
-    url: account.wsUrl,
+    account,
+    credentialsProvider: credentials,
     onDisconnected: (code, reason) => {
       if (stopping) {
         return;
@@ -60,7 +58,7 @@ async function streamOrderEvents(account: AccountInfo): Promise<void> {
   // after the error has already been printed.
   try {
     await client.init();
-    logger.info(`Listening on ${account.wsUrl}. Ctrl-C to stop.`);
+    logger.info(`Listening to the ${account.live ? 'live' : 'paper'} account. Ctrl-C to stop.`);
     await untilInterrupted();
   } finally {
     stopping = true;
@@ -69,9 +67,7 @@ async function streamOrderEvents(account: AccountInfo): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const account = prepareAccount(paperAccount(), logger); // swap to liveAccount()
-
-  await streamOrderEvents(account);
+  await streamOrderEvents(paperAccount(), paperAccountCredentials()); // swap to liveAccount(), liveAccountCredentials()
 }
 
 main().catch((err: unknown) => {

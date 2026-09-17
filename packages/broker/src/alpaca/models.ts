@@ -148,8 +148,10 @@ export interface AlpacaPosition {
   readonly symbol: string;
   readonly asset_id: string;
   readonly asset_class: AlpacaAssetClass;
+  readonly exchange: string;
   /** Signed: negative for a short. Counts contracts, not shares, for an option. */
   readonly qty: string;
+  readonly qty_available: string;
   /**
    * Per share, so an option's is its premium rather than what the contract cost. The
    * dollars are in `cost_basis`, which Alpaca has already multiplied out.
@@ -158,6 +160,8 @@ export interface AlpacaPosition {
   readonly side: 'long' | 'short';
   readonly market_value: string;
   readonly cost_basis: string;
+  readonly current_price: string;
+  readonly lastday_price: string;
 }
 
 export interface AlpacaAsset {

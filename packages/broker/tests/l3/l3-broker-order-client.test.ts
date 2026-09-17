@@ -147,7 +147,22 @@ describe('L3BrokerOrderClient', () => {
 
     it('sends a sell as an absolute quantity with a sell side', async () => {
       const { broker, rest } = harness();
-      rest.positions = [{ symbol: 'AAPL', asset_id: 'a', asset_class: 'us_equity', qty: '10', avg_entry_price: '100', side: 'long', market_value: '1000', cost_basis: '1000' }];
+      rest.positions = [
+        {
+          symbol: 'AAPL',
+          asset_id: 'a',
+          asset_class: 'us_equity',
+          exchange: 'NASDAQ',
+          qty: '10',
+          qty_available: '10',
+          avg_entry_price: '100',
+          side: 'long',
+          market_value: '1000',
+          cost_basis: '1000',
+          current_price: '100',
+          lastday_price: '100',
+        },
+      ];
       await broker.init();
 
       await broker.order({ type: 'limit', symbol: 'AAPL', size: d(-4), assetClass: 'equity', limitPrice: d(150), accountId: 'MOMENTUM01', onEvent: noEvents });

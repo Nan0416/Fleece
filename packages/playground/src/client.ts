@@ -4,9 +4,10 @@
  * Keys come from `credentials.ts`, which is the one file in this package that reads the
  * environment.
  */
+import { AlpacaRestClient, HttpAlpacaRestClient } from '@fleece/broker';
 import { AlpacaMarketDataClient } from '@fleece/marketdata';
 
-import { getCachePath, marketDataKeys } from './credentials';
+import { getCachePath, liveAccount, liveAccountCredentials, marketDataKeys, paperAccount, paperAccountCredentials } from './credentials';
 import { ImpliedVolatilityHistoryHelper, ImpliedVolatilityHistoryHelperImpl } from './utils/implied-volatility-history';
 import { OptionsAvailabilitiesHelper, OptionsAvailabilitiesHelperImpl } from './utils/options-availabilities';
 import { OptionsQuoteSpreadHelper, OptionsQuoteSpreadHelperImpl } from './utils/options-quote-spread';
@@ -31,4 +32,22 @@ export function impliedVolatilityHistoryHelper(alpacaMarketDataClient: AlpacaMar
 
 export function optionsQuoteSpreadHelper(alpacaMarketDataClient: AlpacaMarketDataClient): OptionsQuoteSpreadHelper {
   return new OptionsQuoteSpreadHelperImpl(getCachePath(), alpacaMarketDataClient);
+}
+
+export function liveAlpacaTradingClient(): AlpacaRestClient {
+  return new HttpAlpacaRestClient({
+    account: liveAccount(),
+    credentialsProvider: liveAccountCredentials(),
+  });
+}
+
+export function paperAlpacaTradingClient(): AlpacaRestClient {
+  return new HttpAlpacaRestClient({
+    account: paperAccount(),
+    credentialsProvider: paperAccountCredentials(),
+  });
+}
+
+export function alpacaTradingClient(live: boolean = false): AlpacaRestClient {
+  return live ? liveAlpacaTradingClient() : paperAlpacaTradingClient();
 }

@@ -16,7 +16,7 @@
  */
 import { resolve } from 'node:path';
 
-import { ALPACA_REST_LIVE_URL, ALPACA_REST_PAPER_URL, ALPACA_WS_LIVE_URL, ALPACA_WS_PAPER_URL } from '@fleece/broker';
+import { AlpacaAccountIdentifier, AlpacaCredentials } from '@fleece/broker';
 import { getenv } from '@fleece/utilities';
 import { config as loadEnv } from 'dotenv';
 
@@ -27,18 +27,6 @@ const REPO_ROOT = resolve(__dirname, '../../..');
 // no `.env` at all.
 loadEnv({ path: resolve(REPO_ROOT, '.env'), quiet: true });
 
-export interface AccountInfo {
-  readonly accountId: string;
-  readonly apiKey: string;
-  readonly secretKey: string;
-  /** For the websocket client. */
-  readonly wsUrl: string;
-  /** For the REST client. Separate from `wsUrl` because Alpaca serves them from different hosts. */
-  readonly restUrl: string;
-  /** Real money. Stated rather than inferred from a URL, so a typo cannot make live look like paper. */
-  readonly live: boolean;
-}
-
 function credential(name: string, account: string): string {
   const value = getenv(name, '');
   if (value === '') {
@@ -47,27 +35,31 @@ function credential(name: string, account: string): string {
   return value;
 }
 
-// Functions, not constants: nothing is read until a script asks for one account, so a
-// missing live key never breaks a paper script and importing this never throws.
-export function paperAccount(): AccountInfo {
+export function paperAccount(): AlpacaAccountIdentifier {
   return {
     accountId: credential('ALPACA_PAPER_ACCOUNT_ID', 'paper'),
-    apiKey: credential('ALPACA_PAPER_API_KEY', 'paper'),
-    secretKey: credential('ALPACA_PAPER_SECRET_KEY', 'paper'),
-    wsUrl: ALPACA_WS_PAPER_URL,
-    restUrl: ALPACA_REST_PAPER_URL,
     live: false,
   };
 }
 
-export function liveAccount(): AccountInfo {
+export function paperAccountCredentials(): AlpacaCredentials {
+  return {
+    accessKey: credential('ALPACA_PAPER_API_KEY', 'paper'),
+    secretKey: credential('ALPACA_PAPER_SECRET_KEY', 'paper'),
+  };
+}
+
+export function liveAccount(): AlpacaAccountIdentifier {
   return {
     accountId: credential('ALPACA_LIVE_ACCOUNT_ID', 'live'),
-    apiKey: credential('ALPACA_LIVE_API_KEY', 'live'),
-    secretKey: credential('ALPACA_LIVE_SECRET_KEY', 'live'),
-    wsUrl: ALPACA_WS_LIVE_URL,
-    restUrl: ALPACA_REST_LIVE_URL,
     live: true,
+  };
+}
+
+export function liveAccountCredentials(): AlpacaCredentials {
+  return {
+    accessKey: credential('ALPACA_LIVE_API_KEY', 'live'),
+    secretKey: credential('ALPACA_LIVE_SECRET_KEY', 'live'),
   };
 }
 
