@@ -10,7 +10,7 @@ An npm-workspaces monorepo, six packages under `packages/` (plus `playground`):
 
 | Package | What it is |
 | --- | --- |
-| `utilities` | Exact decimals, the clock, logging, environment reading, assertions, error types, the HTTP client seam. Imports nothing of ours |
+| `utilities` | Exact decimals, the clock, logging, environment reading, assertions, error types, the HTTP client seam, and `runJob`, which reports a job's lifecycle to mini-cloud. Imports nothing of ours |
 | `models` | The domain model — accounts, positions, orders, broker events — and in `api/` the request and response contracts written against it |
 | `client` | Typed client for the Fleece HTTP API |
 | `broker` | Places orders, in layers: correlation, announcement, handles. Reservations are optional, and refuse what they cannot price. `src/alpaca/` is the wire — Alpaca's REST and WebSocket clients, wire models, the correlation codec, equities and options, single-leg and spreads |

@@ -31,7 +31,7 @@ live trio unset costs nothing.
 | `npm run order-events -w @fleece/playground` | Opens the `trade_updates` stream and prints each order event as JSON. Ctrl-C to stop. |
 | `npm run cancel-order -w @fleece/playground -- <brokerOrderId>` | Cancels one order, printing it before and after. |
 | `npm run list-positions -w @fleece/playground` | Prints the live account's option positions — underlying, entry price, current price and size. |
-| `npm run position-monitor -w @fleece/playground` | Groups the live account's option legs into bear call and bull put spreads and checks each against its closing rules: half the credit made, a loss of twice the credit, or 21 days to expiration. Posts a card per spread to the Discord channel in `CREDIT_SPREAD_MONITOR_CHANNEL`, and a card per signal or failure to the one in `CREDIT_SPREAD_ATTENTION_CHANNEL`. Reads only; meant for cron in market hours. |
+| `npm run position-monitor -w @fleece/playground` | Groups the live account's option legs into bear call and bull put spreads and checks each against its closing rules: half the credit made, a loss of twice the credit, or 21 days to expiration. Posts a card per spread to the Discord channel in `CREDIT_SPREAD_MONITOR_CHANNEL`, and a card per signal or failure to the one in `CREDIT_SPREAD_ATTENTION_CHANNEL`. Reads only; meant to run as a mini-cloud job in market hours. |
 | `npm run option-chain -w @fleece/playground` | Writes an underlying's near-dated chain — both types, greeks, volatility and quote — to `viz/data/` for the Python renderer to draw. |
 | `npm run option-research -w @fleece/playground` | Runs the `src/research/` helpers end to end on one past session and prints the chain, the prices and the greeks. See [src/research/README.md](./src/research/README.md). |
 
@@ -102,11 +102,39 @@ UUIDs.
 ## Adding one
 
 Drop `src/<name>.ts` in, give it a `main()` that returns a promise, and add
-`"<name>": "npm run build && node dist/<name>.js"` to `package.json`. Take a trading
+`"<name>": "npm run build && node dist/<name>.js"` to `package.json`. If it is to run
+as a mini-cloud job, have `main()` resolve to an exit code and hand it to `runJob` — see
+below. Take a trading
 client from `alpacaTradingClient()` in `./client`, or the account and its credentials from
 the `credentials.ts` functions, rather than reading the environment directly, so the
 missing-key check comes for free. No tests — this
 package is not covered by `npm test` and is not meant to be.
+
+## Running under mini-cloud
+
+`position-monitor` and `option-quote-spread` are scheduled as
+[mini-cloud](https://github.com/Nan0416/mini-cloud) jobs, and report to the agent that
+launched them through `runJob` from `@fleece/utilities`:
+
+```ts
+async function main(reporter: JobReporter | undefined): Promise<number> { ... }
+
+void runJob(main);
+```
+
+It reports the pid when the run starts, so the agent has something to stop, and the exit
+code when it ends — the agent spawns jobs detached and cannot see the exit for itself.
+On SIGINT, which is how the agent stops a job, it reports the termination and exits. A
+throw is logged, recorded in the instance's event log, and exits 1. `main` gets the
+reporter to record its own events, as `option-quote-spread` does; one that has none to
+record can take no arguments.
+
+Nothing is configured here: the agent injects `MINI_CLOUD_*` into the job's environment.
+Run by hand there is none of it, the reporter is `undefined`, and nothing is reported.
+
+The task's command can be the npm script, which rebuilds on every run, or
+`node packages/playground/dist/monitor/position/main.js` from the repo root after a build.
+`.env` is found relative to the compiled file, so the working directory does not matter.
 
 ## Charts
 

@@ -9,10 +9,10 @@ and most of what follows exists because of that.
 ## Structure
 
 1. **One monorepo, six packages.** `utilities` (decimals, clock, logging, errors, the
-   HTTP seam), `models` (the domain model and the wire contracts), `client` (typed
-   client), `broker` (order placement, over the Alpaca wire client in `src/alpaca/`),
-   `marketdata` (Polygon, Alpaca, options, market hours), `service` (the ledger and the
-   three processes that write to it). A package exists when something needs to be
+   HTTP seam, the mini-cloud job runner), `models` (the domain model and the wire
+   contracts), `client` (typed client), `broker` (order placement, over the Alpaca wire
+   client in `src/alpaca/`), `marketdata` (Polygon, Alpaca, options, market hours),
+   `service` (the ledger and the three processes that write to it). A package exists when something needs to be
    **installed** separately, not when it needs to be *organised* separately — that is
    what folders are for. The API, the tracking process and the dividend job are one
    package because they are one deployable unit against one schema; the ledger is a
